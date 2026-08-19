@@ -1,5 +1,35 @@
 name: rdds
 
+x-sensor-agent-environment: &sensor-agent-environment
+  RDDS_API_URL: http://api:8000
+  RDDS_LOG_LEVEL: ${RDDS_LOG_LEVEL:-INFO}
+  RDDS_AGENT_SENSOR_ID: ${RDDS_AGENT_SENSOR_ID:-skyspy-sensor-01}
+  RDDS_AGENT_DISPLAY_NAME: ${RDDS_AGENT_DISPLAY_NAME:-Sky-Spy receiver}
+  RDDS_AGENT_SENSOR_TOKEN: '${RDDS_AGENT_SENSOR_TOKEN:-}'
+  RDDS_AGENT_SENSOR_LAT: '${RDDS_AGENT_SENSOR_LAT:-}'
+  RDDS_AGENT_SENSOR_LON: '${RDDS_AGENT_SENSOR_LON:-}'
+  RDDS_AGENT_TRANSPORT: ${RDDS_AGENT_TRANSPORT:-unknown}
+  RDDS_SKYSPY_BAUD_RATE: ${RDDS_SKYSPY_BAUD_RATE:-115200}
+  RDDS_AGENT_HEARTBEAT_SECONDS: ${RDDS_AGENT_HEARTBEAT_SECONDS:-10}
+  RDDS_AGENT_RECONNECT_SECONDS: ${RDDS_AGENT_RECONNECT_SECONDS:-3}
+  RDDS_AGENT_REQUEST_TIMEOUT_SECONDS: ${RDDS_AGENT_REQUEST_TIMEOUT_SECONDS:-5}
+  RDDS_AGENT_MAX_QUEUE_MESSAGES: ${RDDS_AGENT_MAX_QUEUE_MESSAGES:-250000}
+  RDDS_AGENT_SPOOL_PATH: /var/lib/rdds-agent/outbox.sqlite3
+
+x-sensor-agent-service: &sensor-agent-service
+  build:
+    context: ./sensor-agent
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=8m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - backend
+
 services:
   database:
     image: postgis/postgis:16-3.5-alpine
@@ -224,6 +254,57 @@ services:
     networks:
       - backend
 
+  skyspy-emulator:
+    profiles:
+      - skyspy-emulation
+    build:
+      context: ./skyspy-emulator
+    restart: unless-stopped
+    environment:
+      RDDS_SKYSPY_EMULATOR_PORT: 7000
+      RDDS_SKYSPY_EMULATOR_INTERVAL_SECONDS: ${RDDS_SKYSPY_EMULATOR_INTERVAL_SECONDS:-1}
+      RDDS_SKYSPY_EMULATOR_CENTER_LAT: ${RDDS_SKYSPY_EMULATOR_CENTER_LAT:-52.229700}
+      RDDS_SKYSPY_EMULATOR_CENTER_LON: ${RDDS_SKYSPY_EMULATOR_CENTER_LON:-21.012200}
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
+  sensor-agent-emulator:
+    <<: *sensor-agent-service
+    profiles:
+      - skyspy-emulation
+    environment:
+      <<: *sensor-agent-environment
+      RDDS_SKYSPY_SOURCE: socket://skyspy-emulator:7000
+    volumes:
+      - rdds-sensor-agent-emulator-data:/var/lib/rdds-agent
+    depends_on:
+      api:
+        condition: service_healthy
+      skyspy-emulator:
+        condition: service_started
+
+  sensor-agent:
+    <<: *sensor-agent-service
+    profiles:
+      - skyspy-hardware
+    environment:
+      <<: *sensor-agent-environment
+      RDDS_SKYSPY_SOURCE: ${RDDS_SKYSPY_DEVICE:-/dev/ttyACM0}
+    devices:
+      - ${RDDS_SKYSPY_DEVICE:-/dev/ttyACM0}:${RDDS_SKYSPY_DEVICE:-/dev/ttyACM0}
+    volumes:
+      - rdds-sensor-agent-data:/var/lib/rdds-agent
+    depends_on:
+      api:
+        condition: service_healthy
+
 networks:
   backend:
     name: rdds-backend
@@ -232,3 +313,7 @@ networks:
 volumes:
   rdds-database-data:
     name: rdds-database-data
+  rdds-sensor-agent-data:
+    name: rdds-sensor-agent-data
+  rdds-sensor-agent-emulator-data:
+    name: rdds-sensor-agent-emulator-data

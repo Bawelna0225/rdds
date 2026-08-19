@@ -27,7 +27,7 @@ The idempotency key is:
 Resending the same message is accepted but does not create a duplicate database
 record. This is required for LTE retry and offline queue operation.
 
-## Development authentication
+## Ingestion authentication
 
 Ingestion requests require the HTTP header:
 
@@ -35,9 +35,11 @@ Ingestion requests require the HTTP header:
 X-RDDS-Ingest-Token: <RDDS_INGEST_TOKEN>
 ```
 
-This shared token is only the development mechanism. Field sensors will later
-receive individual credentials that can be revoked independently. Outside a
-trusted development LAN, ingestion must use HTTPS.
+Stage 8 adds individual sensor credentials that use the same header. The token
+is bound to one `sensor_id`, can be rotated or revoked independently, and is the
+required mode for the Stage 9 Sky-Spy sensor agent. The shared development token
+is retained only for the documented legacy transition. Outside a trusted
+development LAN, ingestion must use HTTPS.
 
 ## Heartbeat
 
