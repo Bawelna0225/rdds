@@ -13,6 +13,7 @@
 #endif
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <HardwareSerial.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -86,6 +87,13 @@ enum WiFiBand {
   BAND_BLE = 3
 };
 
+enum RemoteIdTransport : uint8_t {
+  TRANSPORT_UNKNOWN = 0,
+  TRANSPORT_BLE = 1,
+  TRANSPORT_WIFI_NAN = 2,
+  TRANSPORT_WIFI_BEACON = 3
+};
+
 struct id_data {
   uint8_t  mac[6];
   int      rssi;
@@ -96,13 +104,14 @@ struct id_data {
   double   long_d;
   double   base_lat_d;
   double   base_long_d;
-  int      altitude_msl;
-  int      height_agl;
-  int      speed;
-  int      heading;
+  float    altitude_msl;
+  float    height_agl;
+  float    speed;
+  float    heading;
   int      flag;
   WiFiBand band;           // Which band/protocol detected this drone
   uint8_t  channel;        // Channel where detected (for WiFi)
+  RemoteIdTransport transport;
 };
 
 // ============================================================================
@@ -178,6 +187,7 @@ public:
       memcpy(UAV->mac, mac, 6);
       UAV->band = BAND_BLE;
       UAV->channel = 0;  // BLE doesn't use WiFi channels
+      UAV->transport = TRANSPORT_BLE;
       
       uint8_t* odid = &payload[6];
       switch (odid[0] & 0xF0) {
@@ -192,10 +202,10 @@ public:
           decodeLocationMessage(&loc, (ODID_Location_encoded*) odid);
           UAV->lat_d = loc.Latitude;
           UAV->long_d = loc.Longitude;
-          UAV->altitude_msl = (int) loc.AltitudeGeo;
-          UAV->height_agl = (int) loc.Height;
-          UAV->speed = (int) loc.SpeedHorizontal;
-          UAV->heading = (int) loc.Direction;
+          UAV->altitude_msl = loc.AltitudeGeo;
+          UAV->height_agl = loc.Height;
+          UAV->speed = loc.SpeedHorizontal;
+          UAV->heading = loc.Direction;
           break;
         }
         case 0x40: {
@@ -317,18 +327,50 @@ const char* bandToString(WiFiBand band) {
   }
 }
 
+const char* transportToString(RemoteIdTransport transport) {
+  switch (transport) {
+    case TRANSPORT_BLE: return "ble";
+    case TRANSPORT_WIFI_NAN: return "wifi_nan";
+    case TRANSPORT_WIFI_BEACON: return "wifi_beacon";
+    default: return "unknown";
+  }
+}
+
 void send_json_fast(const id_data *UAV) {
   char mac_str[18];
   snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
            UAV->mac[0], UAV->mac[1], UAV->mac[2],
            UAV->mac[3], UAV->mac[4], UAV->mac[5]);
-  char json_msg[320];
-  snprintf(json_msg, sizeof(json_msg),
-    "{\"mac\":\"%s\",\"rssi\":%d,\"band\":\"%s\",\"channel\":%d,\"drone_lat\":%.6f,\"drone_long\":%.6f,\"drone_altitude\":%d,\"pilot_lat\":%.6f,\"pilot_long\":%.6f,\"basic_id\":\"%s\"}",
-    mac_str, UAV->rssi, bandToString(UAV->band), UAV->channel,
-    UAV->lat_d, UAV->long_d, UAV->altitude_msl,
-    UAV->base_lat_d, UAV->base_long_d, UAV->uav_id);
-  Serial.println(json_msg);
+
+  StaticJsonDocument<512> document;
+  document["format_version"] = "skyspy/1.1";
+  document["mac"] = mac_str;
+  document["rssi"] = UAV->rssi;
+  document["band"] = bandToString(UAV->band);
+  document["transport"] = transportToString(UAV->transport);
+  if (UAV->channel > 0) document["channel"] = UAV->channel;
+  if (UAV->uav_id[0] != '\0') document["basic_id"] = UAV->uav_id;
+  if (UAV->op_id[0] != '\0') document["operator_id"] = UAV->op_id;
+
+  const bool has_drone_position = UAV->lat_d != 0.0 && UAV->long_d != 0.0;
+  if (has_drone_position) {
+    document["drone_lat"] = UAV->lat_d;
+    document["drone_long"] = UAV->long_d;
+    document["drone_altitude"] = UAV->altitude_msl;
+    document["height_agl"] = UAV->height_agl;
+    document["speed"] = UAV->speed;
+    document["heading"] = UAV->heading;
+  }
+
+  const bool has_pilot_position =
+    UAV->base_lat_d != 0.0 && UAV->base_long_d != 0.0;
+  if (has_pilot_position) {
+    document["pilot_lat"] = UAV->base_lat_d;
+    document["pilot_long"] = UAV->base_long_d;
+  }
+
+  serializeJson(document, Serial);
+  Serial.println();
 }
 
 // ============================================================================
@@ -438,6 +480,7 @@ void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
       UAV.last_seen = millis();
       UAV.band = detect_band;
       UAV.channel = detect_channel;
+      UAV.transport = TRANSPORT_WIFI_NAN;
       
       if (UAS_data.BasicIDValid[0]) {
         strncpy(UAV.uav_id, (char *)UAS_data.BasicID[0].UASID, ODID_ID_SIZE);
@@ -445,10 +488,10 @@ void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
       if (UAS_data.LocationValid) {
         UAV.lat_d = UAS_data.Location.Latitude;
         UAV.long_d = UAS_data.Location.Longitude;
-        UAV.altitude_msl = (int)UAS_data.Location.AltitudeGeo;
-        UAV.height_agl = (int)UAS_data.Location.Height;
-        UAV.speed = (int)UAS_data.Location.SpeedHorizontal;
-        UAV.heading = (int)UAS_data.Location.Direction;
+        UAV.altitude_msl = UAS_data.Location.AltitudeGeo;
+        UAV.height_agl = UAS_data.Location.Height;
+        UAV.speed = UAS_data.Location.SpeedHorizontal;
+        UAV.heading = UAS_data.Location.Direction;
       }
       if (UAS_data.SystemValid) {
         UAV.base_lat_d = UAS_data.System.OperatorLatitude;
@@ -503,6 +546,7 @@ void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
           UAV.last_seen = millis();
           UAV.band = detect_band;
           UAV.channel = detect_channel;
+          UAV.transport = TRANSPORT_WIFI_BEACON;
           
           if (UAS_data.BasicIDValid[0]) {
             strncpy(UAV.uav_id, (char *)UAS_data.BasicID[0].UASID, ODID_ID_SIZE);
@@ -510,10 +554,10 @@ void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
           if (UAS_data.LocationValid) {
             UAV.lat_d = UAS_data.Location.Latitude;
             UAV.long_d = UAS_data.Location.Longitude;
-            UAV.altitude_msl = (int)UAS_data.Location.AltitudeGeo;
-            UAV.height_agl = (int)UAS_data.Location.Height;
-            UAV.speed = (int)UAS_data.Location.SpeedHorizontal;
-            UAV.heading = (int)UAS_data.Location.Direction;
+            UAV.altitude_msl = UAS_data.Location.AltitudeGeo;
+            UAV.height_agl = UAS_data.Location.Height;
+            UAV.speed = UAS_data.Location.SpeedHorizontal;
+            UAV.heading = UAS_data.Location.Direction;
           }
           if (UAS_data.SystemValid) {
             UAV.base_lat_d = UAS_data.System.OperatorLatitude;

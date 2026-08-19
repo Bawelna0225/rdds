@@ -30,27 +30,37 @@ def detection(sequence: int) -> dict[str, object]:
     )
     pilot_latitude, pilot_longitude = offset_position(120.0, -170.0)
 
-    # Every twentieth packet emulates a valid identity-only Remote ID message.
-    if sequence % 20 == 0:
-        latitude = 0.0
-        longitude = 0.0
-
-    return {
+    message: dict[str, object] = {
+        "format_version": "skyspy/1.1",
         "mac": "02:53:4b:59:00:01",
         "rssi": -48 - sequence % 18,
-        "drone_lat": latitude,
-        "drone_long": longitude,
-        "drone_altitude": 95 + sequence % 12,
         "pilot_lat": pilot_latitude,
         "pilot_long": pilot_longitude,
         "basic_id": "SKYSPY-EMULATED-01",
-        # These optional fields are not emitted by the current upstream firmware,
-        # but verify the agent's forward-compatible parser.
         "operator_id": "SKYSPY-OPERATOR-01",
-        "speed_mps": 15.8,
-        "heading_deg": round(math.degrees(angle + math.pi / 2) % 360, 2),
-        "transport": "unknown",
+        "transport": "wifi_nan",
+        "channel": 6,
+        "band": "2.4GHz",
     }
+
+    # Every twentieth packet emulates an identity/system message without a
+    # current drone location, exactly as the enriched firmware serializes it.
+    if sequence % 20 != 0:
+        message.update(
+            {
+                "drone_lat": latitude,
+                "drone_long": longitude,
+                "drone_altitude": 95.5 + sequence % 12,
+                "height_agl": 72.5 + sequence % 8,
+                "speed": 15.8,
+                "heading": round(
+                    math.degrees(angle + math.pi / 2) % 360,
+                    2,
+                ),
+            }
+        )
+
+    return message
 
 
 def send_line(connection: socket.socket, value: str | dict[str, object]) -> None:

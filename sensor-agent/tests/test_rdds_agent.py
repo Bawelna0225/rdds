@@ -51,12 +51,32 @@ class SkySpyParserTests(unittest.TestCase):
     def test_accepts_forward_compatible_operator_and_motion_fields(self) -> None:
         parsed = parse_skyspy_line(
             '{"mac":"02:00:00:00:00:02","op_id":"OP-02",'
-            '"speed":12.5,"heading":91,"transport":"ble"}'
+            '"drone_lat":52.23,"drone_long":21.01,"height_agl":85.25,'
+            '"speed":12.5,"heading":91,"transport":"wifi_nan","channel":6}'
         )
         self.assertEqual(parsed["drone"]["operator_id"], "OP-02")
+        self.assertEqual(parsed["drone"]["height_agl_m"], 85.25)
         self.assertEqual(parsed["drone"]["speed_mps"], 12.5)
         self.assertEqual(parsed["drone"]["heading_deg"], 91.0)
+        self.assertEqual(parsed["radio"]["transport"], "wifi_nan")
+        self.assertEqual(parsed["radio"]["channel"], 6)
+
+    def test_maps_enriched_firmware_line_without_position(self) -> None:
+        parsed = parse_skyspy_line(
+            '{"format_version":"skyspy/1.1",'
+            '"mac":"02:00:00:00:00:03","rssi":-63,'
+            '"transport":"ble","basic_id":"RID-03",'
+            '"operator_id":"OP-03"}'
+        )
+        self.assertEqual(parsed["drone"]["basic_id"], "RID-03")
+        self.assertEqual(parsed["drone"]["operator_id"], "OP-03")
+        self.assertNotIn("position", parsed["drone"])
+        self.assertNotIn("speed_mps", parsed["drone"])
         self.assertEqual(parsed["radio"]["transport"], "ble")
+        self.assertEqual(
+            parsed["raw_remote_id"]["format_version"],
+            "skyspy/1.1",
+        )
 
 
 class OutboxTests(unittest.TestCase):

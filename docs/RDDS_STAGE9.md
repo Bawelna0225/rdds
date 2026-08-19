@@ -31,16 +31,18 @@ zero-filled GPS fields, and preserves the original object in `raw_remote_id`.
 | `rssi` | `radio.rssi` | dBm |
 | `drone_lat`, `drone_long` | `drone.position` | omitted when either value is zero/invalid |
 | `drone_altitude` | `drone.altitude_m` | added only with a valid drone position |
+| `height_agl` | `drone.height_agl_m` | added only with a valid drone position |
+| `speed` | `drone.speed_mps` | horizontal speed in m/s |
+| `heading` | `drone.heading_deg` | degrees in the range 0 to less than 360 |
 | `pilot_lat`, `pilot_long` | `pilot_position` | omitted when either value is zero/invalid |
 | `basic_id` or `remote_id` | `drone.basic_id` | empty identifiers are omitted |
+| `operator_id` or `op_id` | `drone.operator_id` | empty identifiers are omitted |
+| `transport`, `channel` | `radio.transport`, `radio.channel` | BLE, Wi-Fi NAN or Wi-Fi Beacon source |
 
-The adapter already accepts optional `operator_id`/`op_id`, `speed`, `heading`,
-`height_agl`, `transport` and `channel` fields. The current upstream
-`send_json_fast()` function does not serialize operator ID, speed, heading or
-height even though the firmware decodes and stores them. Consequently a real
-receiver running that firmware cannot populate those RDDS fields until a later
-firmware change is flashed. The emulator includes the optional fields to test
-the forward-compatible path.
+Stage 11 extends both bundled Sky-Spy firmware variants so these optional fields
+are now serialized. The adapter remains backward compatible with the original
+short JSON line, so older receivers and the enriched `skyspy/1.1` output can be
+used during a gradual hardware rollout.
 
 ## Delivery guarantees
 
