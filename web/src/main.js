@@ -20,6 +20,7 @@ const stateLabels = {
   provisioning: "konfiguracja",
   acknowledged: "przyjęty",
   closed: "zamknięty",
+  inactive: "wyłączona",
 };
 
 const severityLabels = {
@@ -34,6 +35,15 @@ const severityColors = {
   medium: "#ffb84d",
   high: "#ff4d5e",
   critical: "#ff2841",
+};
+
+const auditEventLabels = {
+  alert_opened: "Otwarto alarm",
+  alert_acknowledged: "Potwierdzono alarm",
+  alert_closed: "Zamknięto alarm",
+  zone_created: "Utworzono strefę",
+  zone_enabled: "Włączono strefę",
+  zone_disabled: "Wyłączono strefę",
 };
 
 const stateColors = {
@@ -68,16 +78,24 @@ const elements = {
   sensorCount: document.querySelector("#sensor-count"),
   alertCount: document.querySelector("#alert-count"),
   zoneCount: document.querySelector("#zone-count"),
+  auditCount: document.querySelector("#audit-count"),
   trackList: document.querySelector("#track-list"),
   sensorList: document.querySelector("#sensor-list"),
   alertList: document.querySelector("#alert-list"),
   zoneList: document.querySelector("#zone-list"),
+  auditList: document.querySelector("#audit-list"),
+  auditCategory: document.querySelector("#audit-category"),
+  auditExportCsv: document.querySelector("#audit-export-csv"),
+  auditExportJson: document.querySelector("#audit-export-json"),
   showEnded: document.querySelector("#show-ended"),
   showClosedAlerts: document.querySelector("#show-closed-alerts"),
   fitMap: document.querySelector("#fit-map"),
   selectionPanel: document.querySelector("#selection-panel"),
+  selectionEyebrow: document.querySelector("#selection-eyebrow"),
   selectionTitle: document.querySelector("#selection-title"),
   selectionDetails: document.querySelector("#selection-details"),
+  selectionTimeline: document.querySelector("#selection-timeline"),
+  selectionTimelineList: document.querySelector("#selection-timeline-list"),
   closeSelection: document.querySelector("#close-selection"),
   zoneEditor: document.querySelector("#zone-editor"),
   zoneDrawStep: document.querySelector("#zone-draw-step"),
@@ -117,7 +135,10 @@ let currentSensors = [];
 let currentTracks = [];
 let currentZones = [];
 let currentAlerts = [];
+let currentAuditEvents = [];
+let currentAuditTotal = 0;
 let selectedTrackId = null;
+let selectedAuditEvent = null;
 let selectedHistory = null;
 let initialFitComplete = false;
 let refreshInProgress = false;
@@ -170,6 +191,20 @@ function formatTime(value) {
   });
 }
 
+function formatDateTime(value) {
+  if (!value) {
+    return "—";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  return date.toLocaleString("pl-PL", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
 function formatMgrs(latitude, longitude) {
   if (!isCoordinate(latitude) || !isCoordinate(longitude)) {
     return "—";
@@ -187,6 +222,10 @@ function stateLabel(state) {
 
 function severityLabel(severity) {
   return severityLabels[severity] ?? severity ?? "—";
+}
+
+function auditEventLabel(eventType) {
+  return auditEventLabels[eventType] ?? eventType ?? "—";
 }
 
 function openAlertCountForTrack(trackId) {
@@ -660,6 +699,49 @@ function renderAlertList(alerts) {
   }
 }
 
+function renderAuditList(events) {
+  elements.auditList.replaceChildren();
+  elements.auditList.classList.toggle("empty-state", events.length === 0);
+
+  if (events.length === 0) {
+    elements.auditList.textContent = "Brak zarejestrowanych zdarzeń";
+    return;
+  }
+
+  for (const event of events) {
+    const card = document.createElement("button");
+    card.type = "button";
+    const selected = String(event.id) === String(selectedAuditEvent?.id);
+    const category = event.event_type.startsWith("alert_") ? "alert" : "zone";
+    card.className = `entity-card audit-card audit-${category}${selected ? " selected" : ""}`;
+    card.addEventListener("click", () => selectAuditEvent(event));
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "entity-title-row";
+    const title = document.createElement("span");
+    title.className = "entity-title";
+    title.textContent = auditEventLabel(event.event_type);
+    const actor = document.createElement("span");
+    actor.className = "audit-actor";
+    actor.textContent = event.actor || "system";
+    titleRow.append(title, actor);
+
+    const meta = document.createElement("div");
+    meta.className = "entity-meta audit-meta";
+    const subject = document.createElement("span");
+    subject.textContent =
+      event.basic_id || event.identity_key || event.zone_name || "system";
+    const zone = document.createElement("span");
+    zone.textContent = event.zone_name || "—";
+    const time = document.createElement("span");
+    time.textContent = formatDateTime(event.occurred_at);
+    meta.append(subject, zone, time);
+
+    card.append(titleRow, meta);
+    elements.auditList.append(card);
+  }
+}
+
 function renderTrackList(tracks) {
   elements.trackList.replaceChildren();
   elements.trackList.classList.toggle("empty-state", tracks.length === 0);
@@ -743,7 +825,7 @@ async function runZoneStateChange(zone, active, button) {
     await adminRequest(
       `/api/v1/zones/${encodeURIComponent(zone.id)}`,
       "PATCH",
-      { active },
+      { active, actor: activeOperator },
     );
     showToast(`Strefa „${zone.name}” została ${active ? "włączona" : "wyłączona"}.`);
     await refresh();
@@ -836,11 +918,17 @@ function detailItem(label, value) {
 function renderSelection(track) {
   if (!track) {
     elements.selectionPanel.classList.add("hidden");
+    elements.selectionDetails.replaceChildren();
+    elements.selectionTimeline.classList.add("hidden");
+    elements.selectionTimelineList.replaceChildren();
     return;
   }
 
   elements.selectionPanel.classList.remove("hidden");
+  elements.selectionEyebrow.textContent = "Wybrany ślad";
   elements.selectionTitle.textContent = track.basic_id || track.identity_key || track.track_key;
+  elements.selectionTimeline.classList.add("hidden");
+  elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
     detailItem("Status", stateLabel(track.state)),
     detailItem("Operator", track.operator_id),
@@ -854,6 +942,69 @@ function renderSelection(track) {
     detailItem("Pierwsza obserwacja", formatTime(track.first_seen_at)),
     detailItem("Ostatnia obserwacja", formatTime(track.last_seen_at)),
   );
+}
+
+function renderAuditTimeline(events) {
+  elements.selectionTimelineList.replaceChildren();
+
+  if (events.length === 0) {
+    elements.selectionTimelineList.textContent = "Brak zdarzeń w tej historii.";
+    return;
+  }
+
+  for (const event of [...events].reverse()) {
+    const item = document.createElement("div");
+    item.className = `timeline-event ${event.event_type.startsWith("alert_") ? "alert" : "zone"}`;
+    const marker = document.createElement("span");
+    marker.className = "timeline-marker";
+    const content = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = auditEventLabel(event.event_type);
+    const meta = document.createElement("span");
+    meta.textContent = `${formatDateTime(event.occurred_at)} · ${event.actor || "system"}`;
+    content.append(title, meta);
+    item.append(marker, content);
+    elements.selectionTimelineList.append(item);
+  }
+}
+
+function renderAuditSelection(event) {
+  elements.selectionPanel.classList.remove("hidden");
+  elements.selectionEyebrow.textContent = "Zdarzenie audytowe";
+  elements.selectionTitle.textContent = auditEventLabel(event.event_type);
+  elements.selectionDetails.replaceChildren(
+    detailItem("Czas", formatDateTime(event.occurred_at)),
+    detailItem("Operator", event.actor),
+    detailItem("Dron", event.basic_id || event.identity_key),
+    detailItem("Operator drona", event.operator_id),
+    detailItem("Strefa", event.zone_name),
+    detailItem("Poziom", severityLabel(event.alert_severity || event.details?.severity)),
+    detailItem("Stan alarmu", stateLabel(event.alert_state)),
+  );
+  elements.selectionTimeline.classList.remove("hidden");
+  elements.selectionTimelineList.textContent = "Ładowanie historii…";
+}
+
+async function refreshSelectedAuditTimeline() {
+  if (!selectedAuditEvent) {
+    return;
+  }
+
+  const requestedId = String(selectedAuditEvent.id);
+  let parameter = null;
+  if (selectedAuditEvent.alert_id) {
+    parameter = `alert_id=${encodeURIComponent(selectedAuditEvent.alert_id)}`;
+  } else if (selectedAuditEvent.zone_id) {
+    parameter = `zone_id=${encodeURIComponent(selectedAuditEvent.zone_id)}`;
+  }
+  if (!parameter) {
+    renderAuditTimeline([selectedAuditEvent]);
+    return;
+  }
+  const payload = await fetchJson(`/api/v1/audit/events?${parameter}&limit=200`);
+  if (String(selectedAuditEvent?.id) === requestedId) {
+    renderAuditTimeline(payload.events ?? []);
+  }
 }
 
 async function refreshSelectedHistory() {
@@ -886,8 +1037,10 @@ function selectTrack(trackId) {
   if (!elements.zoneEditor.classList.contains("hidden")) {
     return;
   }
+  selectedAuditEvent = null;
   selectedTrackId = trackId;
   const track = currentTracks.find((candidate) => candidate.id === trackId);
+  renderAuditList(currentAuditEvents);
   renderTrackList(currentTracks);
   renderSelection(track);
 
@@ -901,12 +1054,39 @@ function selectTrack(trackId) {
   });
 }
 
+function selectAuditEvent(event) {
+  if (!elements.zoneEditor.classList.contains("hidden")) {
+    return;
+  }
+
+  selectedTrackId = null;
+  selectedHistory?.remove();
+  selectedHistory = null;
+  selectedAuditEvent = event;
+  renderTrackList(currentTracks);
+  renderAuditList(currentAuditEvents);
+  renderAuditSelection(event);
+
+  const track = currentTracks.find((candidate) => candidate.id === event.track_id);
+  if (track && hasPosition(track)) {
+    map.panTo([track.latitude, track.longitude]);
+    trackLayers.get(track.id)?.marker.openPopup();
+  }
+
+  refreshSelectedAuditTimeline().catch((error) => {
+    elements.selectionTimelineList.textContent = "Nie udało się pobrać historii.";
+    console.error("Nie udało się pobrać historii audytu", error);
+  });
+}
+
 function clearSelection() {
   selectedTrackId = null;
+  selectedAuditEvent = null;
   selectedHistory?.remove();
   selectedHistory = null;
   renderSelection(null);
   renderTrackList(currentTracks);
+  renderAuditList(currentAuditEvents);
 }
 
 function updateDrawingLayer() {
@@ -1047,6 +1227,7 @@ async function saveDrawnZone(event) {
     description: elements.zoneDescription.value.trim() || null,
     severity: elements.zoneSeverity.value,
     active: elements.zoneActive.checked,
+    actor: activeOperator,
     geometry: {
       type: "Polygon",
       coordinates: [coordinates],
@@ -1104,6 +1285,16 @@ function fitAllEntities() {
   }
 }
 
+function downloadAudit(format) {
+  const category = encodeURIComponent(elements.auditCategory.value);
+  const link = document.createElement("a");
+  link.href = `/api/v1/audit/export?format=${format}&category=${category}`;
+  link.download = "";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 async function refresh() {
   if (refreshInProgress) {
     return;
@@ -1113,17 +1304,21 @@ async function refresh() {
   try {
     const includeEnded = elements.showEnded.checked ? "true" : "false";
     const includeClosedAlerts = elements.showClosedAlerts.checked ? "true" : "false";
-    const [sensorPayload, trackPayload, zonePayload, alertPayload] = await Promise.all([
+    const auditCategory = encodeURIComponent(elements.auditCategory.value);
+    const [sensorPayload, trackPayload, zonePayload, alertPayload, auditPayload] = await Promise.all([
       fetchJson("/api/v1/sensors"),
       fetchJson(`/api/v1/tracks?include_ended=${includeEnded}`),
       fetchJson("/api/v1/zones"),
       fetchJson(`/api/v1/alerts?include_closed=${includeClosedAlerts}`),
+      fetchJson(`/api/v1/audit/events?category=${auditCategory}&limit=100`),
     ]);
 
     currentSensors = sensorPayload.sensors ?? [];
     currentTracks = trackPayload.tracks ?? [];
     currentZones = zonePayload.zones ?? [];
     currentAlerts = alertPayload.alerts ?? [];
+    currentAuditEvents = auditPayload.events ?? [];
+    currentAuditTotal = auditPayload.total ?? currentAuditEvents.length;
 
     updateZoneLayers(currentZones, currentAlerts);
     updateSensorMarkers(currentSensors);
@@ -1132,6 +1327,7 @@ async function refresh() {
     renderTrackList(currentTracks);
     renderAlertList(currentAlerts);
     renderZoneList(currentZones, currentAlerts);
+    renderAuditList(currentAuditEvents);
 
     const onlineSensors = currentSensors.filter((sensor) => sensor.status === "online").length;
     const activeTracks = currentTracks.filter((track) => track.state === "active").length;
@@ -1143,6 +1339,7 @@ async function refresh() {
     elements.trackCount.textContent = String(currentTracks.length);
     elements.alertCount.textContent = String(currentAlerts.length);
     elements.zoneCount.textContent = String(currentZones.length);
+    elements.auditCount.textContent = String(currentAuditTotal);
 
     if (selectedTrackId) {
       const selected = currentTracks.find((track) => track.id === selectedTrackId);
@@ -1152,6 +1349,15 @@ async function refresh() {
       } else {
         clearSelection();
       }
+    } else if (selectedAuditEvent) {
+      const refreshedEvent = currentAuditEvents.find(
+        (event) => String(event.id) === String(selectedAuditEvent.id),
+      );
+      if (refreshedEvent) {
+        selectedAuditEvent = refreshedEvent;
+      }
+      renderAuditSelection(selectedAuditEvent);
+      await refreshSelectedAuditTimeline();
     }
 
     if (
@@ -1174,6 +1380,12 @@ async function refresh() {
 
 elements.showEnded.addEventListener("change", refresh);
 elements.showClosedAlerts.addEventListener("change", refresh);
+elements.auditCategory.addEventListener("change", () => {
+  clearSelection();
+  refresh();
+});
+elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
+elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
 elements.operatorLoginForm.addEventListener("submit", unlockOperator);

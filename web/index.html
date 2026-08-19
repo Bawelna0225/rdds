@@ -109,6 +109,32 @@
             </div>
           </section>
 
+          <section class="sidebar-section audit-section">
+            <div class="section-heading">
+              <h2>Dziennik zdarzeń</h2>
+              <span id="audit-count" class="counter">0</span>
+            </div>
+            <div class="audit-toolbar">
+              <label>
+                <span>Zakres</span>
+                <select id="audit-category">
+                  <option value="all">Wszystkie</option>
+                  <option value="alerts">Alarmy</option>
+                  <option value="zones">Strefy</option>
+                </select>
+              </label>
+              <div class="audit-export-actions">
+                <button id="audit-export-csv" type="button">Eksport CSV</button>
+                <button id="audit-export-json" type="button" class="secondary-button">
+                  JSON
+                </button>
+              </div>
+            </div>
+            <div id="audit-list" class="entity-list empty-state">
+              Brak zarejestrowanych zdarzeń
+            </div>
+          </section>
+
           <section class="sidebar-section">
             <div class="section-heading">
               <h2>Ślady dronów</h2>
@@ -154,9 +180,13 @@
 
           <section id="selection-panel" class="selection-panel hidden">
             <button id="close-selection" type="button" aria-label="Zamknij">×</button>
-            <p class="eyebrow">Wybrany ślad</p>
+            <p id="selection-eyebrow" class="eyebrow">Wybrany ślad</p>
             <h2 id="selection-title">—</h2>
             <div id="selection-details" class="selection-details"></div>
+            <div id="selection-timeline" class="selection-timeline hidden">
+              <h3>Historia incydentu</h3>
+              <div id="selection-timeline-list" class="timeline-list"></div>
+            </div>
           </section>
 
           <section id="zone-editor" class="zone-editor hidden">
