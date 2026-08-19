@@ -21,6 +21,7 @@
           <span id="connection-dot" class="connection-dot pending"></span>
           <span id="connection-label">Łączenie z API</span>
           <span id="last-update" class="last-update">—</span>
+          <span id="operator-status" class="operator-status">Obserwator</span>
         </div>
       </header>
 
@@ -40,6 +41,51 @@
               <strong id="open-alerts">0</strong>
             </div>
           </div>
+
+          <section id="operator-panel" class="operator-panel">
+            <div class="operator-heading">
+              <div>
+                <span>Tryb pracy</span>
+                <strong id="operator-mode-label">Tylko podgląd</strong>
+              </div>
+              <span id="operator-lock-indicator" class="lock-indicator">Zablokowany</span>
+            </div>
+
+            <form id="operator-login-form" class="operator-login-form">
+              <label>
+                Nazwa operatora
+                <input
+                  id="operator-name"
+                  type="text"
+                  maxlength="160"
+                  autocomplete="username"
+                  required
+                />
+              </label>
+              <label>
+                Token administratora
+                <input
+                  id="operator-token"
+                  type="password"
+                  minlength="32"
+                  autocomplete="off"
+                  spellcheck="false"
+                  required
+                />
+              </label>
+              <button id="operator-unlock" type="submit">Odblokuj narzędzia</button>
+              <p id="operator-message" class="operator-message">
+                Token pozostaje tylko w pamięci tej karty.
+              </p>
+            </form>
+
+            <div id="operator-actions" class="operator-actions hidden">
+              <button id="draw-zone" type="button">Narysuj nową strefę</button>
+              <button id="operator-lock" type="button" class="secondary-button">
+                Zablokuj
+              </button>
+            </div>
+          </section>
 
           <div class="toolbar">
             <label class="toggle-row">
@@ -112,6 +158,65 @@
             <h2 id="selection-title">—</h2>
             <div id="selection-details" class="selection-details"></div>
           </section>
+
+          <section id="zone-editor" class="zone-editor hidden">
+            <div id="zone-draw-step">
+              <p class="eyebrow">Nowa strefa</p>
+              <h2>Wskaż granice na mapie</h2>
+              <p class="panel-help">
+                Klikaj kolejne narożniki wielokąta. Minimum to trzy punkty.
+              </p>
+              <p class="point-counter">Punkty: <strong id="zone-point-count">0</strong></p>
+              <div class="panel-actions">
+                <button id="zone-undo-point" type="button" class="secondary-button">
+                  Cofnij punkt
+                </button>
+                <button id="zone-finish-drawing" type="button" disabled>
+                  Zakończ rysowanie
+                </button>
+                <button id="zone-cancel-drawing" type="button" class="danger-button">
+                  Anuluj
+                </button>
+              </div>
+            </div>
+
+            <form id="zone-form" class="zone-form hidden">
+              <p class="eyebrow">Nowa strefa</p>
+              <h2>Parametry strefy</h2>
+              <label>
+                Nazwa
+                <input id="zone-name" type="text" maxlength="160" required />
+              </label>
+              <label>
+                Poziom zagrożenia
+                <select id="zone-severity">
+                  <option value="low">Niski</option>
+                  <option value="medium">Średni</option>
+                  <option value="high" selected>Wysoki</option>
+                  <option value="critical">Krytyczny</option>
+                </select>
+              </label>
+              <label>
+                Opis
+                <textarea id="zone-description" maxlength="1000" rows="3"></textarea>
+              </label>
+              <label class="toggle-row">
+                <input id="zone-active" type="checkbox" checked />
+                <span>Aktywuj od razu</span>
+              </label>
+              <div class="panel-actions">
+                <button id="zone-save" type="submit">Zapisz strefę</button>
+                <button id="zone-back-to-drawing" type="button" class="secondary-button">
+                  Wróć do punktów
+                </button>
+                <button id="zone-cancel-form" type="button" class="danger-button">
+                  Anuluj
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
         </main>
       </div>
     </div>

@@ -113,6 +113,8 @@ class PolygonGeometry(StrictModel):
         ring = value[0]
         if len(ring) < 4:
             raise ValueError("polygon ring requires at least four positions")
+        if len(ring) > 501:
+            raise ValueError("polygon ring cannot exceed 500 positions")
         if ring[0] != ring[-1]:
             raise ValueError("polygon ring must be closed")
 

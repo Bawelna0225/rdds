@@ -68,7 +68,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
 )
 
@@ -230,6 +230,18 @@ def get_track_observation_history(
         "time": utc_now(),
         "track_id": track_id,
         "observations": observations,
+    }
+
+
+@app.get(
+    "/api/v1/admin/verify",
+    tags=["administration"],
+    dependencies=[Depends(require_admin_token)],
+)
+def verify_admin_access() -> dict[str, object]:
+    return {
+        "time": utc_now(),
+        "authorized": True,
     }
 
 

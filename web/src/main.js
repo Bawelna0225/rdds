@@ -52,6 +52,18 @@ const elements = {
   onlineSensors: document.querySelector("#online-sensors"),
   activeTracks: document.querySelector("#active-tracks"),
   openAlerts: document.querySelector("#open-alerts"),
+  operatorStatus: document.querySelector("#operator-status"),
+  operatorPanel: document.querySelector("#operator-panel"),
+  operatorModeLabel: document.querySelector("#operator-mode-label"),
+  operatorLockIndicator: document.querySelector("#operator-lock-indicator"),
+  operatorLoginForm: document.querySelector("#operator-login-form"),
+  operatorName: document.querySelector("#operator-name"),
+  operatorToken: document.querySelector("#operator-token"),
+  operatorUnlock: document.querySelector("#operator-unlock"),
+  operatorMessage: document.querySelector("#operator-message"),
+  operatorActions: document.querySelector("#operator-actions"),
+  operatorLock: document.querySelector("#operator-lock"),
+  drawZone: document.querySelector("#draw-zone"),
   trackCount: document.querySelector("#track-count"),
   sensorCount: document.querySelector("#sensor-count"),
   alertCount: document.querySelector("#alert-count"),
@@ -67,6 +79,21 @@ const elements = {
   selectionTitle: document.querySelector("#selection-title"),
   selectionDetails: document.querySelector("#selection-details"),
   closeSelection: document.querySelector("#close-selection"),
+  zoneEditor: document.querySelector("#zone-editor"),
+  zoneDrawStep: document.querySelector("#zone-draw-step"),
+  zonePointCount: document.querySelector("#zone-point-count"),
+  zoneUndoPoint: document.querySelector("#zone-undo-point"),
+  zoneFinishDrawing: document.querySelector("#zone-finish-drawing"),
+  zoneCancelDrawing: document.querySelector("#zone-cancel-drawing"),
+  zoneForm: document.querySelector("#zone-form"),
+  zoneName: document.querySelector("#zone-name"),
+  zoneSeverity: document.querySelector("#zone-severity"),
+  zoneDescription: document.querySelector("#zone-description"),
+  zoneActive: document.querySelector("#zone-active"),
+  zoneSave: document.querySelector("#zone-save"),
+  zoneBackToDrawing: document.querySelector("#zone-back-to-drawing"),
+  zoneCancelForm: document.querySelector("#zone-cancel-form"),
+  toast: document.querySelector("#toast"),
 };
 
 const map = L.map("map", {
@@ -94,6 +121,12 @@ let selectedTrackId = null;
 let selectedHistory = null;
 let initialFitComplete = false;
 let refreshInProgress = false;
+let adminToken = null;
+let activeOperator = null;
+let drawingMode = false;
+let drawingPoints = [];
+let drawingLayer = null;
+let toastTimeout = null;
 
 function isCoordinate(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -167,15 +200,73 @@ function setConnection(online, message) {
   elements.connectionLabel.textContent = message;
 }
 
-async function fetchJson(path) {
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function requestJson(
+  path,
+  { method = "GET", body = null, token = null } = {},
+) {
+  const headers = { Accept: "application/json" };
+  if (body !== null) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (token) {
+    headers["X-RDDS-Admin-Token"] = token;
+  }
+
   const response = await fetch(path, {
-    headers: { Accept: "application/json" },
+    method,
+    headers,
+    body: body === null ? null : JSON.stringify(body),
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    let detail = response.statusText;
+    try {
+      const payload = await response.json();
+      detail = payload.detail ?? detail;
+    } catch {
+      // The status code remains sufficient when the response is not JSON.
+    }
+    throw new ApiError(`${response.status}: ${detail}`, response.status);
   }
   return response.json();
+}
+
+function fetchJson(path) {
+  return requestJson(path);
+}
+
+function showToast(message, error = false) {
+  if (toastTimeout) {
+    clearTimeout(toastTimeout);
+  }
+  elements.toast.textContent = message;
+  elements.toast.classList.toggle("error", error);
+  elements.toast.classList.remove("hidden");
+  toastTimeout = setTimeout(() => {
+    elements.toast.classList.add("hidden");
+    toastTimeout = null;
+  }, 4200);
+}
+
+async function adminRequest(path, method, body) {
+  if (!adminToken) {
+    throw new ApiError("Tryb operatora jest zablokowany", 401);
+  }
+  try {
+    return await requestJson(path, { method, body, token: adminToken });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      lockOperator("Sesja została zablokowana — podaj aktualny token.");
+    }
+    throw error;
+  }
 }
 
 function sensorIcon(status) {
@@ -417,6 +508,88 @@ function createAlertBadge(state) {
   return badge;
 }
 
+function updateOperatorUi(message = null, error = false) {
+  const unlocked = Boolean(adminToken && activeOperator);
+  elements.operatorPanel.classList.toggle("unlocked", unlocked);
+  elements.operatorLoginForm.classList.toggle("hidden", unlocked);
+  elements.operatorActions.classList.toggle("hidden", !unlocked);
+  elements.operatorStatus.classList.toggle("unlocked", unlocked);
+  elements.operatorStatus.textContent = unlocked ? activeOperator : "Obserwator";
+  elements.operatorModeLabel.textContent = unlocked
+    ? `Operator: ${activeOperator}`
+    : "Tylko podgląd";
+  elements.operatorLockIndicator.textContent = unlocked
+    ? "Odblokowany"
+    : "Zablokowany";
+  elements.operatorMessage.classList.toggle("error", error);
+  if (message !== null) {
+    elements.operatorMessage.textContent = message;
+  }
+}
+
+async function unlockOperator(event) {
+  event.preventDefault();
+  const operator = elements.operatorName.value.trim();
+  const token = elements.operatorToken.value.trim();
+
+  if (!operator || token.length < 32) {
+    updateOperatorUi("Podaj nazwę operatora i poprawny token.", true);
+    return;
+  }
+
+  elements.operatorUnlock.disabled = true;
+  elements.operatorMessage.textContent = "Sprawdzanie uprawnień…";
+  elements.operatorMessage.classList.remove("error");
+  try {
+    await requestJson("/api/v1/admin/verify", { token });
+    adminToken = token;
+    activeOperator = operator;
+    elements.operatorToken.value = "";
+    updateOperatorUi("Narzędzia administracyjne są aktywne.");
+    renderAlertList(currentAlerts);
+    renderZoneList(currentZones, currentAlerts);
+    showToast(`Tryb operatora odblokowany: ${operator}`);
+  } catch (error) {
+    adminToken = null;
+    activeOperator = null;
+    elements.operatorToken.value = "";
+    updateOperatorUi("Token został odrzucony przez API.", true);
+  } finally {
+    elements.operatorUnlock.disabled = false;
+  }
+}
+
+function lockOperator(message = "Token usunięto z pamięci tej karty.") {
+  cancelZoneDrawing();
+  adminToken = null;
+  activeOperator = null;
+  elements.operatorToken.value = "";
+  updateOperatorUi(message);
+  renderAlertList(currentAlerts);
+  renderZoneList(currentZones, currentAlerts);
+}
+
+async function runAlertAction(alert, action, button) {
+  button.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/alerts/${encodeURIComponent(alert.id)}/${action}`,
+      "POST",
+      { actor: activeOperator },
+    );
+    showToast(
+      action === "acknowledge"
+        ? `Alarm dla ${alert.basic_id || alert.identity_key} został przyjęty.`
+        : `Alarm został zamknięty. Jeśli naruszenie trwa, system otworzy nowy.`,
+    );
+    await refresh();
+  } catch (error) {
+    showToast(`Operacja na alarmie nie powiodła się: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderAlertList(alerts) {
   elements.alertList.replaceChildren();
   elements.alertList.classList.toggle("empty-state", alerts.length === 0);
@@ -427,10 +600,13 @@ function renderAlertList(alerts) {
   }
 
   for (const alert of alerts) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = `entity-card alert-card severity-${alert.severity} alert-${alert.state}`;
-    card.addEventListener("click", () => {
+    const card = document.createElement("div");
+    card.className = `entity-card managed-card alert-card severity-${alert.severity} alert-${alert.state}`;
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "managed-card-main";
+    main.addEventListener("click", () => {
       if (currentTracks.some((track) => track.id === alert.track_id)) {
         selectTrack(alert.track_id);
       } else if (hasPosition(alert)) {
@@ -454,8 +630,32 @@ function renderAlertList(alerts) {
     const time = document.createElement("span");
     time.textContent = formatTime(alert.last_detected_at);
     meta.append(zone, severity, time);
+    main.append(titleRow, meta);
+    card.append(main);
 
-    card.append(titleRow, meta);
+    if (adminToken && alert.state !== "closed") {
+      const actions = document.createElement("div");
+      actions.className = "managed-actions";
+      if (alert.state === "active") {
+        const acknowledge = document.createElement("button");
+        acknowledge.type = "button";
+        acknowledge.textContent = "Potwierdź";
+        acknowledge.addEventListener("click", () => {
+          runAlertAction(alert, "acknowledge", acknowledge);
+        });
+        actions.append(acknowledge);
+      }
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "danger-button";
+      close.textContent = "Zamknij";
+      close.addEventListener("click", () => {
+        runAlertAction(alert, "close", close);
+      });
+      actions.append(close);
+      card.append(actions);
+    }
+
     elements.alertList.append(card);
   }
 }
@@ -537,6 +737,23 @@ function renderSensorList(sensors) {
   }
 }
 
+async function runZoneStateChange(zone, active, button) {
+  button.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/zones/${encodeURIComponent(zone.id)}`,
+      "PATCH",
+      { active },
+    );
+    showToast(`Strefa „${zone.name}” została ${active ? "włączona" : "wyłączona"}.`);
+    await refresh();
+  } catch (error) {
+    showToast(`Zmiana strefy nie powiodła się: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderZoneList(zones, alerts) {
   elements.zoneList.replaceChildren();
   elements.zoneList.classList.toggle("empty-state", zones.length === 0);
@@ -553,10 +770,12 @@ function renderZoneList(zones, alerts) {
   );
 
   for (const zone of zones) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "entity-card";
-    card.addEventListener("click", () => {
+    const card = document.createElement("div");
+    card.className = "entity-card managed-card";
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "managed-card-main";
+    main.addEventListener("click", () => {
       const layer = zoneLayers.get(zone.id);
       if (layer) {
         map.fitBounds(layer.getBounds(), { padding: [45, 45], maxZoom: 16 });
@@ -582,7 +801,23 @@ function renderZoneList(zones, alerts) {
     status.textContent = alertingZoneIds.has(zone.id) ? "ALARM" : "spokojnie";
     meta.append(severity, status);
 
-    card.append(titleRow, meta);
+    main.append(titleRow, meta);
+    card.append(main);
+
+    if (adminToken) {
+      const actions = document.createElement("div");
+      actions.className = "managed-actions";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = zone.active ? "danger-button" : "";
+      toggle.textContent = zone.active ? "Wyłącz strefę" : "Włącz strefę";
+      toggle.addEventListener("click", () => {
+        runZoneStateChange(zone, !zone.active, toggle);
+      });
+      actions.append(toggle);
+      card.append(actions);
+    }
+
     elements.zoneList.append(card);
   }
 }
@@ -648,6 +883,9 @@ async function refreshSelectedHistory() {
 }
 
 function selectTrack(trackId) {
+  if (!elements.zoneEditor.classList.contains("hidden")) {
+    return;
+  }
   selectedTrackId = trackId;
   const track = currentTracks.find((candidate) => candidate.id === trackId);
   renderTrackList(currentTracks);
@@ -669,6 +907,169 @@ function clearSelection() {
   selectedHistory = null;
   renderSelection(null);
   renderTrackList(currentTracks);
+}
+
+function updateDrawingLayer() {
+  drawingLayer?.remove();
+  drawingLayer = null;
+
+  if (drawingPoints.length === 0) {
+    elements.zonePointCount.textContent = "0";
+    elements.zoneFinishDrawing.disabled = true;
+    elements.zoneUndoPoint.disabled = true;
+    return;
+  }
+
+  const layers = drawingPoints.map((point) =>
+    L.circleMarker(point, {
+      radius: 4,
+      color: "#ffb84d",
+      fillColor: "#ffb84d",
+      fillOpacity: 0.9,
+      weight: 1,
+    }),
+  );
+
+  if (drawingPoints.length >= 2) {
+    const shape = drawingMode
+      ? L.polyline(drawingPoints, {
+          color: "#ffb84d",
+          weight: 2,
+          dashArray: "7 6",
+        })
+      : L.polygon(drawingPoints, {
+          color: "#ffb84d",
+          fillColor: "#ffb84d",
+          fillOpacity: 0.16,
+          weight: 2,
+        });
+    layers.unshift(shape);
+  }
+
+  drawingLayer = L.layerGroup(layers).addTo(map);
+  elements.zonePointCount.textContent = String(drawingPoints.length);
+  elements.zoneFinishDrawing.disabled = drawingPoints.length < 3;
+  elements.zoneUndoPoint.disabled = drawingPoints.length === 0;
+}
+
+function setZoneEditorStep(step) {
+  const drawing = step === "drawing";
+  elements.zoneDrawStep.classList.toggle("hidden", !drawing);
+  elements.zoneForm.classList.toggle("hidden", drawing);
+}
+
+function startZoneDrawing() {
+  if (!adminToken) {
+    showToast("Najpierw odblokuj tryb operatora.", true);
+    return;
+  }
+
+  clearSelection();
+  drawingPoints = [];
+  drawingMode = true;
+  elements.zoneForm.reset();
+  elements.zoneSeverity.value = "high";
+  elements.zoneActive.checked = true;
+  elements.zoneEditor.classList.remove("hidden");
+  setZoneEditorStep("drawing");
+  map.getContainer().classList.add("drawing-zone");
+  map.closePopup();
+  updateDrawingLayer();
+  showToast("Klikaj na mapie, aby wyznaczyć granice strefy.");
+}
+
+function handleMapDrawingClick(event) {
+  if (!drawingMode) {
+    return;
+  }
+  if (drawingPoints.length >= 500) {
+    showToast("Osiągnięto limit 500 punktów strefy.", true);
+    return;
+  }
+  drawingPoints.push(event.latlng);
+  updateDrawingLayer();
+}
+
+function undoZonePoint() {
+  if (!drawingMode || drawingPoints.length === 0) {
+    return;
+  }
+  drawingPoints.pop();
+  updateDrawingLayer();
+}
+
+function finishZoneDrawing() {
+  if (drawingPoints.length < 3) {
+    showToast("Strefa wymaga co najmniej trzech punktów.", true);
+    return;
+  }
+  drawingMode = false;
+  map.getContainer().classList.remove("drawing-zone");
+  setZoneEditorStep("form");
+  updateDrawingLayer();
+  elements.zoneName.focus();
+}
+
+function returnToZoneDrawing() {
+  drawingMode = true;
+  setZoneEditorStep("drawing");
+  map.getContainer().classList.add("drawing-zone");
+  updateDrawingLayer();
+}
+
+function cancelZoneDrawing() {
+  drawingMode = false;
+  drawingPoints = [];
+  drawingLayer?.remove();
+  drawingLayer = null;
+  map.getContainer().classList.remove("drawing-zone");
+  elements.zoneEditor.classList.add("hidden");
+  elements.zoneForm.reset();
+  elements.zonePointCount.textContent = "0";
+  elements.zoneFinishDrawing.disabled = true;
+  elements.zoneUndoPoint.disabled = true;
+}
+
+async function saveDrawnZone(event) {
+  event.preventDefault();
+  if (!adminToken || drawingPoints.length < 3) {
+    showToast("Nie można zapisać niekompletnej strefy.", true);
+    return;
+  }
+
+  const coordinates = drawingPoints.map((point) => [
+    Number(point.lng.toFixed(7)),
+    Number(point.lat.toFixed(7)),
+  ]);
+  coordinates.push([...coordinates[0]]);
+  const payload = {
+    name: elements.zoneName.value.trim(),
+    description: elements.zoneDescription.value.trim() || null,
+    severity: elements.zoneSeverity.value,
+    active: elements.zoneActive.checked,
+    geometry: {
+      type: "Polygon",
+      coordinates: [coordinates],
+    },
+  };
+
+  elements.zoneSave.disabled = true;
+  try {
+    const response = await adminRequest("/api/v1/zones", "POST", payload);
+    const createdZone = response.zone;
+    cancelZoneDrawing();
+    showToast(`Strefa „${createdZone.name}” została utworzona.`);
+    await refresh();
+    const layer = zoneLayers.get(createdZone.id);
+    if (layer) {
+      map.fitBounds(layer.getBounds(), { padding: [45, 45], maxZoom: 16 });
+      layer.openPopup();
+    }
+  } catch (error) {
+    showToast(`Nie udało się utworzyć strefy: ${error.message}`, true);
+  } finally {
+    elements.zoneSave.disabled = false;
+  }
 }
 
 function fitAllEntities() {
@@ -775,6 +1176,22 @@ elements.showEnded.addEventListener("change", refresh);
 elements.showClosedAlerts.addEventListener("change", refresh);
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
+elements.operatorLoginForm.addEventListener("submit", unlockOperator);
+elements.operatorLock.addEventListener("click", () => lockOperator());
+elements.drawZone.addEventListener("click", startZoneDrawing);
+elements.zoneUndoPoint.addEventListener("click", undoZonePoint);
+elements.zoneFinishDrawing.addEventListener("click", finishZoneDrawing);
+elements.zoneCancelDrawing.addEventListener("click", cancelZoneDrawing);
+elements.zoneForm.addEventListener("submit", saveDrawnZone);
+elements.zoneBackToDrawing.addEventListener("click", returnToZoneDrawing);
+elements.zoneCancelForm.addEventListener("click", cancelZoneDrawing);
+map.on("click", handleMapDrawingClick);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.zoneEditor.classList.contains("hidden")) {
+    cancelZoneDrawing();
+  }
+});
 
+updateOperatorUi();
 refresh();
 setInterval(refresh, REFRESH_INTERVAL_MS);
