@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rdds.local/schemas/rdds-v1.schema.json",
+  "title": "RDDS protocol v1 envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/observation" }
+  ],
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["latitude", "longitude"],
+      "properties": {
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "sensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sensor_id", "boot_id", "sequence", "timestamp"],
+      "properties": {
+        "sensor_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "display_name": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "boot_id": { "type": "string", "format": "uuid" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "position": {
+          "oneOf": [
+            { "$ref": "#/$defs/position" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "message_type", "sensor", "status"],
+      "properties": {
+        "protocol_version": { "const": "rdds/1.0" },
+        "message_type": { "const": "heartbeat" },
+        "sensor": { "$ref": "#/$defs/sensor" },
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "uptime_seconds": { "type": ["integer", "null"], "minimum": 0 },
+            "free_heap_bytes": { "type": ["integer", "null"], "minimum": 0 },
+            "queue_depth": { "type": ["integer", "null"], "minimum": 0 },
+            "cellular_rssi": {
+              "type": ["integer", "null"],
+              "minimum": -150,
+              "maximum": 0
+            }
+          }
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "message_type", "sensor", "radio", "drone"],
+      "properties": {
+        "protocol_version": { "const": "rdds/1.0" },
+        "message_type": { "const": "observation" },
+        "sensor": { "$ref": "#/$defs/sensor" },
+        "radio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transport"],
+          "properties": {
+            "transport": {
+              "enum": ["ble", "wifi_nan", "wifi_beacon", "simulator", "unknown"]
+            },
+            "channel": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "maximum": 255
+            },
+            "rssi": {
+              "type": ["integer", "null"],
+              "minimum": -150,
+              "maximum": 20
+            }
+          }
+        },
+        "drone": {
+          "type": "object",
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": ["mac"],
+              "properties": { "mac": { "type": "string" } }
+            },
+            {
+              "required": ["basic_id"],
+              "properties": { "basic_id": { "type": "string" } }
+            },
+            {
+              "required": ["operator_id"],
+              "properties": { "operator_id": { "type": "string" } }
+            },
+            {
+              "required": ["session_id"],
+              "properties": { "session_id": { "type": "string" } }
+            },
+            {
+              "required": ["position"],
+              "properties": { "position": { "$ref": "#/$defs/position" } }
+            }
+          ],
+          "properties": {
+            "mac": {
+              "type": ["string", "null"],
+              "pattern": "^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"
+            },
+            "basic_id": { "type": ["string", "null"], "maxLength": 255 },
+            "operator_id": { "type": ["string", "null"], "maxLength": 255 },
+            "session_id": { "type": ["string", "null"], "maxLength": 255 },
+            "position": {
+              "oneOf": [
+                { "$ref": "#/$defs/position" },
+                { "type": "null" }
+              ]
+            },
+            "altitude_m": { "type": ["number", "null"] },
+            "height_agl_m": { "type": ["number", "null"] },
+            "speed_mps": { "type": ["number", "null"], "minimum": 0 },
+            "heading_deg": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "exclusiveMaximum": 360
+            },
+            "emergency_status": {
+              "type": ["string", "null"],
+              "maxLength": 128
+            }
+          }
+        },
+        "pilot_position": {
+          "oneOf": [
+            { "$ref": "#/$defs/position" },
+            { "type": "null" }
+          ]
+        },
+        "raw_remote_id": { "type": ["object", "null"] }
+      }
+    }
+  }
+}

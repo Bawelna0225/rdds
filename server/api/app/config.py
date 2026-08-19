@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 
 def _required(name: str) -> str:
@@ -18,6 +18,8 @@ class Settings:
     db_name: str
     db_user: str
     db_password: str
+    ingest_token: str
+    sensor_offline_after_seconds: int
 
 
 def load_settings() -> Settings:
@@ -29,6 +31,10 @@ def load_settings() -> Settings:
         db_name=_required("RDDS_DB_NAME"),
         db_user=_required("RDDS_DB_USER"),
         db_password=_required("RDDS_DB_PASSWORD"),
+        ingest_token=_required("RDDS_INGEST_TOKEN"),
+        sensor_offline_after_seconds=int(
+            os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
+        ),
     )
 
 
