@@ -83,25 +83,25 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     %(identity_type)s,
                     'new',
                     CASE
-                        WHEN %(drone_longitude)s IS NULL
-                          OR %(drone_latitude)s IS NULL
+                        WHEN CAST(%(drone_longitude)s AS DOUBLE PRECISION) IS NULL
+                          OR CAST(%(drone_latitude)s AS DOUBLE PRECISION) IS NULL
                         THEN NULL
                         ELSE ST_SetSRID(
                             ST_MakePoint(
-                                %(drone_longitude)s,
-                                %(drone_latitude)s
+                                CAST(%(drone_longitude)s AS DOUBLE PRECISION),
+                                CAST(%(drone_latitude)s AS DOUBLE PRECISION)
                             ),
                             4326
                         )::geography
                     END,
                     CASE
-                        WHEN %(pilot_longitude)s IS NULL
-                          OR %(pilot_latitude)s IS NULL
+                        WHEN CAST(%(pilot_longitude)s AS DOUBLE PRECISION) IS NULL
+                          OR CAST(%(pilot_latitude)s AS DOUBLE PRECISION) IS NULL
                         THEN NULL
                         ELSE ST_SetSRID(
                             ST_MakePoint(
-                                %(pilot_longitude)s,
-                                %(pilot_latitude)s
+                                CAST(%(pilot_longitude)s AS DOUBLE PRECISION),
+                                CAST(%(pilot_latitude)s AS DOUBLE PRECISION)
                             ),
                             4326
                         )::geography

@@ -24,7 +24,6 @@ from app.config import settings
 from app.database import (
     insert_heartbeat,
     insert_observation,
-    list_sensors,
     mark_stale_sensors,
     readiness,
     system_summary,
@@ -36,8 +35,22 @@ from app.models import (
     ObservationEnvelope,
     ProtectedZoneCreate,
     ProtectedZoneState,
+    SensorRegistration,
+    SensorState,
+    SensorTokenRotation,
 )
-from app.security import require_admin_token, require_ingest_token
+from app.security import (
+    IngestPrincipal,
+    authorize_sensor_identity,
+    require_admin_token,
+    require_ingest_token,
+)
+from app.sensor_store import (
+    list_sensors,
+    register_sensor,
+    rotate_sensor_token,
+    set_sensor_enabled,
+)
 from app.track_store import get_track_history, list_tracks
 
 logging.basicConfig(
@@ -73,7 +86,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.7.0",
+    version="0.8.0",
     lifespan=lifespan,
 )
 
@@ -145,9 +158,12 @@ def get_protocol_schema() -> dict[str, object]:
     response_model=IngestResult,
     status_code=status.HTTP_202_ACCEPTED,
     tags=["ingest"],
-    dependencies=[Depends(require_ingest_token)],
 )
-def ingest_heartbeat(payload: HeartbeatEnvelope) -> IngestResult:
+def ingest_heartbeat(
+    payload: HeartbeatEnvelope,
+    principal: IngestPrincipal = Depends(require_ingest_token),
+) -> IngestResult:
+    authorize_sensor_identity(principal, payload.sensor.sensor_id)
     try:
         sensor_uuid, record_id = insert_heartbeat(
             payload,
@@ -170,9 +186,12 @@ def ingest_heartbeat(payload: HeartbeatEnvelope) -> IngestResult:
     response_model=IngestResult,
     status_code=status.HTTP_202_ACCEPTED,
     tags=["ingest"],
-    dependencies=[Depends(require_ingest_token)],
 )
-def ingest_observation(payload: ObservationEnvelope) -> IngestResult:
+def ingest_observation(
+    payload: ObservationEnvelope,
+    principal: IngestPrincipal = Depends(require_ingest_token),
+) -> IngestResult:
+    authorize_sensor_identity(principal, payload.sensor.sensor_id)
     try:
         sensor_uuid, record_id = insert_observation(
             payload,
@@ -201,6 +220,91 @@ def get_sensors() -> dict[str, object]:
     return {
         "time": utc_now(),
         "sensors": sensors,
+    }
+
+
+@app.post(
+    "/api/v1/sensors",
+    status_code=status.HTTP_201_CREATED,
+    tags=["sensors"],
+    dependencies=[Depends(require_admin_token)],
+)
+def post_sensor_registration(payload: SensorRegistration) -> dict[str, object]:
+    try:
+        sensor, ingest_token = register_sensor(payload)
+    except psycopg.errors.UniqueViolation as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="sensor_key already exists",
+        ) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor registration failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "sensor": sensor,
+        "credential": {
+            "ingest_token": ingest_token,
+            "token_prefix": sensor["token_prefix"],
+            "shown_once": True,
+        },
+    }
+
+
+@app.patch(
+    "/api/v1/sensors/{sensor_id}",
+    tags=["sensors"],
+    dependencies=[Depends(require_admin_token)],
+)
+def patch_sensor_state(
+    sensor_id: UUID,
+    payload: SensorState,
+) -> dict[str, object]:
+    try:
+        sensor = set_sensor_enabled(
+            sensor_id=sensor_id,
+            enabled=payload.enabled,
+            actor=payload.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor state update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if sensor is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+
+    return {
+        "time": utc_now(),
+        "sensor": sensor,
+    }
+
+
+@app.post(
+    "/api/v1/sensors/{sensor_id}/token/rotate",
+    tags=["sensors"],
+    dependencies=[Depends(require_admin_token)],
+)
+def post_sensor_token_rotation(
+    sensor_id: UUID,
+    payload: SensorTokenRotation,
+) -> dict[str, object]:
+    try:
+        result = rotate_sensor_token(sensor_id=sensor_id, actor=payload.actor)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor token rotation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+
+    sensor, ingest_token = result
+    return {
+        "time": utc_now(),
+        "sensor": sensor,
+        "credential": {
+            "ingest_token": ingest_token,
+            "token_prefix": sensor["token_prefix"],
+            "shown_once": True,
+        },
     }
 
 
@@ -247,6 +351,7 @@ def verify_admin_access() -> dict[str, object]:
     return {
         "time": utc_now(),
         "authorized": True,
+        "legacy_ingest_enabled": settings.allow_legacy_ingest,
     }
 
 
@@ -382,6 +487,11 @@ AuditEventType = Literal[
     "zone_created",
     "zone_enabled",
     "zone_disabled",
+    "sensor_registered",
+    "sensor_enabled",
+    "sensor_disabled",
+    "sensor_token_issued",
+    "sensor_token_rotated",
 ]
 
 
@@ -391,6 +501,7 @@ def get_audit_events(
     event_type: AuditEventType | None = Query(default=None),
     alert_id: UUID | None = Query(default=None),
     zone_id: UUID | None = Query(default=None),
+    sensor_id: UUID | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, object]:
@@ -400,6 +511,7 @@ def get_audit_events(
             event_type=event_type,
             alert_id=alert_id,
             zone_id=zone_id,
+            sensor_id=sensor_id,
             limit=limit,
             offset=offset,
         )
@@ -423,6 +535,7 @@ def export_audit_events(
     event_type: AuditEventType | None = Query(default=None),
     alert_id: UUID | None = Query(default=None),
     zone_id: UUID | None = Query(default=None),
+    sensor_id: UUID | None = Query(default=None),
     limit: int = Query(default=5000, ge=1, le=5000),
 ) -> Response:
     try:
@@ -431,6 +544,7 @@ def export_audit_events(
             event_type=event_type,
             alert_id=alert_id,
             zone_id=zone_id,
+            sensor_id=sensor_id,
             limit=limit,
         )
     except (psycopg.Error, RuntimeError) as exc:
@@ -470,6 +584,9 @@ def export_audit_events(
         "basic_id",
         "identity_key",
         "operator_id",
+        "sensor_id",
+        "sensor_key",
+        "sensor_name",
         "details",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")

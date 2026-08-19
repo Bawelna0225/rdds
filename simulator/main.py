@@ -8,11 +8,30 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 API_URL = os.getenv("RDDS_API_URL", "http://api:8000").rstrip("/")
-INGEST_TOKEN = os.environ["RDDS_INGEST_TOKEN"]
+LEGACY_INGEST_TOKEN = os.getenv("RDDS_INGEST_TOKEN", "")
 CENTER_LAT = float(os.getenv("RDDS_SIM_CENTER_LAT", "52.229700"))
 CENTER_LON = float(os.getenv("RDDS_SIM_CENTER_LON", "21.012200"))
 INTERVAL_SECONDS = max(0.5, float(os.getenv("RDDS_SIM_INTERVAL_SECONDS", "2")))
 HEARTBEAT_SECONDS = 10.0
+
+
+def load_sensor_tokens() -> dict[str, str]:
+    raw = os.getenv("RDDS_SIM_SENSOR_TOKENS_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("RDDS_SIM_SENSOR_TOKENS_JSON is not valid JSON") from exc
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and isinstance(token, str) and token
+        for key, token in value.items()
+    ):
+        raise RuntimeError("RDDS_SIM_SENSOR_TOKENS_JSON must map sensor IDs to tokens")
+    return value
+
+
+SENSOR_TOKENS = load_sensor_tokens()
 
 SENSORS = (
     {
@@ -90,7 +109,14 @@ def synthetic_rssi(distance: float) -> int:
     )
 
 
-def post(path: str, payload: dict[str, object]) -> bool:
+def ingest_token_for(sensor_id: str) -> str:
+    token = SENSOR_TOKENS.get(sensor_id, LEGACY_INGEST_TOKEN)
+    if not token:
+        raise RuntimeError(f"No ingest token configured for {sensor_id}")
+    return token
+
+
+def post(path: str, payload: dict[str, object], sensor_id: str) -> bool:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = Request(
         f"{API_URL}{path}",
@@ -98,7 +124,7 @@ def post(path: str, payload: dict[str, object]) -> bool:
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "X-RDDS-Ingest-Token": INGEST_TOKEN,
+            "X-RDDS-Ingest-Token": ingest_token_for(sensor_id),
         },
     )
     try:
@@ -145,7 +171,7 @@ def send_heartbeats(timestamp: str, uptime_seconds: int) -> None:
                 "cellular_rssi": -67,
             },
         }
-        post("/api/v1/ingest/heartbeat", payload)
+        post("/api/v1/ingest/heartbeat", payload, sensor_id)
 
 
 def drone_state(
@@ -205,7 +231,7 @@ def send_observations(timestamp: str, elapsed: float) -> int:
                     "rf_received": False,
                 },
             }
-            if post("/api/v1/ingest/observation", payload):
+            if post("/api/v1/ingest/observation", payload, sensor_id):
                 sent += 1
     return sent
 

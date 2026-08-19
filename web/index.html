@@ -81,6 +81,7 @@
 
             <div id="operator-actions" class="operator-actions hidden">
               <button id="draw-zone" type="button">Narysuj nową strefę</button>
+              <button id="register-sensor" type="button">Dodaj sensor</button>
               <button id="operator-lock" type="button" class="secondary-button">
                 Zablokuj
               </button>
@@ -121,6 +122,7 @@
                   <option value="all">Wszystkie</option>
                   <option value="alerts">Alarmy</option>
                   <option value="zones">Strefy</option>
+                  <option value="sensors">Sensory</option>
                 </select>
               </label>
               <div class="audit-export-actions">
@@ -244,6 +246,61 @@
                 </button>
               </div>
             </form>
+          </section>
+
+          <section id="sensor-editor" class="sensor-editor hidden">
+            <form id="sensor-form" class="sensor-form">
+              <p class="eyebrow">Nowy sensor</p>
+              <h2>Rejestracja odbiornika</h2>
+              <p class="panel-help">
+                Identyfikator musi być identyczny z wartością skonfigurowaną w urządzeniu.
+              </p>
+              <label>
+                Identyfikator sensora
+                <input
+                  id="sensor-key"
+                  type="text"
+                  minlength="3"
+                  maxlength="128"
+                  pattern="[A-Za-z0-9._:-]+"
+                  placeholder="rdds-sensor-01"
+                  required
+                />
+              </label>
+              <label>
+                Nazwa wyświetlana
+                <input id="sensor-display-name" type="text" maxlength="160" required />
+              </label>
+              <div class="coordinate-fields">
+                <label>
+                  Szerokość geograficzna
+                  <input id="sensor-latitude" type="number" min="-90" max="90" step="any" />
+                </label>
+                <label>
+                  Długość geograficzna
+                  <input id="sensor-longitude" type="number" min="-180" max="180" step="any" />
+                </label>
+              </div>
+              <div class="panel-actions">
+                <button id="sensor-save" type="submit">Zarejestruj</button>
+                <button id="sensor-cancel" type="button" class="danger-button">Anuluj</button>
+              </div>
+            </form>
+          </section>
+
+          <section id="sensor-token-panel" class="sensor-token-panel hidden">
+            <p class="eyebrow">Token sensora</p>
+            <h2 id="sensor-token-title">Nowe poświadczenie</h2>
+            <p class="token-warning">
+              Skopiuj token teraz. Po zamknięciu nie będzie można wyświetlić go ponownie.
+            </p>
+            <code id="sensor-token-value" class="sensor-token-value"></code>
+            <div class="panel-actions">
+              <button id="sensor-token-copy" type="button">Kopiuj token</button>
+              <button id="sensor-token-close" type="button" class="secondary-button">
+                Zamknij
+              </button>
+            </div>
           </section>
 
           <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>

@@ -244,7 +244,8 @@ button {
 
 .operator-heading span,
 .operator-login-form label,
-.zone-form label {
+.zone-form label,
+.sensor-form label {
   color: var(--muted);
   font-size: 10px;
 }
@@ -270,14 +271,16 @@ button {
 }
 
 .operator-login-form,
-.zone-form {
+.zone-form,
+.sensor-form {
   display: grid;
   gap: 9px;
   margin-top: 12px;
 }
 
 .operator-login-form label,
-.zone-form label {
+.zone-form label,
+.sensor-form label {
   display: grid;
   gap: 5px;
 }
@@ -285,7 +288,8 @@ button {
 .operator-login-form input,
 .zone-form input,
 .zone-form select,
-.zone-form textarea {
+.zone-form textarea,
+.sensor-form input {
   min-width: 0;
   width: 100%;
   color: var(--text);
@@ -299,12 +303,15 @@ button {
 .operator-login-form input:focus,
 .zone-form input:focus,
 .zone-form select:focus,
-.zone-form textarea:focus {
+.zone-form textarea:focus,
+.sensor-form input:focus {
   border-color: rgba(67, 213, 255, 0.62);
 }
 
 .operator-panel button,
 .zone-editor button,
+.sensor-editor button,
+.sensor-token-panel button,
 .managed-actions button {
   border: 1px solid rgba(67, 213, 255, 0.35);
   background: rgba(67, 213, 255, 0.1);
@@ -315,6 +322,8 @@ button {
 
 .operator-panel button:hover,
 .zone-editor button:hover,
+.sensor-editor button:hover,
+.sensor-token-panel button:hover,
 .managed-actions button:hover {
   border-color: rgba(67, 213, 255, 0.72);
 }
@@ -337,6 +346,7 @@ button:disabled {
 }
 
 .operator-actions {
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
@@ -519,6 +529,11 @@ button.entity-card.selected {
   border-color: rgba(67, 213, 255, 0.42);
 }
 
+.sensor-card.selected {
+  border-color: rgba(67, 213, 255, 0.42);
+  background: rgba(32, 43, 56, 0.9);
+}
+
 .entity-title-row {
   justify-content: space-between;
   gap: 8px;
@@ -616,6 +631,10 @@ button.entity-card.selected {
 
 .audit-card.audit-alert {
   border-left-color: var(--red);
+}
+
+.audit-card.audit-sensor {
+  border-left-color: var(--cyan);
 }
 
 .audit-actor {
@@ -728,12 +747,14 @@ button.entity-card.selected {
   border-radius: 50%;
 }
 
-.sensor-marker.offline {
+.sensor-marker.offline,
+.sensor-marker.disabled {
   border-color: #6d7785;
   box-shadow: none;
 }
 
-.sensor-marker.offline::after {
+.sensor-marker.offline::after,
+.sensor-marker.disabled::after {
   background: #6d7785;
 }
 
@@ -879,12 +900,16 @@ button.entity-card.selected {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
 }
 
-.zone-editor {
+.zone-editor,
+.sensor-editor,
+.sensor-token-panel {
   position: absolute;
   z-index: 650;
   right: 14px;
   top: 14px;
   width: min(360px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
   padding: 16px;
   border: 1px solid rgba(255, 184, 77, 0.45);
   background: rgba(10, 13, 18, 0.96);
@@ -892,9 +917,37 @@ button.entity-card.selected {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
 }
 
-.zone-editor h2 {
+.zone-editor h2,
+.sensor-editor h2,
+.sensor-token-panel h2 {
   margin: 0 0 8px;
   font-size: 17px;
+}
+
+.coordinate-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.token-warning {
+  color: var(--amber);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sensor-token-value {
+  display: block;
+  min-height: 56px;
+  padding: 10px;
+  color: var(--cyan);
+  background: #070a0f;
+  border: 1px solid rgba(67, 213, 255, 0.28);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 
 .panel-help,
@@ -1045,6 +1098,10 @@ button.entity-card.selected {
 
 .timeline-event.alert .timeline-marker {
   border-color: var(--red);
+}
+
+.timeline-event.sensor .timeline-marker {
+  border-color: var(--cyan);
 }
 
 .timeline-event strong,

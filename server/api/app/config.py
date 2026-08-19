@@ -9,6 +9,18 @@ def _required(name: str) -> str:
     return value
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be true or false")
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -20,6 +32,7 @@ class Settings:
     db_password: str
     ingest_token: str
     admin_token: str
+    allow_legacy_ingest: bool
     sensor_offline_after_seconds: int
     track_poll_seconds: float
     track_stale_after_seconds: int
@@ -39,6 +52,7 @@ def load_settings() -> Settings:
         db_password=_required("RDDS_DB_PASSWORD"),
         ingest_token=_required("RDDS_INGEST_TOKEN"),
         admin_token=_required("RDDS_ADMIN_TOKEN"),
+        allow_legacy_ingest=_boolean("RDDS_ALLOW_LEGACY_INGEST", True),
         sensor_offline_after_seconds=int(
             os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
         ),

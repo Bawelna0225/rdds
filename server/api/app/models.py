@@ -97,6 +97,26 @@ class IngestResult(StrictModel):
     sensor_uuid: UUID
 
 
+class SensorRegistration(StrictModel):
+    sensor_key: str = Field(
+        min_length=3,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    display_name: str = Field(min_length=1, max_length=160)
+    position: Position | None = None
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+
+
+class SensorState(StrictModel):
+    enabled: bool
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+
+
+class SensorTokenRotation(StrictModel):
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+
+
 class PolygonGeometry(StrictModel):
     type: Literal["Polygon"]
     coordinates: list[list[tuple[float, float]]]

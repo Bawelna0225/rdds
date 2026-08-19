@@ -4,7 +4,7 @@ from uuid import UUID
 from app.database import connection
 
 
-AuditCategory = Literal["all", "alerts", "zones"]
+AuditCategory = Literal["all", "alerts", "zones", "sensors"]
 
 
 def list_audit_events(
@@ -12,6 +12,7 @@ def list_audit_events(
     event_type: str | None = None,
     alert_id: UUID | None = None,
     zone_id: UUID | None = None,
+    sensor_id: UUID | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -25,6 +26,8 @@ def list_audit_events(
         conditions.append("event.event_type LIKE 'alert_%'")
     elif category == "zones":
         conditions.append("event.event_type LIKE 'zone_%'")
+    elif category == "sensors":
+        conditions.append("event.event_type LIKE 'sensor_%'")
 
     if event_type is not None:
         conditions.append("event.event_type = %(event_type)s")
@@ -35,6 +38,9 @@ def list_audit_events(
     if zone_id is not None:
         conditions.append("event.zone_id = %(zone_id)s")
         parameters["zone_id"] = zone_id
+    if sensor_id is not None:
+        conditions.append("event.sensor_id = %(sensor_id)s")
+        parameters["sensor_id"] = sensor_id
 
     where_clause = ""
     if conditions:
@@ -63,6 +69,7 @@ def list_audit_events(
                 event.alert_id,
                 event.zone_id,
                 event.track_id,
+                event.sensor_id,
                 alert.state AS alert_state,
                 alert.severity AS alert_severity,
                 alert.first_detected_at,
@@ -72,11 +79,14 @@ def list_audit_events(
                 track.track_key,
                 track.last_basic_id AS basic_id,
                 track.identity_key,
-                track.last_operator_id AS operator_id
+                track.last_operator_id AS operator_id,
+                sensor.sensor_key,
+                sensor.display_name AS sensor_name
             FROM audit_events AS event
             LEFT JOIN intrusion_alerts AS alert ON alert.id = event.alert_id
             LEFT JOIN protected_zones AS zone ON zone.id = event.zone_id
             LEFT JOIN tracks AS track ON track.id = event.track_id
+            LEFT JOIN sensors AS sensor ON sensor.id = event.sensor_id
             {where_clause}
             ORDER BY event.occurred_at DESC, event.id DESC
             LIMIT %(limit)s

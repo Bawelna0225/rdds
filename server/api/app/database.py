@@ -56,24 +56,37 @@ def _upsert_sensor(cursor: psycopg.Cursor, sensor: SensorContext) -> UUID:
             %(display_name)s,
             'online',
             CASE
-                WHEN %(longitude)s IS NULL OR %(latitude)s IS NULL THEN NULL
+                WHEN CAST(%(longitude)s AS DOUBLE PRECISION) IS NULL
+                  OR CAST(%(latitude)s AS DOUBLE PRECISION) IS NULL
+                THEN NULL
                 ELSE ST_SetSRID(
-                    ST_MakePoint(%(longitude)s, %(latitude)s),
+                    ST_MakePoint(
+                        CAST(%(longitude)s AS DOUBLE PRECISION),
+                        CAST(%(latitude)s AS DOUBLE PRECISION)
+                    ),
                     4326
                 )::geography
             END,
             NOW()
         )
         ON CONFLICT (sensor_key) DO UPDATE SET
-            display_name = COALESCE(
-                %(provided_display_name)s,
-                sensors.display_name
-            ),
-            status = 'online',
-            fixed_position = COALESCE(
-                EXCLUDED.fixed_position,
-                sensors.fixed_position
-            ),
+            display_name = CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM sensor_credentials AS credential
+                    WHERE credential.sensor_id = sensors.id
+                      AND credential.revoked_at IS NULL
+                ) THEN sensors.display_name
+                ELSE COALESCE(
+                    %(provided_display_name)s,
+                    sensors.display_name
+                )
+            END,
+            status = CASE
+                WHEN sensors.status = 'disabled' THEN 'disabled'
+                ELSE 'online'
+            END,
+            fixed_position = COALESCE(sensors.fixed_position, EXCLUDED.fixed_position),
             last_seen_at = NOW(),
             updated_at = NOW()
         RETURNING id
@@ -188,18 +201,26 @@ def insert_observation(
                 %(operator_id)s,
                 %(session_id)s,
                 CASE
-                    WHEN %(drone_longitude)s IS NULL OR %(drone_latitude)s IS NULL
+                    WHEN CAST(%(drone_longitude)s AS DOUBLE PRECISION) IS NULL
+                      OR CAST(%(drone_latitude)s AS DOUBLE PRECISION) IS NULL
                     THEN NULL
                     ELSE ST_SetSRID(
-                        ST_MakePoint(%(drone_longitude)s, %(drone_latitude)s),
+                        ST_MakePoint(
+                            CAST(%(drone_longitude)s AS DOUBLE PRECISION),
+                            CAST(%(drone_latitude)s AS DOUBLE PRECISION)
+                        ),
                         4326
                     )::geography
                 END,
                 CASE
-                    WHEN %(pilot_longitude)s IS NULL OR %(pilot_latitude)s IS NULL
+                    WHEN CAST(%(pilot_longitude)s AS DOUBLE PRECISION) IS NULL
+                      OR CAST(%(pilot_latitude)s AS DOUBLE PRECISION) IS NULL
                     THEN NULL
                     ELSE ST_SetSRID(
-                        ST_MakePoint(%(pilot_longitude)s, %(pilot_latitude)s),
+                        ST_MakePoint(
+                            CAST(%(pilot_longitude)s AS DOUBLE PRECISION),
+                            CAST(%(pilot_latitude)s AS DOUBLE PRECISION)
+                        ),
                         4326
                     )::geography
                 END,
@@ -256,27 +277,6 @@ def mark_stale_sensors() -> int:
         return cursor.rowcount
 
 
-def list_sensors() -> list[dict[str, Any]]:
-    with connection() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT
-                id,
-                sensor_key AS sensor_id,
-                display_name,
-                status,
-                ST_Y(fixed_position::geometry) AS latitude,
-                ST_X(fixed_position::geometry) AS longitude,
-                last_seen_at,
-                created_at,
-                updated_at
-            FROM sensors
-            ORDER BY sensor_key
-            """
-        )
-        return [dict(row) for row in cursor.fetchall()]
-
-
 def readiness() -> dict[str, str]:
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
@@ -304,6 +304,11 @@ def system_summary() -> dict[str, int]:
                 (SELECT COUNT(*) FROM tracks) AS tracks,
                 (SELECT COUNT(*) FROM protected_zones) AS zones,
                 (SELECT COUNT(*) FROM audit_events) AS audit_events,
+                (
+                    SELECT COUNT(*)
+                    FROM sensor_credentials
+                    WHERE revoked_at IS NULL
+                ) AS individual_sensor_credentials,
                 (
                     SELECT COUNT(*)
                     FROM intrusion_alerts

@@ -44,6 +44,11 @@ const auditEventLabels = {
   zone_created: "Utworzono strefę",
   zone_enabled: "Włączono strefę",
   zone_disabled: "Wyłączono strefę",
+  sensor_registered: "Zarejestrowano sensor",
+  sensor_enabled: "Włączono sensor",
+  sensor_disabled: "Wyłączono sensor",
+  sensor_token_issued: "Wydano token sensora",
+  sensor_token_rotated: "Zmieniono token sensora",
 };
 
 const stateColors = {
@@ -74,6 +79,7 @@ const elements = {
   operatorActions: document.querySelector("#operator-actions"),
   operatorLock: document.querySelector("#operator-lock"),
   drawZone: document.querySelector("#draw-zone"),
+  registerSensor: document.querySelector("#register-sensor"),
   trackCount: document.querySelector("#track-count"),
   sensorCount: document.querySelector("#sensor-count"),
   alertCount: document.querySelector("#alert-count"),
@@ -111,6 +117,19 @@ const elements = {
   zoneSave: document.querySelector("#zone-save"),
   zoneBackToDrawing: document.querySelector("#zone-back-to-drawing"),
   zoneCancelForm: document.querySelector("#zone-cancel-form"),
+  sensorEditor: document.querySelector("#sensor-editor"),
+  sensorForm: document.querySelector("#sensor-form"),
+  sensorKey: document.querySelector("#sensor-key"),
+  sensorDisplayName: document.querySelector("#sensor-display-name"),
+  sensorLatitude: document.querySelector("#sensor-latitude"),
+  sensorLongitude: document.querySelector("#sensor-longitude"),
+  sensorSave: document.querySelector("#sensor-save"),
+  sensorCancel: document.querySelector("#sensor-cancel"),
+  sensorTokenPanel: document.querySelector("#sensor-token-panel"),
+  sensorTokenTitle: document.querySelector("#sensor-token-title"),
+  sensorTokenValue: document.querySelector("#sensor-token-value"),
+  sensorTokenCopy: document.querySelector("#sensor-token-copy"),
+  sensorTokenClose: document.querySelector("#sensor-token-close"),
   toast: document.querySelector("#toast"),
 };
 
@@ -138,6 +157,7 @@ let currentAlerts = [];
 let currentAuditEvents = [];
 let currentAuditTotal = 0;
 let selectedTrackId = null;
+let selectedSensorId = null;
 let selectedAuditEvent = null;
 let selectedHistory = null;
 let initialFitComplete = false;
@@ -174,6 +194,43 @@ function formatNumber(value, digits = 1, suffix = "") {
     return "—";
   }
   return `${value.toFixed(digits)}${suffix}`;
+}
+
+function formatInteger(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  return new Intl.NumberFormat("pl-PL").format(value);
+}
+
+function formatBytes(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  if (value >= 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KiB`;
+  }
+  return `${value} B`;
+}
+
+function formatDuration(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  const seconds = Math.max(0, Math.round(value));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) {
+    return `${days} d ${hours} h`;
+  }
+  if (hours > 0) {
+    return `${hours} h ${minutes} min`;
+  }
+  return `${minutes} min`;
 }
 
 function formatTime(value) {
@@ -346,6 +403,8 @@ function sensorPopup(sensor) {
     <div class="popup-grid">
       <span>ID</span><strong>${escapeHtml(sensor.sensor_id)}</strong>
       <span>Status</span><strong>${escapeHtml(stateLabel(sensor.status))}</strong>
+      <span>Token</span><strong>${sensor.credential_mode === "individual" ? "indywidualny" : "wspólny"}</strong>
+      <span>Obserwacje</span><strong>${escapeHtml(formatInteger(sensor.observation_count))}</strong>
       <span>MGRS</span><strong>${escapeHtml(formatMgrs(sensor.latitude, sensor.longitude))}</strong>
       <span>Ostatni kontakt</span><strong>${escapeHtml(formatTime(sensor.last_seen_at))}</strong>
     </div>`;
@@ -580,12 +639,17 @@ async function unlockOperator(event) {
   elements.operatorMessage.textContent = "Sprawdzanie uprawnień…";
   elements.operatorMessage.classList.remove("error");
   try {
-    await requestJson("/api/v1/admin/verify", { token });
+    const verification = await requestJson("/api/v1/admin/verify", { token });
     adminToken = token;
     activeOperator = operator;
     elements.operatorToken.value = "";
-    updateOperatorUi("Narzędzia administracyjne są aktywne.");
+    updateOperatorUi(
+      verification.legacy_ingest_enabled
+        ? "Narzędzia aktywne. Wspólny token sensorów nadal jest dozwolony."
+        : "Narzędzia administracyjne są aktywne.",
+    );
     renderAlertList(currentAlerts);
+    renderSensorList(currentSensors);
     renderZoneList(currentZones, currentAlerts);
     showToast(`Tryb operatora odblokowany: ${operator}`);
   } catch (error) {
@@ -600,11 +664,14 @@ async function unlockOperator(event) {
 
 function lockOperator(message = "Token usunięto z pamięci tej karty.") {
   cancelZoneDrawing();
+  cancelSensorRegistration();
+  closeSensorToken();
   adminToken = null;
   activeOperator = null;
   elements.operatorToken.value = "";
   updateOperatorUi(message);
   renderAlertList(currentAlerts);
+  renderSensorList(currentSensors);
   renderZoneList(currentZones, currentAlerts);
 }
 
@@ -712,7 +779,11 @@ function renderAuditList(events) {
     const card = document.createElement("button");
     card.type = "button";
     const selected = String(event.id) === String(selectedAuditEvent?.id);
-    const category = event.event_type.startsWith("alert_") ? "alert" : "zone";
+    const category = event.event_type.startsWith("alert_")
+      ? "alert"
+      : event.event_type.startsWith("sensor_")
+        ? "sensor"
+        : "zone";
     card.className = `entity-card audit-card audit-${category}${selected ? " selected" : ""}`;
     card.addEventListener("click", () => selectAuditEvent(event));
 
@@ -730,12 +801,17 @@ function renderAuditList(events) {
     meta.className = "entity-meta audit-meta";
     const subject = document.createElement("span");
     subject.textContent =
-      event.basic_id || event.identity_key || event.zone_name || "system";
-    const zone = document.createElement("span");
-    zone.textContent = event.zone_name || "—";
+      event.basic_id ||
+      event.identity_key ||
+      event.zone_name ||
+      event.sensor_name ||
+      event.sensor_key ||
+      "system";
+    const context = document.createElement("span");
+    context.textContent = event.zone_name || event.sensor_key || "—";
     const time = document.createElement("span");
     time.textContent = formatDateTime(event.occurred_at);
-    meta.append(subject, zone, time);
+    meta.append(subject, context, time);
 
     card.append(titleRow, meta);
     elements.auditList.append(card);
@@ -779,6 +855,51 @@ function renderTrackList(tracks) {
   }
 }
 
+async function runSensorStateChange(sensor, enabled, button) {
+  button.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensors/${encodeURIComponent(sensor.id)}`,
+      "PATCH",
+      { enabled, actor: activeOperator },
+    );
+    showToast(
+      `Sensor „${sensor.display_name}” został ${enabled ? "włączony" : "wyłączony"}.`,
+    );
+    await refresh();
+  } catch (error) {
+    showToast(`Zmiana sensora nie powiodła się: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function runSensorTokenRotation(sensor, button) {
+  const action = sensor.credential_mode === "individual" ? "zmienić" : "wydać";
+  const warning =
+    sensor.credential_mode === "individual"
+      ? "Poprzedni token natychmiast przestanie działać."
+      : "Po tej operacji wspólny token przestanie działać dla tego sensora.";
+  if (!window.confirm(`Czy ${action} indywidualny token sensora? ${warning}`)) {
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    const response = await adminRequest(
+      `/api/v1/sensors/${encodeURIComponent(sensor.id)}/token/rotate`,
+      "POST",
+      { actor: activeOperator },
+    );
+    showSensorToken(response.sensor, response.credential);
+    await refresh();
+  } catch (error) {
+    showToast(`Nie udało się wydać tokenu: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderSensorList(sensors) {
   elements.sensorList.replaceChildren();
   elements.sensorList.classList.toggle("empty-state", sensors.length === 0);
@@ -789,15 +910,12 @@ function renderSensorList(sensors) {
   }
 
   for (const sensor of sensors) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "entity-card";
-    card.addEventListener("click", () => {
-      if (hasPosition(sensor)) {
-        map.setView([sensor.latitude, sensor.longitude], Math.max(map.getZoom(), 14));
-        sensorMarkers.get(sensor.id)?.openPopup();
-      }
-    });
+    const card = document.createElement("div");
+    card.className = `entity-card managed-card sensor-card${sensor.id === selectedSensorId ? " selected" : ""}`;
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "managed-card-main";
+    main.addEventListener("click", () => selectSensor(sensor.id));
 
     const titleRow = document.createElement("div");
     titleRow.className = "entity-title-row";
@@ -810,11 +928,37 @@ function renderSensorList(sensors) {
     meta.className = "entity-meta";
     const identifier = document.createElement("span");
     identifier.textContent = sensor.sensor_id;
+    const credential = document.createElement("span");
+    credential.textContent =
+      sensor.credential_mode === "individual"
+        ? `token ${sensor.token_prefix}…`
+        : "token wspólny";
     const time = document.createElement("span");
     time.textContent = formatTime(sensor.last_seen_at);
-    meta.append(identifier, time);
+    meta.append(identifier, credential, time);
 
-    card.append(titleRow, meta);
+    main.append(titleRow, meta);
+    card.append(main);
+
+    if (adminToken) {
+      const actions = document.createElement("div");
+      actions.className = "managed-actions";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = sensor.status === "disabled" ? "" : "danger-button";
+      toggle.textContent = sensor.status === "disabled" ? "Włącz" : "Wyłącz";
+      toggle.addEventListener("click", () => {
+        runSensorStateChange(sensor, sensor.status === "disabled", toggle);
+      });
+      const rotate = document.createElement("button");
+      rotate.type = "button";
+      rotate.textContent =
+        sensor.credential_mode === "individual" ? "Zmień token" : "Wydaj token";
+      rotate.addEventListener("click", () => runSensorTokenRotation(sensor, rotate));
+      actions.append(toggle, rotate);
+      card.append(actions);
+    }
+
     elements.sensorList.append(card);
   }
 }
@@ -944,6 +1088,31 @@ function renderSelection(track) {
   );
 }
 
+function renderSensorSelection(sensor) {
+  elements.selectionPanel.classList.remove("hidden");
+  elements.selectionEyebrow.textContent = "Wybrany sensor";
+  elements.selectionTitle.textContent = sensor.display_name || sensor.sensor_id;
+  elements.selectionTimeline.classList.add("hidden");
+  elements.selectionTimelineList.replaceChildren();
+  elements.selectionDetails.replaceChildren(
+    detailItem("Status", stateLabel(sensor.status)),
+    detailItem("Identyfikator", sensor.sensor_id),
+    detailItem(
+      "Uwierzytelnianie",
+      sensor.credential_mode === "individual" ? "token indywidualny" : "token wspólny",
+    ),
+    detailItem("Prefiks tokenu", sensor.token_prefix ? `${sensor.token_prefix}…` : "—"),
+    detailItem("Ostatni kontakt", formatDateTime(sensor.last_seen_at)),
+    detailItem("MGRS", formatMgrs(sensor.latitude, sensor.longitude)),
+    detailItem("Obserwacje", formatInteger(sensor.observation_count)),
+    detailItem("Heartbeat", formatInteger(sensor.heartbeat_count)),
+    detailItem("Uptime", formatDuration(sensor.uptime_seconds)),
+    detailItem("RSSI modemu", formatNumber(sensor.cellular_rssi, 0, " dBm")),
+    detailItem("Wolna pamięć", formatBytes(sensor.free_heap_bytes)),
+    detailItem("Kolejka", formatInteger(sensor.queue_depth)),
+  );
+}
+
 function renderAuditTimeline(events) {
   elements.selectionTimelineList.replaceChildren();
 
@@ -954,7 +1123,12 @@ function renderAuditTimeline(events) {
 
   for (const event of [...events].reverse()) {
     const item = document.createElement("div");
-    item.className = `timeline-event ${event.event_type.startsWith("alert_") ? "alert" : "zone"}`;
+    const category = event.event_type.startsWith("alert_")
+      ? "alert"
+      : event.event_type.startsWith("sensor_")
+        ? "sensor"
+        : "zone";
+    item.className = `timeline-event ${category}`;
     const marker = document.createElement("span");
     marker.className = "timeline-marker";
     const content = document.createElement("div");
@@ -978,6 +1152,7 @@ function renderAuditSelection(event) {
     detailItem("Dron", event.basic_id || event.identity_key),
     detailItem("Operator drona", event.operator_id),
     detailItem("Strefa", event.zone_name),
+    detailItem("Sensor", event.sensor_name || event.sensor_key),
     detailItem("Poziom", severityLabel(event.alert_severity || event.details?.severity)),
     detailItem("Stan alarmu", stateLabel(event.alert_state)),
   );
@@ -996,6 +1171,8 @@ async function refreshSelectedAuditTimeline() {
     parameter = `alert_id=${encodeURIComponent(selectedAuditEvent.alert_id)}`;
   } else if (selectedAuditEvent.zone_id) {
     parameter = `zone_id=${encodeURIComponent(selectedAuditEvent.zone_id)}`;
+  } else if (selectedAuditEvent.sensor_id) {
+    parameter = `sensor_id=${encodeURIComponent(selectedAuditEvent.sensor_id)}`;
   }
   if (!parameter) {
     renderAuditTimeline([selectedAuditEvent]);
@@ -1034,13 +1211,19 @@ async function refreshSelectedHistory() {
 }
 
 function selectTrack(trackId) {
-  if (!elements.zoneEditor.classList.contains("hidden")) {
+  if (
+    !elements.zoneEditor.classList.contains("hidden") ||
+    !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
     return;
   }
   selectedAuditEvent = null;
+  selectedSensorId = null;
   selectedTrackId = trackId;
   const track = currentTracks.find((candidate) => candidate.id === trackId);
   renderAuditList(currentAuditEvents);
+  renderSensorList(currentSensors);
   renderTrackList(currentTracks);
   renderSelection(track);
 
@@ -1054,16 +1237,49 @@ function selectTrack(trackId) {
   });
 }
 
-function selectAuditEvent(event) {
-  if (!elements.zoneEditor.classList.contains("hidden")) {
+function selectSensor(sensorId) {
+  if (
+    !elements.zoneEditor.classList.contains("hidden") ||
+    !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
     return;
   }
 
   selectedTrackId = null;
+  selectedAuditEvent = null;
+  selectedSensorId = sensorId;
+  selectedHistory?.remove();
+  selectedHistory = null;
+  const sensor = currentSensors.find((candidate) => candidate.id === sensorId);
+  renderTrackList(currentTracks);
+  renderAuditList(currentAuditEvents);
+  renderSensorList(currentSensors);
+  if (sensor) {
+    renderSensorSelection(sensor);
+    if (hasPosition(sensor)) {
+      map.setView([sensor.latitude, sensor.longitude], Math.max(map.getZoom(), 14));
+      sensorMarkers.get(sensor.id)?.openPopup();
+    }
+  }
+}
+
+function selectAuditEvent(event) {
+  if (
+    !elements.zoneEditor.classList.contains("hidden") ||
+    !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
+    return;
+  }
+
+  selectedTrackId = null;
+  selectedSensorId = null;
   selectedHistory?.remove();
   selectedHistory = null;
   selectedAuditEvent = event;
   renderTrackList(currentTracks);
+  renderSensorList(currentSensors);
   renderAuditList(currentAuditEvents);
   renderAuditSelection(event);
 
@@ -1081,11 +1297,13 @@ function selectAuditEvent(event) {
 
 function clearSelection() {
   selectedTrackId = null;
+  selectedSensorId = null;
   selectedAuditEvent = null;
   selectedHistory?.remove();
   selectedHistory = null;
   renderSelection(null);
   renderTrackList(currentTracks);
+  renderSensorList(currentSensors);
   renderAuditList(currentAuditEvents);
 }
 
@@ -1144,6 +1362,8 @@ function startZoneDrawing() {
     return;
   }
 
+  cancelSensorRegistration();
+  closeSensorToken();
   clearSelection();
   drawingPoints = [];
   drawingMode = true;
@@ -1208,6 +1428,128 @@ function cancelZoneDrawing() {
   elements.zonePointCount.textContent = "0";
   elements.zoneFinishDrawing.disabled = true;
   elements.zoneUndoPoint.disabled = true;
+}
+
+function startSensorRegistration() {
+  if (!adminToken) {
+    showToast("Najpierw odblokuj tryb operatora.", true);
+    return;
+  }
+
+  cancelZoneDrawing();
+  closeSensorToken();
+  clearSelection();
+  elements.sensorForm.reset();
+  const center = map.getCenter();
+  elements.sensorLatitude.value = center.lat.toFixed(7);
+  elements.sensorLongitude.value = center.lng.toFixed(7);
+  elements.sensorEditor.classList.remove("hidden");
+  elements.sensorKey.focus();
+}
+
+function cancelSensorRegistration() {
+  elements.sensorEditor.classList.add("hidden");
+  elements.sensorForm.reset();
+  elements.sensorSave.disabled = false;
+}
+
+function showSensorToken(sensor, credential) {
+  cancelSensorRegistration();
+  clearSelection();
+  elements.sensorTokenTitle.textContent = `Token: ${sensor.display_name}`;
+  elements.sensorTokenValue.textContent = credential.ingest_token;
+  elements.sensorTokenPanel.classList.remove("hidden");
+}
+
+function closeSensorToken() {
+  elements.sensorTokenPanel.classList.add("hidden");
+  elements.sensorTokenValue.textContent = "";
+}
+
+async function copySensorToken() {
+  const token = elements.sensorTokenValue.textContent;
+  if (!token) {
+    return;
+  }
+
+  let copied = false;
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(token);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+  }
+
+  if (!copied) {
+    const field = document.createElement("textarea");
+    field.value = token;
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.focus();
+    field.select();
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      copied = false;
+    } finally {
+      field.remove();
+    }
+  }
+
+  if (copied) {
+    showToast("Token sensora skopiowany do schowka.");
+    return;
+  }
+
+  const selection = window.getSelection();
+  if (selection) {
+    const range = document.createRange();
+    range.selectNodeContents(elements.sensorTokenValue);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  showToast("Token został zaznaczony. Skopiuj go ręcznie przez Ctrl+C.", true);
+}
+
+async function saveSensorRegistration(event) {
+  event.preventDefault();
+  if (!adminToken) {
+    showToast("Tryb operatora jest zablokowany.", true);
+    return;
+  }
+
+  const latitudeText = elements.sensorLatitude.value.trim();
+  const longitudeText = elements.sensorLongitude.value.trim();
+  if (Boolean(latitudeText) !== Boolean(longitudeText)) {
+    showToast("Podaj obie współrzędne albo pozostaw oba pola puste.", true);
+    return;
+  }
+
+  const payload = {
+    sensor_key: elements.sensorKey.value.trim(),
+    display_name: elements.sensorDisplayName.value.trim(),
+    position: latitudeText
+      ? {
+          latitude: Number(latitudeText),
+          longitude: Number(longitudeText),
+        }
+      : null,
+    actor: activeOperator,
+  };
+
+  elements.sensorSave.disabled = true;
+  try {
+    const response = await adminRequest("/api/v1/sensors", "POST", payload);
+    showSensorToken(response.sensor, response.credential);
+    await refresh();
+  } catch (error) {
+    showToast(`Rejestracja sensora nie powiodła się: ${error.message}`, true);
+  } finally {
+    elements.sensorSave.disabled = false;
+  }
 }
 
 async function saveDrawnZone(event) {
@@ -1349,6 +1691,13 @@ async function refresh() {
       } else {
         clearSelection();
       }
+    } else if (selectedSensorId) {
+      const selected = currentSensors.find((sensor) => sensor.id === selectedSensorId);
+      if (selected) {
+        renderSensorSelection(selected);
+      } else {
+        clearSelection();
+      }
     } else if (selectedAuditEvent) {
       const refreshedEvent = currentAuditEvents.find(
         (event) => String(event.id) === String(selectedAuditEvent.id),
@@ -1391,16 +1740,31 @@ elements.closeSelection.addEventListener("click", clearSelection);
 elements.operatorLoginForm.addEventListener("submit", unlockOperator);
 elements.operatorLock.addEventListener("click", () => lockOperator());
 elements.drawZone.addEventListener("click", startZoneDrawing);
+elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.zoneUndoPoint.addEventListener("click", undoZonePoint);
 elements.zoneFinishDrawing.addEventListener("click", finishZoneDrawing);
 elements.zoneCancelDrawing.addEventListener("click", cancelZoneDrawing);
 elements.zoneForm.addEventListener("submit", saveDrawnZone);
 elements.zoneBackToDrawing.addEventListener("click", returnToZoneDrawing);
 elements.zoneCancelForm.addEventListener("click", cancelZoneDrawing);
+elements.sensorForm.addEventListener("submit", saveSensorRegistration);
+elements.sensorCancel.addEventListener("click", cancelSensorRegistration);
+elements.sensorTokenCopy.addEventListener("click", copySensorToken);
+elements.sensorTokenClose.addEventListener("click", closeSensorToken);
 map.on("click", handleMapDrawingClick);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.zoneEditor.classList.contains("hidden")) {
     cancelZoneDrawing();
+  } else if (
+    event.key === "Escape" &&
+    !elements.sensorEditor.classList.contains("hidden")
+  ) {
+    cancelSensorRegistration();
+  } else if (
+    event.key === "Escape" &&
+    !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
+    closeSensorToken();
   }
 });
 
