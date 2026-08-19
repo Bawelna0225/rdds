@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0a0d12" />
+    <title>RDDS — mapa operacyjna</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span></div>
+          <div>
+            <h1>RDDS</h1>
+            <p>Remote Drone Detection System</p>
+          </div>
+        </div>
+        <div class="topbar-status">
+          <span id="connection-dot" class="connection-dot pending"></span>
+          <span id="connection-label">Łączenie z API</span>
+          <span id="last-update" class="last-update">—</span>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside id="sidebar" class="sidebar">
+          <div class="summary-grid">
+            <div class="summary-card">
+              <span>Sensory online</span>
+              <strong id="online-sensors">0</strong>
+            </div>
+            <div class="summary-card">
+              <span>Aktywne drony</span>
+              <strong id="active-tracks">0</strong>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <label class="toggle-row">
+              <input id="show-ended" type="checkbox" />
+              <span>Pokaż zakończone</span>
+            </label>
+            <button id="fit-map" type="button">Pokaż wszystkie</button>
+          </div>
+
+          <section class="sidebar-section">
+            <div class="section-heading">
+              <h2>Ślady dronów</h2>
+              <span id="track-count" class="counter">0</span>
+            </div>
+            <div id="track-list" class="entity-list empty-state">
+              Oczekiwanie na ślady…
+            </div>
+          </section>
+
+          <section class="sidebar-section sensors-section">
+            <div class="section-heading">
+              <h2>Sensory</h2>
+              <span id="sensor-count" class="counter">0</span>
+            </div>
+            <div id="sensor-list" class="entity-list empty-state">
+              Oczekiwanie na sensory…
+            </div>
+          </section>
+        </aside>
+
+        <main class="map-shell">
+          <div id="map" aria-label="Mapa wykrytych dronów i sensorów"></div>
+
+          <div class="legend" aria-label="Legenda mapy">
+            <div><span class="legend-symbol sensor"></span>Sensor</div>
+            <div><span class="legend-symbol active"></span>Dron aktywny</div>
+            <div><span class="legend-symbol stale"></span>Ślad nieaktualny</div>
+            <div><span class="legend-symbol pilot"></span>Operator</div>
+          </div>
+
+          <section id="selection-panel" class="selection-panel hidden">
+            <button id="close-selection" type="button" aria-label="Zamknij">×</button>
+            <p class="eyebrow">Wybrany ślad</p>
+            <h2 id="selection-title">—</h2>
+            <div id="selection-details" class="selection-details"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
