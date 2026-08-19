@@ -12,6 +12,8 @@ ZONE_COLUMNS = """
     zone.description,
     zone.severity,
     zone.active,
+    zone.created_by,
+    zone.updated_by,
     ST_AsGeoJSON(zone.area::geometry)::jsonb AS geometry,
     zone.created_at,
     zone.updated_at
@@ -34,6 +36,8 @@ def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
                 description,
                 severity,
                 active,
+                created_by,
+                updated_by,
                 area
             )
             SELECT
@@ -41,6 +45,8 @@ def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
                 %(description)s,
                 %(severity)s,
                 %(active)s,
+                %(actor)s,
+                %(actor)s,
                 candidate.area::geography
             FROM candidate
             WHERE ST_IsValid(candidate.area)
@@ -52,6 +58,7 @@ def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
                 "description": payload.description,
                 "severity": payload.severity,
                 "active": payload.active,
+                "actor": payload.actor,
                 "geometry": geometry,
             },
         )
@@ -93,16 +100,20 @@ def list_zones() -> list[dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def set_zone_active(zone_id: UUID, active: bool) -> dict[str, Any] | None:
+def set_zone_active(
+    zone_id: UUID,
+    active: bool,
+    actor: str,
+) -> dict[str, Any] | None:
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
             """
             UPDATE protected_zones
-            SET active = %s, updated_at = NOW()
+            SET active = %s, updated_by = %s, updated_at = NOW()
             WHERE id = %s
             RETURNING id
             """,
-            (active, zone_id),
+            (active, actor, zone_id),
         )
         updated = cursor.fetchone()
         if updated is None:

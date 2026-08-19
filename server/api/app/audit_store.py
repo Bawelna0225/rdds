@@ -1,0 +1,89 @@
+from typing import Any, Literal
+from uuid import UUID
+
+from app.database import connection
+
+
+AuditCategory = Literal["all", "alerts", "zones"]
+
+
+def list_audit_events(
+    category: AuditCategory = "all",
+    event_type: str | None = None,
+    alert_id: UUID | None = None,
+    zone_id: UUID | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    conditions: list[str] = []
+    parameters: dict[str, Any] = {
+        "limit": limit,
+        "offset": offset,
+    }
+
+    if category == "alerts":
+        conditions.append("event.event_type LIKE 'alert_%'")
+    elif category == "zones":
+        conditions.append("event.event_type LIKE 'zone_%'")
+
+    if event_type is not None:
+        conditions.append("event.event_type = %(event_type)s")
+        parameters["event_type"] = event_type
+    if alert_id is not None:
+        conditions.append("event.alert_id = %(alert_id)s")
+        parameters["alert_id"] = alert_id
+    if zone_id is not None:
+        conditions.append("event.zone_id = %(zone_id)s")
+        parameters["zone_id"] = zone_id
+
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM audit_events AS event
+            {where_clause}
+            """,
+            parameters,
+        )
+        count_row = cursor.fetchone()
+        total = 0 if count_row is None else int(count_row["total"])
+
+        cursor.execute(
+            f"""
+            SELECT
+                event.id,
+                event.occurred_at,
+                event.event_type,
+                event.actor,
+                event.details,
+                event.alert_id,
+                event.zone_id,
+                event.track_id,
+                alert.state AS alert_state,
+                alert.severity AS alert_severity,
+                alert.first_detected_at,
+                alert.last_detected_at,
+                alert.detection_count,
+                zone.name AS zone_name,
+                track.track_key,
+                track.last_basic_id AS basic_id,
+                track.identity_key,
+                track.last_operator_id AS operator_id
+            FROM audit_events AS event
+            LEFT JOIN intrusion_alerts AS alert ON alert.id = event.alert_id
+            LEFT JOIN protected_zones AS zone ON zone.id = event.zone_id
+            LEFT JOIN tracks AS track ON track.id = event.track_id
+            {where_clause}
+            ORDER BY event.occurred_at DESC, event.id DESC
+            LIMIT %(limit)s
+            OFFSET %(offset)s
+            """,
+            parameters,
+        )
+        events = [dict(row) for row in cursor.fetchall()]
+
+    return events, total

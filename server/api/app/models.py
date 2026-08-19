@@ -134,11 +134,13 @@ class ProtectedZoneCreate(StrictModel):
     description: str | None = Field(default=None, max_length=1000)
     severity: Literal["low", "medium", "high", "critical"] = "high"
     active: bool = True
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
     geometry: PolygonGeometry
 
 
 class ProtectedZoneState(StrictModel):
     active: bool
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
 class AlertAction(StrictModel):

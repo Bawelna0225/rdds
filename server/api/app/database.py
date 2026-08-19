@@ -303,6 +303,7 @@ def system_summary() -> dict[str, int]:
                 (SELECT COUNT(*) FROM observations) AS observations,
                 (SELECT COUNT(*) FROM tracks) AS tracks,
                 (SELECT COUNT(*) FROM protected_zones) AS zones,
+                (SELECT COUNT(*) FROM audit_events) AS audit_events,
                 (
                     SELECT COUNT(*)
                     FROM intrusion_alerts

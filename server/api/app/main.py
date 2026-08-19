@@ -1,11 +1,15 @@
 import asyncio
+import csv
+import io
+import json
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 
 from app.alert_store import (
     acknowledge_alert,
@@ -15,6 +19,7 @@ from app.alert_store import (
     list_zones,
     set_zone_active,
 )
+from app.audit_store import AuditCategory, list_audit_events
 from app.config import settings
 from app.database import (
     insert_heartbeat,
@@ -68,7 +73,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
 )
 
@@ -290,7 +295,11 @@ def patch_zone_state(
     payload: ProtectedZoneState,
 ) -> dict[str, object]:
     try:
-        zone = set_zone_active(zone_id=zone_id, active=payload.active)
+        zone = set_zone_active(
+            zone_id=zone_id,
+            active=payload.active,
+            actor=payload.actor,
+        )
     except (psycopg.Error, RuntimeError) as exc:
         logger.exception("Protected zone state update failed")
         raise HTTPException(status_code=503, detail="database unavailable") from exc
@@ -364,3 +373,119 @@ def post_alert_close(
         "time": utc_now(),
         "alert": alert,
     }
+
+
+AuditEventType = Literal[
+    "alert_opened",
+    "alert_acknowledged",
+    "alert_closed",
+    "zone_created",
+    "zone_enabled",
+    "zone_disabled",
+]
+
+
+@app.get("/api/v1/audit/events", tags=["audit"])
+def get_audit_events(
+    category: AuditCategory = Query(default="all"),
+    event_type: AuditEventType | None = Query(default=None),
+    alert_id: UUID | None = Query(default=None),
+    zone_id: UUID | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        events, total = list_audit_events(
+            category=category,
+            event_type=event_type,
+            alert_id=alert_id,
+            zone_id=zone_id,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Audit event query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "events": events,
+    }
+
+
+@app.get("/api/v1/audit/export", tags=["audit"])
+def export_audit_events(
+    format: Literal["csv", "json"] = Query(default="csv"),
+    category: AuditCategory = Query(default="all"),
+    event_type: AuditEventType | None = Query(default=None),
+    alert_id: UUID | None = Query(default=None),
+    zone_id: UUID | None = Query(default=None),
+    limit: int = Query(default=5000, ge=1, le=5000),
+) -> Response:
+    try:
+        events, total = list_audit_events(
+            category=category,
+            event_type=event_type,
+            alert_id=alert_id,
+            zone_id=zone_id,
+            limit=limit,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Audit export query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    headers = {
+        "Content-Disposition": f'attachment; filename="rdds-audit-{timestamp}.{format}"',
+    }
+
+    if format == "json":
+        payload = {
+            "exported_at": utc_now(),
+            "total": total,
+            "exported": len(events),
+            "events": events,
+        }
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, default=str, indent=2),
+            media_type="application/json",
+            headers=headers,
+        )
+
+    output = io.StringIO()
+    fieldnames = [
+        "id",
+        "occurred_at",
+        "event_type",
+        "actor",
+        "alert_id",
+        "alert_state",
+        "alert_severity",
+        "zone_id",
+        "zone_name",
+        "track_id",
+        "basic_id",
+        "identity_key",
+        "operator_id",
+        "details",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for event in events:
+        row = dict(event)
+        row["details"] = json.dumps(
+            event.get("details") or {},
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+        writer.writerow(row)
+
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv",
+        headers=headers,
+    )
