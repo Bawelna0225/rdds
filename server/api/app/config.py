@@ -20,10 +20,14 @@ class Settings:
     db_password: str
     ingest_token: str
     sensor_offline_after_seconds: int
+    track_poll_seconds: float
+    track_stale_after_seconds: int
+    track_ended_after_seconds: int
+    track_batch_size: int
 
 
 def load_settings() -> Settings:
-    return Settings(
+    settings = Settings(
         environment=os.getenv("RDDS_ENVIRONMENT", "development"),
         log_level=os.getenv("RDDS_LOG_LEVEL", "INFO").upper(),
         db_host=_required("RDDS_DB_HOST"),
@@ -35,7 +39,29 @@ def load_settings() -> Settings:
         sensor_offline_after_seconds=int(
             os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
         ),
+        track_poll_seconds=float(os.getenv("RDDS_TRACK_POLL_SECONDS", "1")),
+        track_stale_after_seconds=int(
+            os.getenv("RDDS_TRACK_STALE_AFTER_SECONDS", "15")
+        ),
+        track_ended_after_seconds=int(
+            os.getenv("RDDS_TRACK_ENDED_AFTER_SECONDS", "60")
+        ),
+        track_batch_size=int(os.getenv("RDDS_TRACK_BATCH_SIZE", "500")),
     )
+
+    if settings.track_poll_seconds <= 0:
+        raise RuntimeError("RDDS_TRACK_POLL_SECONDS must be greater than zero")
+    if settings.track_stale_after_seconds <= 0:
+        raise RuntimeError("RDDS_TRACK_STALE_AFTER_SECONDS must be greater than zero")
+    if settings.track_ended_after_seconds <= settings.track_stale_after_seconds:
+        raise RuntimeError(
+            "RDDS_TRACK_ENDED_AFTER_SECONDS must be greater than "
+            "RDDS_TRACK_STALE_AFTER_SECONDS"
+        )
+    if not 1 <= settings.track_batch_size <= 5000:
+        raise RuntimeError("RDDS_TRACK_BATCH_SIZE must be between 1 and 5000")
+
+    return settings
 
 
 settings = load_settings()

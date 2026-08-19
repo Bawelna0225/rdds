@@ -91,6 +91,43 @@ services:
     networks:
       - backend
 
+  tracker:
+    build:
+      context: ./server/api
+    command:
+      - python
+      - -m
+      - app.tracker
+    restart: unless-stopped
+    environment:
+      RDDS_ENVIRONMENT: ${RDDS_ENVIRONMENT:-development}
+      RDDS_LOG_LEVEL: ${RDDS_LOG_LEVEL:-INFO}
+      RDDS_DB_HOST: database
+      RDDS_DB_PORT: 5432
+      RDDS_DB_NAME: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      RDDS_DB_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      RDDS_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      RDDS_INGEST_TOKEN: ${RDDS_INGEST_TOKEN:?Set RDDS_INGEST_TOKEN in .env}
+      RDDS_SENSOR_OFFLINE_AFTER_SECONDS: ${RDDS_SENSOR_OFFLINE_AFTER_SECONDS:-30}
+      RDDS_TRACK_POLL_SECONDS: ${RDDS_TRACK_POLL_SECONDS:-1}
+      RDDS_TRACK_STALE_AFTER_SECONDS: ${RDDS_TRACK_STALE_AFTER_SECONDS:-15}
+      RDDS_TRACK_ENDED_AFTER_SECONDS: ${RDDS_TRACK_ENDED_AFTER_SECONDS:-60}
+      RDDS_TRACK_BATCH_SIZE: ${RDDS_TRACK_BATCH_SIZE:-500}
+    depends_on:
+      database:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
   simulator:
     profiles:
       - simulation

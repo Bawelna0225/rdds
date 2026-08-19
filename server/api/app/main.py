@@ -2,9 +2,10 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
+from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 
 from app.config import settings
 from app.database import (
@@ -17,6 +18,7 @@ from app.database import (
 )
 from app.models import HeartbeatEnvelope, IngestResult, ObservationEnvelope
 from app.security import require_ingest_token
+from app.track_store import get_track_history, list_tracks
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -51,7 +53,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -179,4 +181,38 @@ def get_sensors() -> dict[str, object]:
     return {
         "time": utc_now(),
         "sensors": sensors,
+    }
+
+
+@app.get("/api/v1/tracks", tags=["tracks"])
+def get_tracks(
+    include_ended: bool = Query(default=False),
+) -> dict[str, object]:
+    try:
+        tracks = list_tracks(include_ended=include_ended)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Track list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "tracks": tracks,
+    }
+
+
+@app.get("/api/v1/tracks/{track_id}/history", tags=["tracks"])
+def get_track_observation_history(
+    track_id: UUID,
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> dict[str, object]:
+    try:
+        observations = get_track_history(track_id=track_id, limit=limit)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Track history query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "track_id": track_id,
+        "observations": observations,
     }
