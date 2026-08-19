@@ -93,7 +93,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.11.0",
+    version="0.11.1",
     lifespan=lifespan,
 )
 
