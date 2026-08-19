@@ -113,6 +113,12 @@ class SensorState(StrictModel):
     actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
+class SensorUpdate(StrictModel):
+    display_name: str = Field(min_length=1, max_length=160)
+    position: Position | None = None
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+
+
 class SensorTokenRotation(StrictModel):
     actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
@@ -160,6 +166,19 @@ class ProtectedZoneCreate(StrictModel):
 
 class ProtectedZoneState(StrictModel):
     active: bool
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+
+
+class ProtectedZoneUpdate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    severity: Literal["low", "medium", "high", "critical"]
+    active: bool
+    geometry: PolygonGeometry
+    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+
+
+class EntityDelete(StrictModel):
     actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 

@@ -17,11 +17,73 @@
             <p>Remote Drone Detection System</p>
           </div>
         </div>
-        <div class="topbar-status">
-          <span id="connection-dot" class="connection-dot pending"></span>
-          <span id="connection-label">Łączenie z API</span>
-          <span id="last-update" class="last-update">—</span>
-          <span id="operator-status" class="operator-status">Obserwator</span>
+        <div class="topbar-tools">
+          <div class="topbar-status">
+            <span id="connection-dot" class="connection-dot pending"></span>
+            <span id="connection-label">Łączenie z API</span>
+            <span id="last-update" class="last-update">—</span>
+          </div>
+
+          <div id="operator-menu" class="operator-menu">
+            <button
+              id="operator-menu-toggle"
+              type="button"
+              class="operator-menu-toggle"
+              aria-expanded="false"
+              aria-controls="operator-panel"
+            >
+              <span id="operator-status" class="operator-status">Obserwator</span>
+              <span class="operator-menu-chevron" aria-hidden="true"></span>
+            </button>
+
+            <section id="operator-panel" class="operator-panel hidden">
+              <div class="operator-heading">
+                <div>
+                  <span>Tryb pracy</span>
+                  <strong id="operator-mode-label">Tylko podgląd</strong>
+                </div>
+                <span id="operator-lock-indicator" class="lock-indicator">
+                  Zablokowany
+                </span>
+              </div>
+
+              <form id="operator-login-form" class="operator-login-form">
+                <label>
+                  Nazwa operatora
+                  <input
+                    id="operator-name"
+                    type="text"
+                    maxlength="160"
+                    autocomplete="username"
+                    required
+                  />
+                </label>
+                <label>
+                  Token administratora
+                  <input
+                    id="operator-token"
+                    type="password"
+                    minlength="32"
+                    autocomplete="off"
+                    spellcheck="false"
+                    required
+                  />
+                </label>
+                <button id="operator-unlock" type="submit">Odblokuj narzędzia</button>
+                <p id="operator-message" class="operator-message">
+                  Token pozostaje tylko w pamięci tej karty.
+                </p>
+              </form>
+
+              <div id="operator-actions" class="operator-actions hidden">
+                <button id="draw-zone" type="button">Narysuj nową strefę</button>
+                <button id="register-sensor" type="button">Dodaj sensor</button>
+                <button id="operator-lock" type="button" class="secondary-button">
+                  Zablokuj
+                </button>
+              </div>
+            </section>
+          </div>
         </div>
       </header>
 
@@ -42,52 +104,6 @@
             </div>
           </div>
 
-          <section id="operator-panel" class="operator-panel">
-            <div class="operator-heading">
-              <div>
-                <span>Tryb pracy</span>
-                <strong id="operator-mode-label">Tylko podgląd</strong>
-              </div>
-              <span id="operator-lock-indicator" class="lock-indicator">Zablokowany</span>
-            </div>
-
-            <form id="operator-login-form" class="operator-login-form">
-              <label>
-                Nazwa operatora
-                <input
-                  id="operator-name"
-                  type="text"
-                  maxlength="160"
-                  autocomplete="username"
-                  required
-                />
-              </label>
-              <label>
-                Token administratora
-                <input
-                  id="operator-token"
-                  type="password"
-                  minlength="32"
-                  autocomplete="off"
-                  spellcheck="false"
-                  required
-                />
-              </label>
-              <button id="operator-unlock" type="submit">Odblokuj narzędzia</button>
-              <p id="operator-message" class="operator-message">
-                Token pozostaje tylko w pamięci tej karty.
-              </p>
-            </form>
-
-            <div id="operator-actions" class="operator-actions hidden">
-              <button id="draw-zone" type="button">Narysuj nową strefę</button>
-              <button id="register-sensor" type="button">Dodaj sensor</button>
-              <button id="operator-lock" type="button" class="secondary-button">
-                Zablokuj
-              </button>
-            </div>
-          </section>
-
           <div class="toolbar">
             <label class="toggle-row">
               <input id="show-ended" type="checkbox" />
@@ -100,70 +116,95 @@
             <button id="fit-map" type="button">Pokaż wszystkie</button>
           </div>
 
-          <section class="sidebar-section alerts-section">
-            <div class="section-heading">
+          <section class="sidebar-section alerts-section" data-section-key="alerts">
+            <button class="section-heading section-toggle" type="button" aria-expanded="true">
               <h2>Alarmy strefowe</h2>
-              <span id="alert-count" class="counter">0</span>
-            </div>
-            <div id="alert-list" class="entity-list empty-state">
-              Brak otwartych alarmów
-            </div>
-          </section>
-
-          <section class="sidebar-section audit-section">
-            <div class="section-heading">
-              <h2>Dziennik zdarzeń</h2>
-              <span id="audit-count" class="counter">0</span>
-            </div>
-            <div class="audit-toolbar">
-              <label>
-                <span>Zakres</span>
-                <select id="audit-category">
-                  <option value="all">Wszystkie</option>
-                  <option value="alerts">Alarmy</option>
-                  <option value="zones">Strefy</option>
-                  <option value="sensors">Sensory</option>
-                </select>
-              </label>
-              <div class="audit-export-actions">
-                <button id="audit-export-csv" type="button">Eksport CSV</button>
-                <button id="audit-export-json" type="button" class="secondary-button">
-                  JSON
-                </button>
+              <span class="section-heading-meta">
+                <span id="alert-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="alert-list" class="entity-list empty-state">
+                Brak otwartych alarmów
               </div>
             </div>
-            <div id="audit-list" class="entity-list empty-state">
-              Brak zarejestrowanych zdarzeń
+          </section>
+
+          <section class="sidebar-section audit-section" data-section-key="audit">
+            <button class="section-heading section-toggle" type="button" aria-expanded="true">
+              <h2>Dziennik zdarzeń</h2>
+              <span class="section-heading-meta">
+                <span id="audit-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div class="audit-toolbar">
+                <label>
+                  <span>Zakres</span>
+                  <select id="audit-category">
+                    <option value="all">Wszystkie</option>
+                    <option value="alerts">Alarmy</option>
+                    <option value="zones">Strefy</option>
+                    <option value="sensors">Sensory</option>
+                  </select>
+                </label>
+                <div class="audit-export-actions">
+                  <button id="audit-export-csv" type="button">Eksport CSV</button>
+                  <button id="audit-export-json" type="button" class="secondary-button">
+                    JSON
+                  </button>
+                </div>
+              </div>
+              <div id="audit-list" class="entity-list empty-state">
+                Brak zarejestrowanych zdarzeń
+              </div>
             </div>
           </section>
 
-          <section class="sidebar-section">
-            <div class="section-heading">
+          <section class="sidebar-section" data-section-key="tracks">
+            <button class="section-heading section-toggle" type="button" aria-expanded="true">
               <h2>Ślady dronów</h2>
-              <span id="track-count" class="counter">0</span>
-            </div>
-            <div id="track-list" class="entity-list empty-state">
-              Oczekiwanie na ślady…
+              <span class="section-heading-meta">
+                <span id="track-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="track-list" class="entity-list empty-state">
+                Oczekiwanie na ślady…
+              </div>
             </div>
           </section>
 
-          <section class="sidebar-section sensors-section">
-            <div class="section-heading">
+          <section class="sidebar-section sensors-section" data-section-key="sensors">
+            <button class="section-heading section-toggle" type="button" aria-expanded="true">
               <h2>Sensory</h2>
-              <span id="sensor-count" class="counter">0</span>
-            </div>
-            <div id="sensor-list" class="entity-list empty-state">
-              Oczekiwanie na sensory…
+              <span class="section-heading-meta">
+                <span id="sensor-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="sensor-list" class="entity-list empty-state">
+                Oczekiwanie na sensory…
+              </div>
             </div>
           </section>
 
-          <section class="sidebar-section zones-section">
-            <div class="section-heading">
+          <section class="sidebar-section zones-section" data-section-key="zones">
+            <button class="section-heading section-toggle" type="button" aria-expanded="true">
               <h2>Strefy chronione</h2>
-              <span id="zone-count" class="counter">0</span>
-            </div>
-            <div id="zone-list" class="entity-list empty-state">
-              Brak zdefiniowanych stref
+              <span class="section-heading-meta">
+                <span id="zone-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="zone-list" class="entity-list empty-state">
+                Brak zdefiniowanych stref
+              </div>
             </div>
           </section>
         </aside>
@@ -193,15 +234,18 @@
 
           <section id="zone-editor" class="zone-editor hidden">
             <div id="zone-draw-step">
-              <p class="eyebrow">Nowa strefa</p>
-              <h2>Wskaż granice na mapie</h2>
-              <p class="panel-help">
+              <p id="zone-draw-eyebrow" class="eyebrow">Nowa strefa</p>
+              <h2 id="zone-draw-title">Wskaż granice na mapie</h2>
+              <p id="zone-draw-help" class="panel-help">
                 Klikaj kolejne narożniki wielokąta. Minimum to trzy punkty.
               </p>
               <p class="point-counter">Punkty: <strong id="zone-point-count">0</strong></p>
               <div class="panel-actions">
                 <button id="zone-undo-point" type="button" class="secondary-button">
                   Cofnij punkt
+                </button>
+                <button id="zone-clear-points" type="button" class="secondary-button">
+                  Wyczyść granice
                 </button>
                 <button id="zone-finish-drawing" type="button" disabled>
                   Zakończ rysowanie
@@ -213,8 +257,8 @@
             </div>
 
             <form id="zone-form" class="zone-form hidden">
-              <p class="eyebrow">Nowa strefa</p>
-              <h2>Parametry strefy</h2>
+              <p id="zone-form-eyebrow" class="eyebrow">Nowa strefa</p>
+              <h2 id="zone-form-title">Parametry strefy</h2>
               <label>
                 Nazwa
                 <input id="zone-name" type="text" maxlength="160" required />
@@ -234,7 +278,7 @@
               </label>
               <label class="toggle-row">
                 <input id="zone-active" type="checkbox" checked />
-                <span>Aktywuj od razu</span>
+                <span>Strefa aktywna</span>
               </label>
               <div class="panel-actions">
                 <button id="zone-save" type="submit">Zapisz strefę</button>
@@ -250,9 +294,9 @@
 
           <section id="sensor-editor" class="sensor-editor hidden">
             <form id="sensor-form" class="sensor-form">
-              <p class="eyebrow">Nowy sensor</p>
-              <h2>Rejestracja odbiornika</h2>
-              <p class="panel-help">
+              <p id="sensor-form-eyebrow" class="eyebrow">Nowy sensor</p>
+              <h2 id="sensor-form-title">Rejestracja odbiornika</h2>
+              <p id="sensor-form-help" class="panel-help">
                 Identyfikator musi być identyczny z wartością skonfigurowaną w urządzeniu.
               </p>
               <label>

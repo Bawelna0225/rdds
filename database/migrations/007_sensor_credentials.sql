@@ -49,9 +49,13 @@ ALTER TABLE audit_events
             'zone_created',
             'zone_enabled',
             'zone_disabled',
+            'zone_updated',
+            'zone_deleted',
             'sensor_registered',
             'sensor_enabled',
             'sensor_disabled',
+            'sensor_updated',
+            'sensor_deleted',
             'sensor_token_issued',
             'sensor_token_rotated'
         )

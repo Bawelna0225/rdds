@@ -3,7 +3,7 @@ from typing import Any
 from uuid import UUID
 
 from app.database import connection
-from app.models import ProtectedZoneCreate
+from app.models import ProtectedZoneCreate, ProtectedZoneUpdate
 
 
 ZONE_COLUMNS = """
@@ -18,6 +18,19 @@ ZONE_COLUMNS = """
     zone.created_at,
     zone.updated_at
 """
+
+
+def _read_zone(cursor: Any, zone_id: UUID) -> dict[str, Any] | None:
+    cursor.execute(
+        f"""
+        SELECT {ZONE_COLUMNS}
+        FROM protected_zones AS zone
+        WHERE zone.id = %s
+        """,
+        (zone_id,),
+    )
+    row = cursor.fetchone()
+    return None if row is None else dict(row)
 
 
 def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
@@ -66,18 +79,10 @@ def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
         if created is None:
             raise ValueError("protected zone polygon is not valid")
 
-        cursor.execute(
-            f"""
-            SELECT {ZONE_COLUMNS}
-            FROM protected_zones AS zone
-            WHERE zone.id = %s
-            """,
-            (created["id"],),
-        )
-        zone = cursor.fetchone()
+        zone = _read_zone(cursor, created["id"])
         if zone is None:
             raise RuntimeError("Created protected zone could not be read")
-        return dict(zone)
+        return zone
 
 
 def list_zones() -> list[dict[str, Any]]:
@@ -86,6 +91,7 @@ def list_zones() -> list[dict[str, Any]]:
             f"""
             SELECT {ZONE_COLUMNS}
             FROM protected_zones AS zone
+            WHERE zone.deleted_at IS NULL
             ORDER BY
                 zone.active DESC,
                 CASE zone.severity
@@ -110,7 +116,7 @@ def set_zone_active(
             """
             UPDATE protected_zones
             SET active = %s, updated_by = %s, updated_at = NOW()
-            WHERE id = %s
+            WHERE id = %s AND deleted_at IS NULL
             RETURNING id
             """,
             (active, actor, zone_id),
@@ -119,16 +125,115 @@ def set_zone_active(
         if updated is None:
             return None
 
+        return _read_zone(cursor, updated["id"])
+
+
+def update_zone(
+    zone_id: UUID,
+    payload: ProtectedZoneUpdate,
+) -> dict[str, Any] | None:
+    geometry = json.dumps(payload.geometry.model_dump(mode="json"))
+    with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
-            f"""
-            SELECT {ZONE_COLUMNS}
-            FROM protected_zones AS zone
-            WHERE zone.id = %s
+            """
+            WITH candidate AS (
+                SELECT ST_SetSRID(
+                    ST_GeomFromGeoJSON(%s),
+                    4326
+                ) AS area
+            )
+            SELECT ST_IsValid(area) AND NOT ST_IsEmpty(area) AS valid
+            FROM candidate
             """,
-            (updated["id"],),
+            (geometry,),
         )
-        zone = cursor.fetchone()
-        return None if zone is None else dict(zone)
+        validity = cursor.fetchone()
+        if validity is None or not validity["valid"]:
+            raise ValueError("protected zone polygon is not valid")
+
+        cursor.execute(
+            """
+            WITH candidate AS (
+                SELECT ST_SetSRID(
+                    ST_GeomFromGeoJSON(%(geometry)s),
+                    4326
+                ) AS area
+            )
+            UPDATE protected_zones AS zone
+            SET
+                name = %(name)s,
+                description = %(description)s,
+                severity = %(severity)s,
+                active = %(active)s,
+                area = candidate.area::geography,
+                updated_by = %(actor)s,
+                updated_at = NOW()
+            FROM candidate
+            WHERE zone.id = %(zone_id)s
+              AND zone.deleted_at IS NULL
+            RETURNING zone.id
+            """,
+            {
+                "zone_id": zone_id,
+                "name": payload.name,
+                "description": payload.description,
+                "severity": payload.severity,
+                "active": payload.active,
+                "actor": payload.actor,
+                "geometry": geometry,
+            },
+        )
+        updated = cursor.fetchone()
+        if updated is None:
+            return None
+        return _read_zone(cursor, updated["id"])
+
+
+def delete_zone(zone_id: UUID, actor: str) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM protected_zones
+            WHERE id = %s AND deleted_at IS NULL
+            FOR UPDATE
+            """,
+            (zone_id,),
+        )
+        if cursor.fetchone() is None:
+            return None
+
+        cursor.execute(
+            """
+            UPDATE intrusion_alerts
+            SET
+                state = 'closed',
+                closed_at = NOW(),
+                closed_by = %s,
+                updated_at = NOW()
+            WHERE zone_id = %s
+              AND state IN ('active', 'acknowledged')
+            """,
+            (actor, zone_id),
+        )
+        cursor.execute(
+            """
+            UPDATE protected_zones
+            SET
+                active = FALSE,
+                deleted_at = NOW(),
+                deleted_by = %s,
+                updated_by = %s,
+                updated_at = NOW()
+            WHERE id = %s AND deleted_at IS NULL
+            RETURNING id
+            """,
+            (actor, actor, zone_id),
+        )
+        deleted = cursor.fetchone()
+        if deleted is None:
+            return None
+        return _read_zone(cursor, deleted["id"])
 
 
 def list_alerts(
@@ -229,6 +334,7 @@ def evaluate_intrusions() -> tuple[int, int]:
                 FROM protected_zones AS zone
                 CROSS JOIN tracks AS track
                 WHERE zone.active
+                  AND zone.deleted_at IS NULL
                   AND track.state IN ('new', 'active', 'anomalous')
                   AND track.last_position IS NOT NULL
                   AND ST_Intersects(zone.area, track.last_position)
@@ -293,6 +399,7 @@ def evaluate_intrusions() -> tuple[int, int]:
                   JOIN tracks AS track ON track.id = alert.track_id
                   WHERE zone.id = alert.zone_id
                     AND zone.active
+                    AND zone.deleted_at IS NULL
                     AND track.state <> 'ended'
                     AND track.last_position IS NOT NULL
                     AND ST_Intersects(zone.area, track.last_position)

@@ -4,7 +4,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from app.database import connection
-from app.models import SensorRegistration
+from app.models import SensorRegistration, SensorUpdate
 
 
 LegacySensorAccess = Literal["allowed", "disabled", "individual_required"]
@@ -93,6 +93,7 @@ def list_sensors() -> list[dict[str, Any]]:
             SELECT {SENSOR_COLUMNS}
             FROM sensors AS sensor
             {SENSOR_JOINS}
+            WHERE sensor.deleted_at IS NULL
             ORDER BY sensor.sensor_key
             """
         )
@@ -190,6 +191,7 @@ def set_sensor_enabled(
                 updated_by = %(actor)s,
                 updated_at = NOW()
             WHERE id = %(sensor_id)s
+              AND deleted_at IS NULL
             RETURNING id
             """,
             {
@@ -212,7 +214,12 @@ def rotate_sensor_token(
 
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
-            "SELECT id FROM sensors WHERE id = %s FOR UPDATE",
+            """
+            SELECT id
+            FROM sensors
+            WHERE id = %s AND deleted_at IS NULL
+            FOR UPDATE
+            """,
             (sensor_id,),
         )
         sensor_row = cursor.fetchone()
@@ -246,6 +253,93 @@ def rotate_sensor_token(
     return sensor, token
 
 
+def update_sensor(
+    sensor_id: UUID,
+    payload: SensorUpdate,
+) -> dict[str, Any] | None:
+    longitude = None if payload.position is None else payload.position.longitude
+    latitude = None if payload.position is None else payload.position.latitude
+
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE sensors
+            SET
+                display_name = %(display_name)s,
+                fixed_position = CASE
+                    WHEN CAST(%(longitude)s AS DOUBLE PRECISION) IS NULL
+                      OR CAST(%(latitude)s AS DOUBLE PRECISION) IS NULL
+                    THEN NULL
+                    ELSE ST_SetSRID(
+                        ST_MakePoint(
+                            CAST(%(longitude)s AS DOUBLE PRECISION),
+                            CAST(%(latitude)s AS DOUBLE PRECISION)
+                        ),
+                        4326
+                    )::geography
+                END,
+                updated_by = %(actor)s,
+                updated_at = NOW()
+            WHERE id = %(sensor_id)s
+              AND deleted_at IS NULL
+            RETURNING id
+            """,
+            {
+                "sensor_id": sensor_id,
+                "display_name": payload.display_name,
+                "longitude": longitude,
+                "latitude": latitude,
+                "actor": payload.actor,
+            },
+        )
+        updated = cursor.fetchone()
+        if updated is None:
+            return None
+        return _read_sensor(cursor, updated["id"])
+
+
+def delete_sensor(sensor_id: UUID, actor: str) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM sensors
+            WHERE id = %s AND deleted_at IS NULL
+            FOR UPDATE
+            """,
+            (sensor_id,),
+        )
+        if cursor.fetchone() is None:
+            return None
+
+        cursor.execute(
+            """
+            UPDATE sensor_credentials
+            SET revoked_at = NOW(), revoked_by = %s
+            WHERE sensor_id = %s AND revoked_at IS NULL
+            """,
+            (actor, sensor_id),
+        )
+        cursor.execute(
+            """
+            UPDATE sensors
+            SET
+                status = 'disabled',
+                deleted_at = NOW(),
+                deleted_by = %s,
+                updated_by = %s,
+                updated_at = NOW()
+            WHERE id = %s AND deleted_at IS NULL
+            RETURNING id
+            """,
+            (actor, actor, sensor_id),
+        )
+        deleted = cursor.fetchone()
+        if deleted is None:
+            return None
+        return _read_sensor(cursor, deleted["id"])
+
+
 def authenticate_sensor_token(token: str) -> dict[str, Any] | None:
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with connection() as conn, conn.cursor() as cursor:
@@ -260,6 +354,7 @@ def authenticate_sensor_token(token: str) -> dict[str, Any] | None:
             JOIN sensors AS sensor ON sensor.id = credential.sensor_id
             WHERE credential.token_hash = %s
               AND credential.revoked_at IS NULL
+              AND sensor.deleted_at IS NULL
             """,
             (token_hash,),
         )

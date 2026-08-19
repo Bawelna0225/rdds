@@ -298,16 +298,26 @@ def system_summary() -> dict[str, int]:
         cursor.execute(
             """
             SELECT
-                (SELECT COUNT(*) FROM sensors) AS sensors,
+                (
+                    SELECT COUNT(*)
+                    FROM sensors
+                    WHERE deleted_at IS NULL
+                ) AS sensors,
                 (SELECT COUNT(*) FROM sensor_heartbeats) AS heartbeats,
                 (SELECT COUNT(*) FROM observations) AS observations,
                 (SELECT COUNT(*) FROM tracks) AS tracks,
-                (SELECT COUNT(*) FROM protected_zones) AS zones,
+                (
+                    SELECT COUNT(*)
+                    FROM protected_zones
+                    WHERE deleted_at IS NULL
+                ) AS zones,
                 (SELECT COUNT(*) FROM audit_events) AS audit_events,
                 (
                     SELECT COUNT(*)
-                    FROM sensor_credentials
-                    WHERE revoked_at IS NULL
+                    FROM sensor_credentials AS credential
+                    JOIN sensors AS sensor ON sensor.id = credential.sensor_id
+                    WHERE credential.revoked_at IS NULL
+                      AND sensor.deleted_at IS NULL
                 ) AS individual_sensor_credentials,
                 (
                     SELECT COUNT(*)

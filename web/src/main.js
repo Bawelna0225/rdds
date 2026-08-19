@@ -6,6 +6,7 @@ import "./styles.css";
 
 const REFRESH_INTERVAL_MS = 2000;
 const DEFAULT_CENTER = [52.2297, 21.0122];
+const SIDEBAR_STATE_KEY = "rdds.sidebar.sections.v1";
 
 const stateLabels = {
   new: "nowy",
@@ -44,9 +45,13 @@ const auditEventLabels = {
   zone_created: "Utworzono strefę",
   zone_enabled: "Włączono strefę",
   zone_disabled: "Wyłączono strefę",
+  zone_updated: "Zmieniono strefę",
+  zone_deleted: "Usunięto strefę",
   sensor_registered: "Zarejestrowano sensor",
   sensor_enabled: "Włączono sensor",
   sensor_disabled: "Wyłączono sensor",
+  sensor_updated: "Zmieniono sensor",
+  sensor_deleted: "Usunięto sensor",
   sensor_token_issued: "Wydano token sensora",
   sensor_token_rotated: "Zmieniono token sensora",
 };
@@ -67,6 +72,8 @@ const elements = {
   onlineSensors: document.querySelector("#online-sensors"),
   activeTracks: document.querySelector("#active-tracks"),
   openAlerts: document.querySelector("#open-alerts"),
+  operatorMenu: document.querySelector("#operator-menu"),
+  operatorMenuToggle: document.querySelector("#operator-menu-toggle"),
   operatorStatus: document.querySelector("#operator-status"),
   operatorPanel: document.querySelector("#operator-panel"),
   operatorModeLabel: document.querySelector("#operator-mode-label"),
@@ -106,10 +113,16 @@ const elements = {
   zoneEditor: document.querySelector("#zone-editor"),
   zoneDrawStep: document.querySelector("#zone-draw-step"),
   zonePointCount: document.querySelector("#zone-point-count"),
+  zoneDrawEyebrow: document.querySelector("#zone-draw-eyebrow"),
+  zoneDrawTitle: document.querySelector("#zone-draw-title"),
+  zoneDrawHelp: document.querySelector("#zone-draw-help"),
   zoneUndoPoint: document.querySelector("#zone-undo-point"),
+  zoneClearPoints: document.querySelector("#zone-clear-points"),
   zoneFinishDrawing: document.querySelector("#zone-finish-drawing"),
   zoneCancelDrawing: document.querySelector("#zone-cancel-drawing"),
   zoneForm: document.querySelector("#zone-form"),
+  zoneFormEyebrow: document.querySelector("#zone-form-eyebrow"),
+  zoneFormTitle: document.querySelector("#zone-form-title"),
   zoneName: document.querySelector("#zone-name"),
   zoneSeverity: document.querySelector("#zone-severity"),
   zoneDescription: document.querySelector("#zone-description"),
@@ -119,6 +132,9 @@ const elements = {
   zoneCancelForm: document.querySelector("#zone-cancel-form"),
   sensorEditor: document.querySelector("#sensor-editor"),
   sensorForm: document.querySelector("#sensor-form"),
+  sensorFormEyebrow: document.querySelector("#sensor-form-eyebrow"),
+  sensorFormTitle: document.querySelector("#sensor-form-title"),
+  sensorFormHelp: document.querySelector("#sensor-form-help"),
   sensorKey: document.querySelector("#sensor-key"),
   sensorDisplayName: document.querySelector("#sensor-display-name"),
   sensorLatitude: document.querySelector("#sensor-latitude"),
@@ -131,6 +147,7 @@ const elements = {
   sensorTokenCopy: document.querySelector("#sensor-token-copy"),
   sensorTokenClose: document.querySelector("#sensor-token-close"),
   toast: document.querySelector("#toast"),
+  sectionToggles: document.querySelectorAll(".section-toggle"),
 };
 
 const map = L.map("map", {
@@ -164,9 +181,12 @@ let initialFitComplete = false;
 let refreshInProgress = false;
 let adminToken = null;
 let activeOperator = null;
+let operatorMenuOpen = false;
 let drawingMode = false;
 let drawingPoints = [];
 let drawingLayer = null;
+let editingZoneId = null;
+let editingSensorId = null;
 let toastTimeout = null;
 
 function isCoordinate(value) {
@@ -606,8 +626,65 @@ function createAlertBadge(state) {
   return badge;
 }
 
+function setOperatorMenuOpen(open) {
+  operatorMenuOpen = open;
+  elements.operatorMenu.classList.toggle("open", open);
+  elements.operatorPanel.classList.toggle("hidden", !open);
+  elements.operatorMenuToggle.setAttribute("aria-expanded", String(open));
+}
+
+function toggleOperatorMenu() {
+  setOperatorMenuOpen(!operatorMenuOpen);
+  if (operatorMenuOpen && !adminToken) {
+    elements.operatorName.focus();
+  }
+}
+
+function readSidebarState() {
+  try {
+    return JSON.parse(localStorage.getItem(SIDEBAR_STATE_KEY) || "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSidebarState(state) {
+  try {
+    localStorage.setItem(SIDEBAR_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Zwijanie nadal działa, nawet jeśli przeglądarka blokuje localStorage.
+  }
+}
+
+function setSectionCollapsed(section, collapsed, persist = true) {
+  const toggle = section.querySelector(".section-toggle");
+  section.classList.toggle("collapsed", collapsed);
+  toggle?.setAttribute("aria-expanded", String(!collapsed));
+
+  if (persist) {
+    const state = readSidebarState();
+    state[section.dataset.sectionKey] = collapsed;
+    writeSidebarState(state);
+  }
+}
+
+function initializeCollapsibleSections() {
+  const state = readSidebarState();
+  for (const toggle of elements.sectionToggles) {
+    const section = toggle.closest(".sidebar-section");
+    if (!section) {
+      continue;
+    }
+    setSectionCollapsed(section, Boolean(state[section.dataset.sectionKey]), false);
+    toggle.addEventListener("click", () => {
+      setSectionCollapsed(section, !section.classList.contains("collapsed"));
+    });
+  }
+}
+
 function updateOperatorUi(message = null, error = false) {
   const unlocked = Boolean(adminToken && activeOperator);
+  elements.operatorMenu.classList.toggle("unlocked", unlocked);
   elements.operatorPanel.classList.toggle("unlocked", unlocked);
   elements.operatorLoginForm.classList.toggle("hidden", unlocked);
   elements.operatorActions.classList.toggle("hidden", !unlocked);
@@ -900,6 +977,34 @@ async function runSensorTokenRotation(sensor, button) {
   }
 }
 
+async function runSensorDeletion(sensor, button) {
+  const confirmed = window.confirm(
+    `Usunąć sensor „${sensor.display_name}”? Zniknie z mapy, a jego token ` +
+      "zostanie unieważniony. Dane historyczne pozostaną w dzienniku.",
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensors/${encodeURIComponent(sensor.id)}`,
+      "DELETE",
+      { actor: activeOperator },
+    );
+    if (selectedSensorId === sensor.id) {
+      clearSelection();
+    }
+    showToast(`Sensor „${sensor.display_name}” został usunięty.`);
+    await refresh();
+  } catch (error) {
+    showToast(`Nie udało się usunąć sensora: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderSensorList(sensors) {
   elements.sensorList.replaceChildren();
   elements.sensorList.classList.toggle("empty-state", sensors.length === 0);
@@ -943,6 +1048,10 @@ function renderSensorList(sensors) {
     if (adminToken) {
       const actions = document.createElement("div");
       actions.className = "managed-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "Edytuj";
+      edit.addEventListener("click", () => startSensorEditing(sensor));
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = sensor.status === "disabled" ? "" : "danger-button";
@@ -955,7 +1064,12 @@ function renderSensorList(sensors) {
       rotate.textContent =
         sensor.credential_mode === "individual" ? "Zmień token" : "Wydaj token";
       rotate.addEventListener("click", () => runSensorTokenRotation(sensor, rotate));
-      actions.append(toggle, rotate);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "Usuń";
+      remove.addEventListener("click", () => runSensorDeletion(sensor, remove));
+      actions.append(edit, toggle, rotate, remove);
       card.append(actions);
     }
 
@@ -975,6 +1089,31 @@ async function runZoneStateChange(zone, active, button) {
     await refresh();
   } catch (error) {
     showToast(`Zmiana strefy nie powiodła się: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function runZoneDeletion(zone, button) {
+  const confirmed = window.confirm(
+    `Usunąć strefę „${zone.name}”? Zniknie z mapy, a jej otwarte alarmy ` +
+      "zostaną zamknięte. Historia pozostanie w dzienniku.",
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/zones/${encodeURIComponent(zone.id)}`,
+      "DELETE",
+      { actor: activeOperator },
+    );
+    showToast(`Strefa „${zone.name}” została usunięta.`);
+    await refresh();
+  } catch (error) {
+    showToast(`Nie udało się usunąć strefy: ${error.message}`, true);
   } finally {
     button.disabled = false;
   }
@@ -1033,6 +1172,10 @@ function renderZoneList(zones, alerts) {
     if (adminToken) {
       const actions = document.createElement("div");
       actions.className = "managed-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "Edytuj";
+      edit.addEventListener("click", () => startZoneEditing(zone));
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = zone.active ? "danger-button" : "";
@@ -1040,7 +1183,12 @@ function renderZoneList(zones, alerts) {
       toggle.addEventListener("click", () => {
         runZoneStateChange(zone, !zone.active, toggle);
       });
-      actions.append(toggle);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "Usuń";
+      remove.addEventListener("click", () => runZoneDeletion(zone, remove));
+      actions.append(edit, toggle, remove);
       card.append(actions);
     }
 
@@ -1365,9 +1513,18 @@ function startZoneDrawing() {
   cancelSensorRegistration();
   closeSensorToken();
   clearSelection();
+  setOperatorMenuOpen(false);
+  editingZoneId = null;
   drawingPoints = [];
   drawingMode = true;
   elements.zoneForm.reset();
+  elements.zoneDrawEyebrow.textContent = "Nowa strefa";
+  elements.zoneDrawTitle.textContent = "Wskaż granice na mapie";
+  elements.zoneDrawHelp.textContent =
+    "Klikaj kolejne narożniki wielokąta. Minimum to trzy punkty.";
+  elements.zoneFormEyebrow.textContent = "Nowa strefa";
+  elements.zoneFormTitle.textContent = "Parametry strefy";
+  elements.zoneSave.textContent = "Zapisz strefę";
   elements.zoneSeverity.value = "high";
   elements.zoneActive.checked = true;
   elements.zoneEditor.classList.remove("hidden");
@@ -1376,6 +1533,47 @@ function startZoneDrawing() {
   map.closePopup();
   updateDrawingLayer();
   showToast("Klikaj na mapie, aby wyznaczyć granice strefy.");
+}
+
+function startZoneEditing(zone) {
+  if (!adminToken) {
+    showToast("Najpierw odblokuj tryb operatora.", true);
+    return;
+  }
+
+  const ring = zone.geometry?.coordinates?.[0];
+  if (!Array.isArray(ring) || ring.length < 4) {
+    showToast("Ta strefa nie ma poprawnej geometrii do edycji.", true);
+    return;
+  }
+
+  cancelSensorRegistration();
+  closeSensorToken();
+  clearSelection();
+  setOperatorMenuOpen(false);
+  editingZoneId = zone.id;
+  drawingMode = false;
+  drawingPoints = ring.slice(0, -1).map(([longitude, latitude]) =>
+    L.latLng(latitude, longitude),
+  );
+  elements.zoneForm.reset();
+  elements.zoneName.value = zone.name;
+  elements.zoneSeverity.value = zone.severity;
+  elements.zoneDescription.value = zone.description ?? "";
+  elements.zoneActive.checked = zone.active;
+  elements.zoneDrawEyebrow.textContent = "Edycja strefy";
+  elements.zoneDrawTitle.textContent = "Zmień granice na mapie";
+  elements.zoneDrawHelp.textContent =
+    "Możesz cofać punkty albo wyczyścić granice i narysować je ponownie.";
+  elements.zoneFormEyebrow.textContent = "Edycja strefy";
+  elements.zoneFormTitle.textContent = "Parametry strefy";
+  elements.zoneSave.textContent = "Zapisz zmiany";
+  elements.zoneEditor.classList.remove("hidden");
+  setZoneEditorStep("form");
+  map.getContainer().classList.remove("drawing-zone");
+  map.closePopup();
+  updateDrawingLayer();
+  elements.zoneName.focus();
 }
 
 function handleMapDrawingClick(event) {
@@ -1395,6 +1593,14 @@ function undoZonePoint() {
     return;
   }
   drawingPoints.pop();
+  updateDrawingLayer();
+}
+
+function clearZonePoints() {
+  if (!drawingMode) {
+    return;
+  }
+  drawingPoints = [];
   updateDrawingLayer();
 }
 
@@ -1425,6 +1631,8 @@ function cancelZoneDrawing() {
   map.getContainer().classList.remove("drawing-zone");
   elements.zoneEditor.classList.add("hidden");
   elements.zoneForm.reset();
+  editingZoneId = null;
+  elements.zoneSave.disabled = false;
   elements.zonePointCount.textContent = "0";
   elements.zoneFinishDrawing.disabled = true;
   elements.zoneUndoPoint.disabled = true;
@@ -1439,7 +1647,15 @@ function startSensorRegistration() {
   cancelZoneDrawing();
   closeSensorToken();
   clearSelection();
+  setOperatorMenuOpen(false);
+  editingSensorId = null;
   elements.sensorForm.reset();
+  elements.sensorKey.disabled = false;
+  elements.sensorFormEyebrow.textContent = "Nowy sensor";
+  elements.sensorFormTitle.textContent = "Rejestracja odbiornika";
+  elements.sensorFormHelp.textContent =
+    "Identyfikator musi być identyczny z wartością skonfigurowaną w urządzeniu.";
+  elements.sensorSave.textContent = "Zarejestruj";
   const center = map.getCenter();
   elements.sensorLatitude.value = center.lat.toFixed(7);
   elements.sensorLongitude.value = center.lng.toFixed(7);
@@ -1447,9 +1663,37 @@ function startSensorRegistration() {
   elements.sensorKey.focus();
 }
 
+function startSensorEditing(sensor) {
+  if (!adminToken) {
+    showToast("Najpierw odblokuj tryb operatora.", true);
+    return;
+  }
+
+  cancelZoneDrawing();
+  closeSensorToken();
+  clearSelection();
+  setOperatorMenuOpen(false);
+  editingSensorId = sensor.id;
+  elements.sensorForm.reset();
+  elements.sensorKey.value = sensor.sensor_id;
+  elements.sensorKey.disabled = true;
+  elements.sensorDisplayName.value = sensor.display_name ?? sensor.sensor_id;
+  elements.sensorLatitude.value = hasPosition(sensor) ? String(sensor.latitude) : "";
+  elements.sensorLongitude.value = hasPosition(sensor) ? String(sensor.longitude) : "";
+  elements.sensorFormEyebrow.textContent = "Edycja sensora";
+  elements.sensorFormTitle.textContent = "Ustawienia odbiornika";
+  elements.sensorFormHelp.textContent =
+    "Identyfikator pozostaje stały. Możesz zmienić nazwę i pozycję na mapie.";
+  elements.sensorSave.textContent = "Zapisz zmiany";
+  elements.sensorEditor.classList.remove("hidden");
+  elements.sensorDisplayName.focus();
+}
+
 function cancelSensorRegistration() {
   elements.sensorEditor.classList.add("hidden");
   elements.sensorForm.reset();
+  elements.sensorKey.disabled = false;
+  editingSensorId = null;
   elements.sensorSave.disabled = false;
 }
 
@@ -1528,8 +1772,8 @@ async function saveSensorRegistration(event) {
     return;
   }
 
+  const sensorId = editingSensorId;
   const payload = {
-    sensor_key: elements.sensorKey.value.trim(),
     display_name: elements.sensorDisplayName.value.trim(),
     position: latitudeText
       ? {
@@ -1539,14 +1783,29 @@ async function saveSensorRegistration(event) {
       : null,
     actor: activeOperator,
   };
+  if (!sensorId) {
+    payload.sensor_key = elements.sensorKey.value.trim();
+  }
 
   elements.sensorSave.disabled = true;
   try {
-    const response = await adminRequest("/api/v1/sensors", "POST", payload);
-    showSensorToken(response.sensor, response.credential);
+    const response = await adminRequest(
+      sensorId ? `/api/v1/sensors/${encodeURIComponent(sensorId)}` : "/api/v1/sensors",
+      sensorId ? "PUT" : "POST",
+      payload,
+    );
+    if (sensorId) {
+      cancelSensorRegistration();
+      showToast(`Sensor „${response.sensor.display_name}” został zaktualizowany.`);
+    } else {
+      showSensorToken(response.sensor, response.credential);
+    }
     await refresh();
   } catch (error) {
-    showToast(`Rejestracja sensora nie powiodła się: ${error.message}`, true);
+    showToast(
+      `${sensorId ? "Edycja" : "Rejestracja"} sensora nie powiodła się: ${error.message}`,
+      true,
+    );
   } finally {
     elements.sensorSave.disabled = false;
   }
@@ -1559,6 +1818,7 @@ async function saveDrawnZone(event) {
     return;
   }
 
+  const zoneId = editingZoneId;
   const coordinates = drawingPoints.map((point) => [
     Number(point.lng.toFixed(7)),
     Number(point.lat.toFixed(7)),
@@ -1578,18 +1838,27 @@ async function saveDrawnZone(event) {
 
   elements.zoneSave.disabled = true;
   try {
-    const response = await adminRequest("/api/v1/zones", "POST", payload);
-    const createdZone = response.zone;
+    const response = await adminRequest(
+      zoneId ? `/api/v1/zones/${encodeURIComponent(zoneId)}` : "/api/v1/zones",
+      zoneId ? "PUT" : "POST",
+      payload,
+    );
+    const savedZone = response.zone;
     cancelZoneDrawing();
-    showToast(`Strefa „${createdZone.name}” została utworzona.`);
+    showToast(
+      `Strefa „${savedZone.name}” została ${zoneId ? "zaktualizowana" : "utworzona"}.`,
+    );
     await refresh();
-    const layer = zoneLayers.get(createdZone.id);
+    const layer = zoneLayers.get(savedZone.id);
     if (layer) {
       map.fitBounds(layer.getBounds(), { padding: [45, 45], maxZoom: 16 });
       layer.openPopup();
     }
   } catch (error) {
-    showToast(`Nie udało się utworzyć strefy: ${error.message}`, true);
+    showToast(
+      `Nie udało się ${zoneId ? "zaktualizować" : "utworzyć"} strefy: ${error.message}`,
+      true,
+    );
   } finally {
     elements.zoneSave.disabled = false;
   }
@@ -1737,11 +2006,13 @@ elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
 elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
+elements.operatorMenuToggle.addEventListener("click", toggleOperatorMenu);
 elements.operatorLoginForm.addEventListener("submit", unlockOperator);
 elements.operatorLock.addEventListener("click", () => lockOperator());
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.zoneUndoPoint.addEventListener("click", undoZonePoint);
+elements.zoneClearPoints.addEventListener("click", clearZonePoints);
 elements.zoneFinishDrawing.addEventListener("click", finishZoneDrawing);
 elements.zoneCancelDrawing.addEventListener("click", cancelZoneDrawing);
 elements.zoneForm.addEventListener("submit", saveDrawnZone);
@@ -1752,6 +2023,11 @@ elements.sensorCancel.addEventListener("click", cancelSensorRegistration);
 elements.sensorTokenCopy.addEventListener("click", copySensorToken);
 elements.sensorTokenClose.addEventListener("click", closeSensorToken);
 map.on("click", handleMapDrawingClick);
+document.addEventListener("click", (event) => {
+  if (operatorMenuOpen && !elements.operatorMenu.contains(event.target)) {
+    setOperatorMenuOpen(false);
+  }
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.zoneEditor.classList.contains("hidden")) {
     cancelZoneDrawing();
@@ -1765,9 +2041,13 @@ document.addEventListener("keydown", (event) => {
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     closeSensorToken();
+  } else if (event.key === "Escape" && operatorMenuOpen) {
+    setOperatorMenuOpen(false);
   }
 });
 
+initializeCollapsibleSections();
 updateOperatorUi();
+setOperatorMenuOpen(false);
 refresh();
 setInterval(refresh, REFRESH_INTERVAL_MS);

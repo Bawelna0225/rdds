@@ -15,9 +15,11 @@ from app.alert_store import (
     acknowledge_alert,
     close_alert,
     create_zone,
+    delete_zone,
     list_alerts,
     list_zones,
     set_zone_active,
+    update_zone,
 )
 from app.audit_store import AuditCategory, list_audit_events
 from app.config import settings
@@ -30,14 +32,17 @@ from app.database import (
 )
 from app.models import (
     AlertAction,
+    EntityDelete,
     HeartbeatEnvelope,
     IngestResult,
     ObservationEnvelope,
     ProtectedZoneCreate,
     ProtectedZoneState,
+    ProtectedZoneUpdate,
     SensorRegistration,
     SensorState,
     SensorTokenRotation,
+    SensorUpdate,
 )
 from app.security import (
     IngestPrincipal,
@@ -46,10 +51,12 @@ from app.security import (
     require_ingest_token,
 )
 from app.sensor_store import (
+    delete_sensor,
     list_sensors,
     register_sensor,
     rotate_sensor_token,
     set_sensor_enabled,
+    update_sensor,
 )
 from app.track_store import get_track_history, list_tracks
 
@@ -86,7 +93,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.9.0",
+    version="0.10.0",
     lifespan=lifespan,
 )
 
@@ -279,6 +286,53 @@ def patch_sensor_state(
     }
 
 
+@app.put(
+    "/api/v1/sensors/{sensor_id}",
+    tags=["sensors"],
+    dependencies=[Depends(require_admin_token)],
+)
+def put_sensor(
+    sensor_id: UUID,
+    payload: SensorUpdate,
+) -> dict[str, object]:
+    try:
+        sensor = update_sensor(sensor_id=sensor_id, payload=payload)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if sensor is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+
+    return {
+        "time": utc_now(),
+        "sensor": sensor,
+    }
+
+
+@app.delete(
+    "/api/v1/sensors/{sensor_id}",
+    tags=["sensors"],
+    dependencies=[Depends(require_admin_token)],
+)
+def delete_sensor_registration(
+    sensor_id: UUID,
+    payload: EntityDelete,
+) -> dict[str, object]:
+    try:
+        sensor = delete_sensor(sensor_id=sensor_id, actor=payload.actor)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor deletion failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if sensor is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+
+    return {
+        "time": utc_now(),
+        "sensor": sensor,
+        "deleted": True,
+    }
+
+
 @app.post(
     "/api/v1/sensors/{sensor_id}/token/rotate",
     tags=["sensors"],
@@ -417,6 +471,55 @@ def patch_zone_state(
     }
 
 
+@app.put(
+    "/api/v1/zones/{zone_id}",
+    tags=["zones"],
+    dependencies=[Depends(require_admin_token)],
+)
+def put_zone(
+    zone_id: UUID,
+    payload: ProtectedZoneUpdate,
+) -> dict[str, object]:
+    try:
+        zone = update_zone(zone_id=zone_id, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Protected zone update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if zone is None:
+        raise HTTPException(status_code=404, detail="protected zone not found")
+
+    return {
+        "time": utc_now(),
+        "zone": zone,
+    }
+
+
+@app.delete(
+    "/api/v1/zones/{zone_id}",
+    tags=["zones"],
+    dependencies=[Depends(require_admin_token)],
+)
+def delete_protected_zone(
+    zone_id: UUID,
+    payload: EntityDelete,
+) -> dict[str, object]:
+    try:
+        zone = delete_zone(zone_id=zone_id, actor=payload.actor)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Protected zone deletion failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if zone is None:
+        raise HTTPException(status_code=404, detail="protected zone not found")
+
+    return {
+        "time": utc_now(),
+        "zone": zone,
+        "deleted": True,
+    }
+
+
 @app.get("/api/v1/alerts", tags=["alerts"])
 def get_alerts(
     include_closed: bool = Query(default=False),
@@ -487,9 +590,13 @@ AuditEventType = Literal[
     "zone_created",
     "zone_enabled",
     "zone_disabled",
+    "zone_updated",
+    "zone_deleted",
     "sensor_registered",
     "sensor_enabled",
     "sensor_disabled",
+    "sensor_updated",
+    "sensor_deleted",
     "sensor_token_issued",
     "sensor_token_rotated",
 ]
