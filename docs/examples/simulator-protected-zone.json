@@ -1,0 +1,18 @@
+{
+  "name": "Strefa testowa RDDS",
+  "description": "Strefa przecinana okresowo przez tor SIM-DRONE-ALPHA.",
+  "severity": "high",
+  "active": true,
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [21.0166, 52.22745],
+        [21.02247, 52.22745],
+        [21.02247, 52.23195],
+        [21.0166, 52.23195],
+        [21.0166, 52.22745]
+      ]
+    ]
+  }
+}

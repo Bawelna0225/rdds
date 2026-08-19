@@ -18,6 +18,22 @@ const stateLabels = {
   offline: "offline",
   disabled: "wyłączony",
   provisioning: "konfiguracja",
+  acknowledged: "przyjęty",
+  closed: "zamknięty",
+};
+
+const severityLabels = {
+  low: "niski",
+  medium: "średni",
+  high: "wysoki",
+  critical: "krytyczny",
+};
+
+const severityColors = {
+  low: "#43d5ff",
+  medium: "#ffb84d",
+  high: "#ff4d5e",
+  critical: "#ff2841",
 };
 
 const stateColors = {
@@ -35,11 +51,17 @@ const elements = {
   lastUpdate: document.querySelector("#last-update"),
   onlineSensors: document.querySelector("#online-sensors"),
   activeTracks: document.querySelector("#active-tracks"),
+  openAlerts: document.querySelector("#open-alerts"),
   trackCount: document.querySelector("#track-count"),
   sensorCount: document.querySelector("#sensor-count"),
+  alertCount: document.querySelector("#alert-count"),
+  zoneCount: document.querySelector("#zone-count"),
   trackList: document.querySelector("#track-list"),
   sensorList: document.querySelector("#sensor-list"),
+  alertList: document.querySelector("#alert-list"),
+  zoneList: document.querySelector("#zone-list"),
   showEnded: document.querySelector("#show-ended"),
+  showClosedAlerts: document.querySelector("#show-closed-alerts"),
   fitMap: document.querySelector("#fit-map"),
   selectionPanel: document.querySelector("#selection-panel"),
   selectionTitle: document.querySelector("#selection-title"),
@@ -63,8 +85,11 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 const sensorMarkers = new Map();
 const trackLayers = new Map();
+const zoneLayers = new Map();
 let currentSensors = [];
 let currentTracks = [];
+let currentZones = [];
+let currentAlerts = [];
 let selectedTrackId = null;
 let selectedHistory = null;
 let initialFitComplete = false;
@@ -127,6 +152,16 @@ function stateLabel(state) {
   return stateLabels[state] ?? state ?? "—";
 }
 
+function severityLabel(severity) {
+  return severityLabels[severity] ?? severity ?? "—";
+}
+
+function openAlertCountForTrack(trackId) {
+  return currentAlerts.filter(
+    (alert) => alert.track_id === trackId && alert.state !== "closed",
+  ).length;
+}
+
 function setConnection(online, message) {
   elements.connectionDot.className = `connection-dot ${online ? "online" : "offline"}`;
   elements.connectionLabel.textContent = message;
@@ -155,9 +190,12 @@ function sensorIcon(status) {
 function droneIcon(track) {
   const heading = isCoordinate(track.heading_deg) ? track.heading_deg : 0;
   const state = track.state ?? "ended";
+  const hasOpenAlert = currentAlerts.some(
+    (alert) => alert.track_id === track.id && alert.state !== "closed",
+  );
   return L.divIcon({
     className: "",
-    html: `<div class="drone-marker ${escapeHtml(state)}" style="--heading:${heading}deg"></div>`,
+    html: `<div class="drone-marker ${escapeHtml(state)}${hasOpenAlert ? " alerting" : ""}" style="--heading:${heading}deg"></div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 16],
   });
@@ -192,8 +230,67 @@ function trackPopup(track) {
       <span>Prędkość</span><strong>${escapeHtml(formatNumber(track.speed_mps, 1, " m/s"))}</strong>
       <span>Kierunek</span><strong>${escapeHtml(formatNumber(track.heading_deg, 0, "°"))}</strong>
       <span>Sensory</span><strong>${escapeHtml(track.contributing_sensors)}</strong>
+      <span>Alarmy</span><strong>${escapeHtml(openAlertCountForTrack(track.id))}</strong>
       <span>MGRS</span><strong>${escapeHtml(formatMgrs(track.latitude, track.longitude))}</strong>
     </div>`;
+}
+
+function zonePopup(zone, hasOpenAlert) {
+  return `
+    <h3 class="popup-title">${escapeHtml(zone.name)}</h3>
+    <div class="popup-grid">
+      <span>Status</span><strong>${zone.active ? "aktywna" : "wyłączona"}</strong>
+      <span>Zagrożenie</span><strong>${escapeHtml(severityLabel(zone.severity))}</strong>
+      <span>Alarm</span><strong>${hasOpenAlert ? "otwarty" : "brak"}</strong>
+      <span>Opis</span><strong>${escapeHtml(zone.description)}</strong>
+    </div>`;
+}
+
+function updateZoneLayers(zones, alerts) {
+  const visibleIds = new Set();
+  const alertingZoneIds = new Set(
+    alerts
+      .filter((alert) => alert.state !== "closed")
+      .map((alert) => alert.zone_id),
+  );
+
+  for (const zone of zones) {
+    if (!zone.geometry) {
+      continue;
+    }
+
+    visibleIds.add(zone.id);
+    const hasOpenAlert = alertingZoneIds.has(zone.id);
+    const color = hasOpenAlert
+      ? severityColors[zone.severity] ?? severityColors.high
+      : zone.active
+        ? "#ffb84d"
+        : "#778292";
+    const style = {
+      color,
+      fillColor: color,
+      fillOpacity: hasOpenAlert ? 0.22 : zone.active ? 0.08 : 0.03,
+      opacity: zone.active ? 0.9 : 0.45,
+      weight: hasOpenAlert ? 3 : 2,
+      dashArray: hasOpenAlert ? null : "7 6",
+    };
+    let layer = zoneLayers.get(zone.id);
+
+    if (!layer) {
+      layer = L.geoJSON(zone.geometry, { style }).addTo(map);
+      zoneLayers.set(zone.id, layer);
+    } else {
+      layer.setStyle(style);
+    }
+    layer.bindPopup(zonePopup(zone, hasOpenAlert));
+  }
+
+  for (const [id, layer] of zoneLayers) {
+    if (!visibleIds.has(id)) {
+      layer.remove();
+      zoneLayers.delete(id);
+    }
+  }
 }
 
 function updateSensorMarkers(sensors) {
@@ -314,6 +411,55 @@ function createBadge(state) {
   return badge;
 }
 
+function createAlertBadge(state) {
+  const badge = createBadge(state);
+  badge.classList.add("alert-badge");
+  return badge;
+}
+
+function renderAlertList(alerts) {
+  elements.alertList.replaceChildren();
+  elements.alertList.classList.toggle("empty-state", alerts.length === 0);
+
+  if (alerts.length === 0) {
+    elements.alertList.textContent = "Brak otwartych alarmów";
+    return;
+  }
+
+  for (const alert of alerts) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `entity-card alert-card severity-${alert.severity} alert-${alert.state}`;
+    card.addEventListener("click", () => {
+      if (currentTracks.some((track) => track.id === alert.track_id)) {
+        selectTrack(alert.track_id);
+      } else if (hasPosition(alert)) {
+        map.setView([alert.latitude, alert.longitude], Math.max(map.getZoom(), 15));
+      }
+    });
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "entity-title-row";
+    const title = document.createElement("span");
+    title.className = "entity-title";
+    title.textContent = alert.basic_id || alert.identity_key || alert.track_key;
+    titleRow.append(title, createAlertBadge(alert.state));
+
+    const meta = document.createElement("div");
+    meta.className = "entity-meta";
+    const zone = document.createElement("span");
+    zone.textContent = alert.zone_name;
+    const severity = document.createElement("span");
+    severity.textContent = severityLabel(alert.severity);
+    const time = document.createElement("span");
+    time.textContent = formatTime(alert.last_detected_at);
+    meta.append(zone, severity, time);
+
+    card.append(titleRow, meta);
+    elements.alertList.append(card);
+  }
+}
+
 function renderTrackList(tracks) {
   elements.trackList.replaceChildren();
   elements.trackList.classList.toggle("empty-state", tracks.length === 0);
@@ -391,6 +537,56 @@ function renderSensorList(sensors) {
   }
 }
 
+function renderZoneList(zones, alerts) {
+  elements.zoneList.replaceChildren();
+  elements.zoneList.classList.toggle("empty-state", zones.length === 0);
+
+  if (zones.length === 0) {
+    elements.zoneList.textContent = "Brak zdefiniowanych stref";
+    return;
+  }
+
+  const alertingZoneIds = new Set(
+    alerts
+      .filter((alert) => alert.state !== "closed")
+      .map((alert) => alert.zone_id),
+  );
+
+  for (const zone of zones) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "entity-card";
+    card.addEventListener("click", () => {
+      const layer = zoneLayers.get(zone.id);
+      if (layer) {
+        map.fitBounds(layer.getBounds(), { padding: [45, 45], maxZoom: 16 });
+        layer.openPopup();
+      }
+    });
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "entity-title-row";
+    const title = document.createElement("span");
+    title.className = "entity-title";
+    title.textContent = zone.name;
+    titleRow.append(
+      title,
+      createBadge(zone.active ? "active" : "inactive"),
+    );
+
+    const meta = document.createElement("div");
+    meta.className = "entity-meta";
+    const severity = document.createElement("span");
+    severity.textContent = `Poziom: ${severityLabel(zone.severity)}`;
+    const status = document.createElement("span");
+    status.textContent = alertingZoneIds.has(zone.id) ? "ALARM" : "spokojnie";
+    meta.append(severity, status);
+
+    card.append(titleRow, meta);
+    elements.zoneList.append(card);
+  }
+}
+
 function detailItem(label, value) {
   const item = document.createElement("div");
   item.className = "detail-item";
@@ -417,6 +613,7 @@ function renderSelection(track) {
     detailItem("Prędkość", formatNumber(track.speed_mps, 1, " m/s")),
     detailItem("Kierunek", formatNumber(track.heading_deg, 0, "°")),
     detailItem("Sensory", String(track.contributing_sensors ?? "—")),
+    detailItem("Otwarte alarmy", String(openAlertCountForTrack(track.id))),
     detailItem("Obserwacje", String(track.observation_count ?? "—")),
     detailItem("MGRS", formatMgrs(track.latitude, track.longitude)),
     detailItem("Pierwsza obserwacja", formatTime(track.first_seen_at)),
@@ -486,10 +683,20 @@ function fitAllEntities() {
     }
   }
 
-  if (points.length === 1) {
+  const bounds = L.latLngBounds(points);
+  let hasZoneBounds = false;
+  for (const layer of zoneLayers.values()) {
+    const zoneBounds = layer.getBounds();
+    if (zoneBounds.isValid()) {
+      bounds.extend(zoneBounds);
+      hasZoneBounds = true;
+    }
+  }
+
+  if (points.length === 1 && !hasZoneBounds) {
     map.setView(points[0], 14);
-  } else if (points.length > 1) {
-    map.fitBounds(L.latLngBounds(points), {
+  } else if (bounds.isValid()) {
+    map.fitBounds(bounds, {
       padding: [45, 45],
       maxZoom: 15,
     });
@@ -504,25 +711,37 @@ async function refresh() {
 
   try {
     const includeEnded = elements.showEnded.checked ? "true" : "false";
-    const [sensorPayload, trackPayload] = await Promise.all([
+    const includeClosedAlerts = elements.showClosedAlerts.checked ? "true" : "false";
+    const [sensorPayload, trackPayload, zonePayload, alertPayload] = await Promise.all([
       fetchJson("/api/v1/sensors"),
       fetchJson(`/api/v1/tracks?include_ended=${includeEnded}`),
+      fetchJson("/api/v1/zones"),
+      fetchJson(`/api/v1/alerts?include_closed=${includeClosedAlerts}`),
     ]);
 
     currentSensors = sensorPayload.sensors ?? [];
     currentTracks = trackPayload.tracks ?? [];
+    currentZones = zonePayload.zones ?? [];
+    currentAlerts = alertPayload.alerts ?? [];
 
+    updateZoneLayers(currentZones, currentAlerts);
     updateSensorMarkers(currentSensors);
     updateTrackMarkers(currentTracks);
     renderSensorList(currentSensors);
     renderTrackList(currentTracks);
+    renderAlertList(currentAlerts);
+    renderZoneList(currentZones, currentAlerts);
 
     const onlineSensors = currentSensors.filter((sensor) => sensor.status === "online").length;
     const activeTracks = currentTracks.filter((track) => track.state === "active").length;
+    const openAlerts = currentAlerts.filter((alert) => alert.state !== "closed").length;
     elements.onlineSensors.textContent = String(onlineSensors);
     elements.activeTracks.textContent = String(activeTracks);
+    elements.openAlerts.textContent = String(openAlerts);
     elements.sensorCount.textContent = String(currentSensors.length);
     elements.trackCount.textContent = String(currentTracks.length);
+    elements.alertCount.textContent = String(currentAlerts.length);
+    elements.zoneCount.textContent = String(currentZones.length);
 
     if (selectedTrackId) {
       const selected = currentTracks.find((track) => track.id === selectedTrackId);
@@ -534,7 +753,10 @@ async function refresh() {
       }
     }
 
-    if (!initialFitComplete && (sensorMarkers.size > 0 || trackLayers.size > 0)) {
+    if (
+      !initialFitComplete &&
+      (sensorMarkers.size > 0 || trackLayers.size > 0 || zoneLayers.size > 0)
+    ) {
       fitAllEntities();
       initialFitComplete = true;
     }
@@ -550,6 +772,7 @@ async function refresh() {
 }
 
 elements.showEnded.addEventListener("change", refresh);
+elements.showClosedAlerts.addEventListener("change", refresh);
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
 

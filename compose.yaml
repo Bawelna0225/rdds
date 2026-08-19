@@ -61,6 +61,7 @@ services:
       RDDS_DB_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       RDDS_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       RDDS_INGEST_TOKEN: ${RDDS_INGEST_TOKEN:?Set RDDS_INGEST_TOKEN in .env}
+      RDDS_ADMIN_TOKEN: ${RDDS_ADMIN_TOKEN:?Set RDDS_ADMIN_TOKEN in .env}
       RDDS_SENSOR_OFFLINE_AFTER_SECONDS: ${RDDS_SENSOR_OFFLINE_AFTER_SECONDS:-30}
     depends_on:
       database:
@@ -108,6 +109,7 @@ services:
       RDDS_DB_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       RDDS_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       RDDS_INGEST_TOKEN: ${RDDS_INGEST_TOKEN:?Set RDDS_INGEST_TOKEN in .env}
+      RDDS_ADMIN_TOKEN: ${RDDS_ADMIN_TOKEN:?Set RDDS_ADMIN_TOKEN in .env}
       RDDS_SENSOR_OFFLINE_AFTER_SECONDS: ${RDDS_SENSOR_OFFLINE_AFTER_SECONDS:-30}
       RDDS_TRACK_POLL_SECONDS: ${RDDS_TRACK_POLL_SECONDS:-1}
       RDDS_TRACK_STALE_AFTER_SECONDS: ${RDDS_TRACK_STALE_AFTER_SECONDS:-15}
@@ -118,6 +120,42 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+
+  alert-processor:
+    build:
+      context: ./server/api
+    command:
+      - python
+      - -m
+      - app.alert_processor
+    restart: unless-stopped
+    environment:
+      RDDS_ENVIRONMENT: ${RDDS_ENVIRONMENT:-development}
+      RDDS_LOG_LEVEL: ${RDDS_LOG_LEVEL:-INFO}
+      RDDS_DB_HOST: database
+      RDDS_DB_PORT: 5432
+      RDDS_DB_NAME: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      RDDS_DB_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      RDDS_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      RDDS_INGEST_TOKEN: ${RDDS_INGEST_TOKEN:?Set RDDS_INGEST_TOKEN in .env}
+      RDDS_ADMIN_TOKEN: ${RDDS_ADMIN_TOKEN:?Set RDDS_ADMIN_TOKEN in .env}
+      RDDS_ALERT_POLL_SECONDS: ${RDDS_ALERT_POLL_SECONDS:-1}
+    depends_on:
+      database:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      tracker:
+        condition: service_started
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777

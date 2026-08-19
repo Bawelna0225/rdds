@@ -16,3 +16,16 @@ def require_ingest_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid sensor ingest token",
         )
+
+
+def require_admin_token(
+    x_rdds_admin_token: str | None = Header(default=None),
+) -> None:
+    if x_rdds_admin_token is None or not secrets.compare_digest(
+        x_rdds_admin_token,
+        settings.admin_token,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid RDDS administrator token",
+        )

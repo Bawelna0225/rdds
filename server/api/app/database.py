@@ -301,7 +301,13 @@ def system_summary() -> dict[str, int]:
                 (SELECT COUNT(*) FROM sensors) AS sensors,
                 (SELECT COUNT(*) FROM sensor_heartbeats) AS heartbeats,
                 (SELECT COUNT(*) FROM observations) AS observations,
-                (SELECT COUNT(*) FROM tracks) AS tracks
+                (SELECT COUNT(*) FROM tracks) AS tracks,
+                (SELECT COUNT(*) FROM protected_zones) AS zones,
+                (
+                    SELECT COUNT(*)
+                    FROM intrusion_alerts
+                    WHERE state IN ('active', 'acknowledged')
+                ) AS open_alerts
             """
         )
         row = cursor.fetchone()

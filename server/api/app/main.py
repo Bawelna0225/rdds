@@ -7,6 +7,14 @@ from uuid import UUID
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 
+from app.alert_store import (
+    acknowledge_alert,
+    close_alert,
+    create_zone,
+    list_alerts,
+    list_zones,
+    set_zone_active,
+)
 from app.config import settings
 from app.database import (
     insert_heartbeat,
@@ -16,8 +24,15 @@ from app.database import (
     readiness,
     system_summary,
 )
-from app.models import HeartbeatEnvelope, IngestResult, ObservationEnvelope
-from app.security import require_ingest_token
+from app.models import (
+    AlertAction,
+    HeartbeatEnvelope,
+    IngestResult,
+    ObservationEnvelope,
+    ProtectedZoneCreate,
+    ProtectedZoneState,
+)
+from app.security import require_admin_token, require_ingest_token
 from app.track_store import get_track_history, list_tracks
 
 logging.basicConfig(
@@ -53,7 +68,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.3.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -215,4 +230,125 @@ def get_track_observation_history(
         "time": utc_now(),
         "track_id": track_id,
         "observations": observations,
+    }
+
+
+@app.get("/api/v1/zones", tags=["zones"])
+def get_zones() -> dict[str, object]:
+    try:
+        zones = list_zones()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Protected zone list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "zones": zones,
+    }
+
+
+@app.post(
+    "/api/v1/zones",
+    status_code=status.HTTP_201_CREATED,
+    tags=["zones"],
+    dependencies=[Depends(require_admin_token)],
+)
+def post_zone(payload: ProtectedZoneCreate) -> dict[str, object]:
+    try:
+        zone = create_zone(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Protected zone creation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "zone": zone,
+    }
+
+
+@app.patch(
+    "/api/v1/zones/{zone_id}",
+    tags=["zones"],
+    dependencies=[Depends(require_admin_token)],
+)
+def patch_zone_state(
+    zone_id: UUID,
+    payload: ProtectedZoneState,
+) -> dict[str, object]:
+    try:
+        zone = set_zone_active(zone_id=zone_id, active=payload.active)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Protected zone state update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if zone is None:
+        raise HTTPException(status_code=404, detail="protected zone not found")
+
+    return {
+        "time": utc_now(),
+        "zone": zone,
+    }
+
+
+@app.get("/api/v1/alerts", tags=["alerts"])
+def get_alerts(
+    include_closed: bool = Query(default=False),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, object]:
+    try:
+        alerts = list_alerts(include_closed=include_closed, limit=limit)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Alert list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "alerts": alerts,
+    }
+
+
+@app.post(
+    "/api/v1/alerts/{alert_id}/acknowledge",
+    tags=["alerts"],
+    dependencies=[Depends(require_admin_token)],
+)
+def post_alert_acknowledgement(
+    alert_id: UUID,
+    payload: AlertAction,
+) -> dict[str, object]:
+    try:
+        alert = acknowledge_alert(alert_id=alert_id, actor=payload.actor)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Alert acknowledgement failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if alert is None:
+        raise HTTPException(status_code=409, detail="alert is not active")
+
+    return {
+        "time": utc_now(),
+        "alert": alert,
+    }
+
+
+@app.post(
+    "/api/v1/alerts/{alert_id}/close",
+    tags=["alerts"],
+    dependencies=[Depends(require_admin_token)],
+)
+def post_alert_close(
+    alert_id: UUID,
+    payload: AlertAction,
+) -> dict[str, object]:
+    try:
+        alert = close_alert(alert_id=alert_id, actor=payload.actor)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Alert close failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if alert is None:
+        raise HTTPException(status_code=409, detail="alert is not open")
+
+    return {
+        "time": utc_now(),
+        "alert": alert,
     }

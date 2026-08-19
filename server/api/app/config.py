@@ -19,11 +19,13 @@ class Settings:
     db_user: str
     db_password: str
     ingest_token: str
+    admin_token: str
     sensor_offline_after_seconds: int
     track_poll_seconds: float
     track_stale_after_seconds: int
     track_ended_after_seconds: int
     track_batch_size: int
+    alert_poll_seconds: float
 
 
 def load_settings() -> Settings:
@@ -36,6 +38,7 @@ def load_settings() -> Settings:
         db_user=_required("RDDS_DB_USER"),
         db_password=_required("RDDS_DB_PASSWORD"),
         ingest_token=_required("RDDS_INGEST_TOKEN"),
+        admin_token=_required("RDDS_ADMIN_TOKEN"),
         sensor_offline_after_seconds=int(
             os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
         ),
@@ -47,6 +50,7 @@ def load_settings() -> Settings:
             os.getenv("RDDS_TRACK_ENDED_AFTER_SECONDS", "60")
         ),
         track_batch_size=int(os.getenv("RDDS_TRACK_BATCH_SIZE", "500")),
+        alert_poll_seconds=float(os.getenv("RDDS_ALERT_POLL_SECONDS", "1")),
     )
 
     if settings.track_poll_seconds <= 0:
@@ -60,6 +64,12 @@ def load_settings() -> Settings:
         )
     if not 1 <= settings.track_batch_size <= 5000:
         raise RuntimeError("RDDS_TRACK_BATCH_SIZE must be between 1 and 5000")
+    if settings.alert_poll_seconds <= 0:
+        raise RuntimeError("RDDS_ALERT_POLL_SECONDS must be greater than zero")
+    if len(settings.admin_token) < 32:
+        raise RuntimeError("RDDS_ADMIN_TOKEN must contain at least 32 characters")
+    if settings.admin_token == settings.ingest_token:
+        raise RuntimeError("RDDS_ADMIN_TOKEN must differ from RDDS_INGEST_TOKEN")
 
     return settings
 

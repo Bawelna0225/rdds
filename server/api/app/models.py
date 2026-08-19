@@ -95,3 +95,49 @@ class IngestResult(StrictModel):
     duplicate: bool
     record_id: int | None
     sensor_uuid: UUID
+
+
+class PolygonGeometry(StrictModel):
+    type: Literal["Polygon"]
+    coordinates: list[list[tuple[float, float]]]
+
+    @field_validator("coordinates")
+    @classmethod
+    def validate_polygon(
+        cls,
+        value: list[list[tuple[float, float]]],
+    ) -> list[list[tuple[float, float]]]:
+        if len(value) != 1:
+            raise ValueError("only a single exterior polygon ring is supported")
+
+        ring = value[0]
+        if len(ring) < 4:
+            raise ValueError("polygon ring requires at least four positions")
+        if ring[0] != ring[-1]:
+            raise ValueError("polygon ring must be closed")
+
+        for longitude, latitude in ring:
+            if not -180 <= longitude <= 180:
+                raise ValueError("polygon longitude must be between -180 and 180")
+            if not -90 <= latitude <= 90:
+                raise ValueError("polygon latitude must be between -90 and 90")
+
+        if len(set(ring[:-1])) < 3:
+            raise ValueError("polygon requires at least three distinct positions")
+        return value
+
+
+class ProtectedZoneCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    severity: Literal["low", "medium", "high", "critical"] = "high"
+    active: bool = True
+    geometry: PolygonGeometry
+
+
+class ProtectedZoneState(StrictModel):
+    active: bool
+
+
+class AlertAction(StrictModel):
+    actor: str = Field(min_length=1, max_length=160)

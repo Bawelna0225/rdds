@@ -35,6 +35,10 @@
               <span>Aktywne drony</span>
               <strong id="active-tracks">0</strong>
             </div>
+            <div class="summary-card alert-summary">
+              <span>Otwarte alarmy</span>
+              <strong id="open-alerts">0</strong>
+            </div>
           </div>
 
           <div class="toolbar">
@@ -42,8 +46,22 @@
               <input id="show-ended" type="checkbox" />
               <span>Pokaż zakończone</span>
             </label>
+            <label class="toggle-row">
+              <input id="show-closed-alerts" type="checkbox" />
+              <span>Zamknięte alarmy</span>
+            </label>
             <button id="fit-map" type="button">Pokaż wszystkie</button>
           </div>
+
+          <section class="sidebar-section alerts-section">
+            <div class="section-heading">
+              <h2>Alarmy strefowe</h2>
+              <span id="alert-count" class="counter">0</span>
+            </div>
+            <div id="alert-list" class="entity-list empty-state">
+              Brak otwartych alarmów
+            </div>
+          </section>
 
           <section class="sidebar-section">
             <div class="section-heading">
@@ -64,6 +82,16 @@
               Oczekiwanie na sensory…
             </div>
           </section>
+
+          <section class="sidebar-section zones-section">
+            <div class="section-heading">
+              <h2>Strefy chronione</h2>
+              <span id="zone-count" class="counter">0</span>
+            </div>
+            <div id="zone-list" class="entity-list empty-state">
+              Brak zdefiniowanych stref
+            </div>
+          </section>
         </aside>
 
         <main class="map-shell">
@@ -74,6 +102,8 @@
             <div><span class="legend-symbol active"></span>Dron aktywny</div>
             <div><span class="legend-symbol stale"></span>Ślad nieaktualny</div>
             <div><span class="legend-symbol pilot"></span>Operator</div>
+            <div><span class="legend-symbol zone"></span>Strefa chroniona</div>
+            <div><span class="legend-symbol alert"></span>Alarm aktywny</div>
           </div>
 
           <section id="selection-panel" class="selection-panel hidden">
