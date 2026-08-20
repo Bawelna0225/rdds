@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.11.0**. The complete software path is tested
+> Current development version: **0.12.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -44,6 +44,7 @@ operator actions.
 - Basic ID, operator ID, drone and pilot position, altitude, height AGL, speed,
   heading, RSSI and Wi-Fi channel;
 - per-sensor credentials, token rotation and sensor disable/enable controls;
+- Argon2id operator accounts with server-side sessions, CSRF protection and roles;
 - durable offline queue with retry, replay and dead-letter storage;
 - multi-sensor track correlation and track history;
 - protected zones with intrusion alerts;
@@ -108,6 +109,15 @@ sudo docker compose up -d --build
 sudo docker compose ps -a
 ```
 
+On a new installation, create the first administrator interactively:
+
+```bash
+sudo docker compose run --rm api \
+  python -m app.bootstrap_admin \
+  --username admin \
+  --display-name "RDDS Administrator"
+```
+
 Default development endpoints:
 
 - operator interface: `http://SERVER_IP:8080`;
@@ -158,7 +168,7 @@ python3 -m py_compile sensor-agent/rdds_agent.py skyspy-emulator/main.py
 git diff --check
 ```
 
-The expected result for version 0.11.0 is eight passing unit tests.
+The expected result is eight passing sensor-agent unit tests.
 
 ## Firmware builds
 
@@ -196,18 +206,21 @@ annotated Git tag:
 | `rdds-v0.9.0` | durable Sky-Spy sensor agent |
 | `rdds-v0.10.0` | operator workspace and entity lifecycle |
 | `rdds-v0.11.0` | enriched Sky-Spy firmware output |
+| `rdds-v0.11.1` | web proxy DNS refresh hotfix |
+| `rdds-v0.12.0` | operator accounts, sessions, CSRF protection and role-based access |
 
 Start with:
 
 - `docs/protocol/RDDS_PROTOCOL_V1.md` for the ingest contract;
 - `docs/RDDS_STAGE9.md` for the field agent and offline queue;
 - `docs/RDDS_STAGE10.md` for the operator workspace;
+- `docs/RDDS_STAGE12.md` for accounts, login, sessions and roles;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
 
 ## Planned work
 
 - validation with physical ESP32-S3 and ESP32-C5 receivers;
-- production TLS and stronger operator authentication;
+- production TLS and optional central identity integration;
 - database backup, restore, retention and operational monitoring;
 - notification outputs and controlled external integrations;
 - optional TAK Server integration as a separate future adapter.

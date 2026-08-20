@@ -31,8 +31,12 @@ class Settings:
     db_user: str
     db_password: str
     ingest_token: str
-    admin_token: str
     allow_legacy_ingest: bool
+    session_cookie_secure: bool
+    session_absolute_seconds: int
+    session_idle_seconds: int
+    login_max_failures: int
+    login_lock_seconds: int
     sensor_offline_after_seconds: int
     track_poll_seconds: float
     track_stale_after_seconds: int
@@ -51,8 +55,14 @@ def load_settings() -> Settings:
         db_user=_required("RDDS_DB_USER"),
         db_password=_required("RDDS_DB_PASSWORD"),
         ingest_token=_required("RDDS_INGEST_TOKEN"),
-        admin_token=_required("RDDS_ADMIN_TOKEN"),
         allow_legacy_ingest=_boolean("RDDS_ALLOW_LEGACY_INGEST", True),
+        session_cookie_secure=_boolean("RDDS_SESSION_COOKIE_SECURE", False),
+        session_absolute_seconds=int(
+            os.getenv("RDDS_SESSION_ABSOLUTE_SECONDS", "28800")
+        ),
+        session_idle_seconds=int(os.getenv("RDDS_SESSION_IDLE_SECONDS", "1800")),
+        login_max_failures=int(os.getenv("RDDS_LOGIN_MAX_FAILURES", "5")),
+        login_lock_seconds=int(os.getenv("RDDS_LOGIN_LOCK_SECONDS", "900")),
         sensor_offline_after_seconds=int(
             os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
         ),
@@ -80,10 +90,16 @@ def load_settings() -> Settings:
         raise RuntimeError("RDDS_TRACK_BATCH_SIZE must be between 1 and 5000")
     if settings.alert_poll_seconds <= 0:
         raise RuntimeError("RDDS_ALERT_POLL_SECONDS must be greater than zero")
-    if len(settings.admin_token) < 32:
-        raise RuntimeError("RDDS_ADMIN_TOKEN must contain at least 32 characters")
-    if settings.admin_token == settings.ingest_token:
-        raise RuntimeError("RDDS_ADMIN_TOKEN must differ from RDDS_INGEST_TOKEN")
+    if settings.session_idle_seconds < 60:
+        raise RuntimeError("RDDS_SESSION_IDLE_SECONDS must be at least 60")
+    if settings.session_absolute_seconds < settings.session_idle_seconds:
+        raise RuntimeError(
+            "RDDS_SESSION_ABSOLUTE_SECONDS must be at least RDDS_SESSION_IDLE_SECONDS"
+        )
+    if not 3 <= settings.login_max_failures <= 20:
+        raise RuntimeError("RDDS_LOGIN_MAX_FAILURES must be between 3 and 20")
+    if settings.login_lock_seconds < 60:
+        raise RuntimeError("RDDS_LOGIN_LOCK_SECONDS must be at least 60")
 
     return settings
 

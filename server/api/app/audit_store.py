@@ -3,8 +3,7 @@ from uuid import UUID
 
 from app.database import connection
 
-
-AuditCategory = Literal["all", "alerts", "zones", "sensors"]
+AuditCategory = Literal["all", "alerts", "zones", "sensors", "operators"]
 
 
 def list_audit_events(
@@ -13,6 +12,7 @@ def list_audit_events(
     alert_id: UUID | None = None,
     zone_id: UUID | None = None,
     sensor_id: UUID | None = None,
+    operator_account_id: UUID | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -28,6 +28,8 @@ def list_audit_events(
         conditions.append("event.event_type LIKE 'zone_%'")
     elif category == "sensors":
         conditions.append("event.event_type LIKE 'sensor_%'")
+    elif category == "operators":
+        conditions.append("event.event_type LIKE 'operator_%'")
 
     if event_type is not None:
         conditions.append("event.event_type = %(event_type)s")
@@ -41,6 +43,9 @@ def list_audit_events(
     if sensor_id is not None:
         conditions.append("event.sensor_id = %(sensor_id)s")
         parameters["sensor_id"] = sensor_id
+    if operator_account_id is not None:
+        conditions.append("event.operator_account_id = %(operator_account_id)s")
+        parameters["operator_account_id"] = operator_account_id
 
     where_clause = ""
     if conditions:
@@ -70,6 +75,7 @@ def list_audit_events(
                 event.zone_id,
                 event.track_id,
                 event.sensor_id,
+                event.operator_account_id,
                 alert.state AS alert_state,
                 alert.severity AS alert_severity,
                 alert.first_detected_at,
@@ -82,11 +88,16 @@ def list_audit_events(
                 track.last_operator_id AS operator_id,
                 sensor.sensor_key,
                 sensor.display_name AS sensor_name
+                , operator_account.username AS account_username
+                , operator_account.display_name AS account_display_name
+                , operator_account.role AS account_role
             FROM audit_events AS event
             LEFT JOIN intrusion_alerts AS alert ON alert.id = event.alert_id
             LEFT JOIN protected_zones AS zone ON zone.id = event.zone_id
             LEFT JOIN tracks AS track ON track.id = event.track_id
             LEFT JOIN sensors AS sensor ON sensor.id = event.sensor_id
+            LEFT JOIN operator_accounts AS operator_account
+                ON operator_account.id = event.operator_account_id
             {where_clause}
             ORDER BY event.occurred_at DESC, event.id DESC
             LIMIT %(limit)s

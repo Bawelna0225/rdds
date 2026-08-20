@@ -9,6 +9,30 @@
   </head>
   <body>
     <div id="app">
+      <section id="login-screen" class="login-screen">
+        <form id="login-form" class="login-card">
+          <div class="brand login-brand">
+            <div class="brand-mark" aria-hidden="true"><span></span></div>
+            <div>
+              <h1>RDDS</h1>
+              <p>Panel operatorski</p>
+            </div>
+          </div>
+          <label>
+            Nazwa użytkownika
+            <input id="login-username" type="text" autocomplete="username" required />
+          </label>
+          <label>
+            Hasło
+            <input id="login-password" type="password" autocomplete="current-password" required />
+          </label>
+          <button id="login-submit" type="submit">Zaloguj</button>
+          <p id="login-message" class="operator-message">
+            Zaloguj się kontem RDDS.
+          </p>
+        </form>
+      </section>
+
       <header class="topbar">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true"><span></span></div>
@@ -32,56 +56,56 @@
               aria-expanded="false"
               aria-controls="operator-panel"
             >
-              <span id="operator-status" class="operator-status">Obserwator</span>
+              <span id="operator-status" class="operator-status">—</span>
               <span class="operator-menu-chevron" aria-hidden="true"></span>
             </button>
 
             <section id="operator-panel" class="operator-panel hidden">
               <div class="operator-heading">
                 <div>
-                  <span>Tryb pracy</span>
-                  <strong id="operator-mode-label">Tylko podgląd</strong>
+                  <span>Zalogowane konto</span>
+                  <strong id="operator-mode-label">—</strong>
                 </div>
                 <span id="operator-lock-indicator" class="lock-indicator">
-                  Zablokowany
+                  —
                 </span>
               </div>
 
-              <form id="operator-login-form" class="operator-login-form">
-                <label>
-                  Nazwa operatora
-                  <input
-                    id="operator-name"
-                    type="text"
-                    maxlength="160"
-                    autocomplete="username"
-                    required
-                  />
-                </label>
-                <label>
-                  Token administratora
-                  <input
-                    id="operator-token"
-                    type="password"
-                    minlength="32"
-                    autocomplete="off"
-                    spellcheck="false"
-                    required
-                  />
-                </label>
-                <button id="operator-unlock" type="submit">Odblokuj narzędzia</button>
-                <p id="operator-message" class="operator-message">
-                  Token pozostaje tylko w pamięci tej karty.
-                </p>
-              </form>
-
-              <div id="operator-actions" class="operator-actions hidden">
+              <div id="operator-actions" class="operator-actions">
                 <button id="draw-zone" type="button">Narysuj nową strefę</button>
                 <button id="register-sensor" type="button">Dodaj sensor</button>
-                <button id="operator-lock" type="button" class="secondary-button">
-                  Zablokuj
-                </button>
+                <button id="manage-operators" type="button">Konta operatorów</button>
               </div>
+
+              <form id="password-form" class="operator-login-form">
+                <label>
+                  Obecne hasło
+                  <input
+                    id="current-password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                  />
+                </label>
+                <label>
+                  Nowe hasło (min. 12 znaków)
+                  <input
+                    id="new-password"
+                    type="password"
+                    minlength="12"
+                    maxlength="128"
+                    autocomplete="new-password"
+                    required
+                  />
+                </label>
+                <button id="password-submit" type="submit">Zmień hasło</button>
+                <p id="operator-message" class="operator-message">
+                  Sesja wygasa automatycznie po okresie bezczynności.
+                </p>
+              </form>
+              <button id="operator-lock" type="button" class="secondary-button">
+                Wyloguj
+              </button>
             </section>
           </div>
         </div>
@@ -148,6 +172,7 @@
                     <option value="alerts">Alarmy</option>
                     <option value="zones">Strefy</option>
                     <option value="sensors">Sensory</option>
+                    <option value="operators">Operatorzy</option>
                   </select>
                 </label>
                 <div class="audit-export-actions">
@@ -344,6 +369,48 @@
               <button id="sensor-token-close" type="button" class="secondary-button">
                 Zamknij
               </button>
+            </div>
+          </section>
+
+          <section id="operator-editor" class="sensor-editor operator-editor hidden">
+            <div class="operator-editor-content">
+              <div class="operator-editor-header">
+                <div>
+                  <p class="eyebrow">Administracja</p>
+                  <h2>Konta operatorów</h2>
+                </div>
+                <button id="operator-editor-close" type="button" class="secondary-button">
+                  Zamknij
+                </button>
+              </div>
+              <form id="operator-create-form" class="sensor-form">
+                <label>
+                  Login
+                  <input id="account-username" type="text" minlength="3" maxlength="64"
+                    pattern="[a-z0-9][a-z0-9._-]{2,63}" required />
+                </label>
+                <label>
+                  Nazwa wyświetlana
+                  <input id="account-display-name" type="text" maxlength="160" required />
+                </label>
+                <label>
+                  Rola
+                  <select id="account-role">
+                    <option value="viewer">viewer — podgląd</option>
+                    <option value="operator">operator — obsługa alarmów i stref</option>
+                    <option value="administrator">administrator — pełne uprawnienia</option>
+                  </select>
+                </label>
+                <label>
+                  Hasło tymczasowe
+                  <input id="account-password" type="password" minlength="12" maxlength="128"
+                    autocomplete="new-password" required />
+                </label>
+                <button id="account-create" type="submit">Utwórz konto</button>
+              </form>
+              <div id="operator-list" class="entity-list empty-state">
+                Ładowanie kont…
+              </div>
             </div>
           </section>
 

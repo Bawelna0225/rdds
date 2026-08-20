@@ -6,7 +6,6 @@ from uuid import UUID
 from app.database import connection
 from app.models import SensorRegistration, SensorUpdate
 
-
 LegacySensorAccess = Literal["allowed", "disabled", "individual_required"]
 
 SENSOR_COLUMNS = """
@@ -102,6 +101,7 @@ def list_sensors() -> list[dict[str, Any]]:
 
 def register_sensor(
     payload: SensorRegistration,
+    actor: str,
 ) -> tuple[dict[str, Any], str]:
     token, token_hash, token_prefix = _new_token()
     longitude = None if payload.position is None else payload.position.longitude
@@ -144,7 +144,7 @@ def register_sensor(
                 "display_name": payload.display_name,
                 "longitude": longitude,
                 "latitude": latitude,
-                "actor": payload.actor,
+                "actor": actor,
             },
         )
         created = cursor.fetchone()
@@ -161,7 +161,7 @@ def register_sensor(
             )
             VALUES (%s, %s, %s, %s)
             """,
-            (created["id"], token_hash, token_prefix, payload.actor),
+            (created["id"], token_hash, token_prefix, actor),
         )
         sensor = _read_sensor(cursor, created["id"])
         if sensor is None:
@@ -256,6 +256,7 @@ def rotate_sensor_token(
 def update_sensor(
     sensor_id: UUID,
     payload: SensorUpdate,
+    actor: str,
 ) -> dict[str, Any] | None:
     longitude = None if payload.position is None else payload.position.longitude
     latitude = None if payload.position is None else payload.position.latitude
@@ -289,7 +290,7 @@ def update_sensor(
                 "display_name": payload.display_name,
                 "longitude": longitude,
                 "latitude": latitude,
-                "actor": payload.actor,
+                "actor": actor,
             },
         )
         updated = cursor.fetchone()

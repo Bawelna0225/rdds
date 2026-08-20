@@ -5,7 +5,6 @@ from uuid import UUID
 from app.database import connection
 from app.models import ProtectedZoneCreate, ProtectedZoneUpdate
 
-
 ZONE_COLUMNS = """
     zone.id,
     zone.name,
@@ -33,7 +32,7 @@ def _read_zone(cursor: Any, zone_id: UUID) -> dict[str, Any] | None:
     return None if row is None else dict(row)
 
 
-def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
+def create_zone(payload: ProtectedZoneCreate, actor: str) -> dict[str, Any]:
     geometry = json.dumps(payload.geometry.model_dump(mode="json"))
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
@@ -71,7 +70,7 @@ def create_zone(payload: ProtectedZoneCreate) -> dict[str, Any]:
                 "description": payload.description,
                 "severity": payload.severity,
                 "active": payload.active,
-                "actor": payload.actor,
+                "actor": actor,
                 "geometry": geometry,
             },
         )
@@ -131,6 +130,7 @@ def set_zone_active(
 def update_zone(
     zone_id: UUID,
     payload: ProtectedZoneUpdate,
+    actor: str,
 ) -> dict[str, Any] | None:
     geometry = json.dumps(payload.geometry.model_dump(mode="json"))
     with connection() as conn, conn.cursor() as cursor:
@@ -179,7 +179,7 @@ def update_zone(
                 "description": payload.description,
                 "severity": payload.severity,
                 "active": payload.active,
-                "actor": payload.actor,
+                "actor": actor,
                 "geometry": geometry,
             },
         )

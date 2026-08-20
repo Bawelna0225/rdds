@@ -105,22 +105,19 @@ class SensorRegistration(StrictModel):
     )
     display_name: str = Field(min_length=1, max_length=160)
     position: Position | None = None
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
 class SensorState(StrictModel):
     enabled: bool
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
 class SensorUpdate(StrictModel):
     display_name: str = Field(min_length=1, max_length=160)
     position: Position | None = None
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
 class SensorTokenRotation(StrictModel):
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+    pass
 
 
 class PolygonGeometry(StrictModel):
@@ -160,13 +157,11 @@ class ProtectedZoneCreate(StrictModel):
     description: str | None = Field(default=None, max_length=1000)
     severity: Literal["low", "medium", "high", "critical"] = "high"
     active: bool = True
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
     geometry: PolygonGeometry
 
 
 class ProtectedZoneState(StrictModel):
     active: bool
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
 class ProtectedZoneUpdate(StrictModel):
@@ -175,12 +170,59 @@ class ProtectedZoneUpdate(StrictModel):
     severity: Literal["low", "medium", "high", "critical"]
     active: bool
     geometry: PolygonGeometry
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
 
 
 class EntityDelete(StrictModel):
-    actor: str = Field(default="api-admin", min_length=1, max_length=160)
+    pass
 
 
 class AlertAction(StrictModel):
-    actor: str = Field(min_length=1, max_length=160)
+    pass
+
+
+OperatorRole = Literal["viewer", "operator", "administrator"]
+
+
+class LoginRequest(StrictModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChange(StrictModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=128)
+
+    @model_validator(mode="after")
+    def passwords_must_differ(self) -> "PasswordChange":
+        if self.current_password == self.new_password:
+            raise ValueError("new password must differ from current password")
+        return self
+
+
+class OperatorCreate(StrictModel):
+    username: str = Field(
+        min_length=3,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9._-]{2,63}$",
+    )
+    display_name: str = Field(min_length=1, max_length=160)
+    role: OperatorRole
+    temporary_password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def username_must_be_lowercase(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class OperatorUpdate(StrictModel):
+    display_name: str = Field(min_length=1, max_length=160)
+    role: OperatorRole
+
+
+class OperatorState(StrictModel):
+    enabled: bool
+
+
+class OperatorPasswordReset(StrictModel):
+    temporary_password: str = Field(min_length=12, max_length=128)

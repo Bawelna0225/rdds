@@ -54,6 +54,14 @@ const auditEventLabels = {
   sensor_deleted: "Usunięto sensor",
   sensor_token_issued: "Wydano token sensora",
   sensor_token_rotated: "Zmieniono token sensora",
+  operator_created: "Utworzono konto",
+  operator_updated: "Zmieniono konto",
+  operator_enabled: "Włączono konto",
+  operator_disabled: "Wyłączono konto",
+  operator_deleted: "Usunięto konto",
+  operator_password_changed: "Zmieniono hasło konta",
+  operator_logged_in: "Logowanie operatora",
+  operator_logged_out: "Wylogowanie operatora",
 };
 
 const stateColors = {
@@ -72,21 +80,37 @@ const elements = {
   onlineSensors: document.querySelector("#online-sensors"),
   activeTracks: document.querySelector("#active-tracks"),
   openAlerts: document.querySelector("#open-alerts"),
+  loginScreen: document.querySelector("#login-screen"),
+  loginForm: document.querySelector("#login-form"),
+  loginUsername: document.querySelector("#login-username"),
+  loginPassword: document.querySelector("#login-password"),
+  loginSubmit: document.querySelector("#login-submit"),
+  loginMessage: document.querySelector("#login-message"),
   operatorMenu: document.querySelector("#operator-menu"),
   operatorMenuToggle: document.querySelector("#operator-menu-toggle"),
   operatorStatus: document.querySelector("#operator-status"),
   operatorPanel: document.querySelector("#operator-panel"),
   operatorModeLabel: document.querySelector("#operator-mode-label"),
   operatorLockIndicator: document.querySelector("#operator-lock-indicator"),
-  operatorLoginForm: document.querySelector("#operator-login-form"),
-  operatorName: document.querySelector("#operator-name"),
-  operatorToken: document.querySelector("#operator-token"),
-  operatorUnlock: document.querySelector("#operator-unlock"),
+  passwordForm: document.querySelector("#password-form"),
+  currentPassword: document.querySelector("#current-password"),
+  newPassword: document.querySelector("#new-password"),
+  passwordSubmit: document.querySelector("#password-submit"),
   operatorMessage: document.querySelector("#operator-message"),
   operatorActions: document.querySelector("#operator-actions"),
   operatorLock: document.querySelector("#operator-lock"),
   drawZone: document.querySelector("#draw-zone"),
   registerSensor: document.querySelector("#register-sensor"),
+  manageOperators: document.querySelector("#manage-operators"),
+  operatorEditor: document.querySelector("#operator-editor"),
+  operatorEditorClose: document.querySelector("#operator-editor-close"),
+  operatorCreateForm: document.querySelector("#operator-create-form"),
+  accountUsername: document.querySelector("#account-username"),
+  accountDisplayName: document.querySelector("#account-display-name"),
+  accountRole: document.querySelector("#account-role"),
+  accountPassword: document.querySelector("#account-password"),
+  accountCreate: document.querySelector("#account-create"),
+  operatorList: document.querySelector("#operator-list"),
   trackCount: document.querySelector("#track-count"),
   sensorCount: document.querySelector("#sensor-count"),
   alertCount: document.querySelector("#alert-count"),
@@ -179,8 +203,8 @@ let selectedAuditEvent = null;
 let selectedHistory = null;
 let initialFitComplete = false;
 let refreshInProgress = false;
-let adminToken = null;
-let activeOperator = null;
+let currentUser = null;
+let csrfToken = null;
 let operatorMenuOpen = false;
 let drawingMode = false;
 let drawingPoints = [];
@@ -325,14 +349,14 @@ class ApiError extends Error {
 
 async function requestJson(
   path,
-  { method = "GET", body = null, token = null } = {},
+  { method = "GET", body = null, csrf = false } = {},
 ) {
   const headers = { Accept: "application/json" };
   if (body !== null) {
     headers["Content-Type"] = "application/json";
   }
-  if (token) {
-    headers["X-RDDS-Admin-Token"] = token;
+  if (csrf && csrfToken) {
+    headers["X-RDDS-CSRF-Token"] = csrfToken;
   }
 
   const response = await fetch(path, {
@@ -340,6 +364,7 @@ async function requestJson(
     headers,
     body: body === null ? null : JSON.stringify(body),
     cache: "no-store",
+    credentials: "same-origin",
   });
   if (!response.ok) {
     let detail = response.statusText;
@@ -372,17 +397,25 @@ function showToast(message, error = false) {
 }
 
 async function adminRequest(path, method, body) {
-  if (!adminToken) {
-    throw new ApiError("Tryb operatora jest zablokowany", 401);
+  if (!currentUser || !csrfToken) {
+    throw new ApiError("Sesja użytkownika nie jest aktywna", 401);
   }
   try {
-    return await requestJson(path, { method, body, token: adminToken });
+    return await requestJson(path, { method, body, csrf: true });
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
-      lockOperator("Sesja została zablokowana — podaj aktualny token.");
+      clearSession("Sesja wygasła. Zaloguj się ponownie.");
     }
     throw error;
   }
+}
+
+function canOperate() {
+  return currentUser?.role === "operator" || currentUser?.role === "administrator";
+}
+
+function canAdminister() {
+  return currentUser?.role === "administrator";
 }
 
 function sensorIcon(status) {
@@ -635,9 +668,6 @@ function setOperatorMenuOpen(open) {
 
 function toggleOperatorMenu() {
   setOperatorMenuOpen(!operatorMenuOpen);
-  if (operatorMenuOpen && !adminToken) {
-    elements.operatorName.focus();
-  }
 }
 
 function readSidebarState() {
@@ -683,73 +713,270 @@ function initializeCollapsibleSections() {
 }
 
 function updateOperatorUi(message = null, error = false) {
-  const unlocked = Boolean(adminToken && activeOperator);
-  elements.operatorMenu.classList.toggle("unlocked", unlocked);
-  elements.operatorPanel.classList.toggle("unlocked", unlocked);
-  elements.operatorLoginForm.classList.toggle("hidden", unlocked);
-  elements.operatorActions.classList.toggle("hidden", !unlocked);
-  elements.operatorStatus.classList.toggle("unlocked", unlocked);
-  elements.operatorStatus.textContent = unlocked ? activeOperator : "Obserwator";
-  elements.operatorModeLabel.textContent = unlocked
-    ? `Operator: ${activeOperator}`
-    : "Tylko podgląd";
-  elements.operatorLockIndicator.textContent = unlocked
-    ? "Odblokowany"
-    : "Zablokowany";
+  const authenticated = Boolean(currentUser);
+  elements.operatorMenu.classList.toggle("unlocked", authenticated);
+  elements.operatorPanel.classList.toggle("unlocked", authenticated);
+  elements.operatorStatus.classList.toggle("unlocked", authenticated);
+  elements.operatorStatus.textContent = currentUser?.display_name ?? "—";
+  elements.operatorModeLabel.textContent = currentUser
+    ? `${currentUser.display_name} (${currentUser.username})`
+    : "—";
+  elements.operatorLockIndicator.textContent = currentUser?.role ?? "—";
+  elements.drawZone.classList.toggle("hidden", !canOperate());
+  elements.registerSensor.classList.toggle("hidden", !canAdminister());
+  elements.manageOperators.classList.toggle("hidden", !canAdminister());
+  elements.loginScreen.classList.toggle("hidden", authenticated);
   elements.operatorMessage.classList.toggle("error", error);
   if (message !== null) {
     elements.operatorMessage.textContent = message;
   }
 }
 
-async function unlockOperator(event) {
-  event.preventDefault();
-  const operator = elements.operatorName.value.trim();
-  const token = elements.operatorToken.value.trim();
-
-  if (!operator || token.length < 32) {
-    updateOperatorUi("Podaj nazwę operatora i poprawny token.", true);
-    return;
-  }
-
-  elements.operatorUnlock.disabled = true;
-  elements.operatorMessage.textContent = "Sprawdzanie uprawnień…";
-  elements.operatorMessage.classList.remove("error");
-  try {
-    const verification = await requestJson("/api/v1/admin/verify", { token });
-    adminToken = token;
-    activeOperator = operator;
-    elements.operatorToken.value = "";
-    updateOperatorUi(
-      verification.legacy_ingest_enabled
-        ? "Narzędzia aktywne. Wspólny token sensorów nadal jest dozwolony."
-        : "Narzędzia administracyjne są aktywne.",
-    );
-    renderAlertList(currentAlerts);
-    renderSensorList(currentSensors);
-    renderZoneList(currentZones, currentAlerts);
-    showToast(`Tryb operatora odblokowany: ${operator}`);
-  } catch (error) {
-    adminToken = null;
-    activeOperator = null;
-    elements.operatorToken.value = "";
-    updateOperatorUi("Token został odrzucony przez API.", true);
-  } finally {
-    elements.operatorUnlock.disabled = false;
+function acceptSession(payload) {
+  currentUser = payload.user;
+  csrfToken = payload.csrf_token;
+  updateOperatorUi(
+    currentUser.must_change_password
+      ? "Administrator wymaga zmiany hasła przed użyciem panelu."
+      : "Sesja aktywna.",
+    currentUser.must_change_password,
+  );
+  if (currentUser.must_change_password) {
+    setOperatorMenuOpen(true);
+    elements.currentPassword.focus();
   }
 }
 
-function lockOperator(message = "Token usunięto z pamięci tej karty.") {
+async function login(event) {
+  event.preventDefault();
+  elements.loginSubmit.disabled = true;
+  elements.loginMessage.textContent = "Logowanie…";
+  elements.loginMessage.classList.remove("error");
+  try {
+    const session = await requestJson("/api/v1/auth/login", {
+      method: "POST",
+      body: {
+        username: elements.loginUsername.value.trim().toLowerCase(),
+        password: elements.loginPassword.value,
+      },
+    });
+    elements.loginPassword.value = "";
+    acceptSession(session);
+    renderAlertList(currentAlerts);
+    renderSensorList(currentSensors);
+    renderZoneList(currentZones, currentAlerts);
+    showToast(`Zalogowano jako ${currentUser.display_name}.`);
+    if (!currentUser.must_change_password) {
+      await refresh();
+    }
+  } catch (error) {
+    currentUser = null;
+    csrfToken = null;
+    elements.loginPassword.value = "";
+    elements.loginMessage.textContent = "Nieprawidłowy login lub hasło.";
+    elements.loginMessage.classList.add("error");
+  } finally {
+    elements.loginSubmit.disabled = false;
+  }
+}
+
+function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   cancelZoneDrawing();
   cancelSensorRegistration();
   closeSensorToken();
-  adminToken = null;
-  activeOperator = null;
-  elements.operatorToken.value = "";
-  updateOperatorUi(message);
+  elements.operatorEditor.classList.add("hidden");
+  currentUser = null;
+  csrfToken = null;
+  setOperatorMenuOpen(false);
+  updateOperatorUi();
+  elements.loginMessage.textContent = message;
+  elements.loginMessage.classList.remove("error");
   renderAlertList(currentAlerts);
   renderSensorList(currentSensors);
   renderZoneList(currentZones, currentAlerts);
+  elements.loginUsername.focus();
+}
+
+async function logout() {
+  try {
+    await requestJson("/api/v1/auth/logout", {
+      method: "POST",
+      body: {},
+      csrf: true,
+    });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401)) {
+      showToast(`Wylogowanie nie powiodło się: ${error.message}`, true);
+      return;
+    }
+  }
+  clearSession("Wylogowano bezpiecznie.");
+}
+
+async function changeOwnPassword(event) {
+  event.preventDefault();
+  elements.passwordSubmit.disabled = true;
+  try {
+    await requestJson("/api/v1/auth/password", {
+      method: "POST",
+      body: {
+        current_password: elements.currentPassword.value,
+        new_password: elements.newPassword.value,
+      },
+      csrf: true,
+    });
+    elements.passwordForm.reset();
+    const session = await requestJson("/api/v1/auth/me");
+    acceptSession(session);
+    setOperatorMenuOpen(false);
+    showToast("Hasło zostało zmienione. Pozostałe sesje unieważniono.");
+    await refresh();
+  } catch (error) {
+    updateOperatorUi(`Zmiana hasła nie powiodła się: ${error.message}`, true);
+  } finally {
+    elements.passwordSubmit.disabled = false;
+  }
+}
+
+function renderOperatorAccounts(accounts) {
+  elements.operatorList.replaceChildren();
+  elements.operatorList.classList.toggle("empty-state", accounts.length === 0);
+  if (accounts.length === 0) {
+    elements.operatorList.textContent = "Brak kont operatorów";
+    return;
+  }
+
+  for (const account of accounts) {
+    const card = document.createElement("div");
+    card.className = "entity-card managed-card";
+    const main = document.createElement("div");
+    main.className = "managed-card-main";
+    const title = document.createElement("strong");
+    title.textContent = `${account.display_name} (${account.username})`;
+    const meta = document.createElement("div");
+    meta.className = "entity-meta";
+    meta.textContent = `${account.role} · ${account.enabled ? "aktywne" : "zablokowane"}${account.must_change_password ? " · wymagana zmiana hasła" : ""}`;
+    main.append(title, meta);
+    card.append(main);
+
+    const actions = document.createElement("div");
+    actions.className = "managed-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edytuj";
+    edit.addEventListener("click", async () => {
+      const displayName = window.prompt("Nazwa wyświetlana:", account.display_name);
+      if (!displayName) return;
+      const role = window.prompt(
+        "Rola: viewer, operator lub administrator",
+        account.role,
+      );
+      if (!["viewer", "operator", "administrator"].includes(role)) {
+        showToast("Nieprawidłowa rola.", true);
+        return;
+      }
+      try {
+        await adminRequest(`/api/v1/operators/${account.id}`, "PUT", {
+          display_name: displayName.trim(),
+          role,
+        });
+        await loadOperatorAccounts();
+      } catch (error) {
+        showToast(`Edycja konta nie powiodła się: ${error.message}`, true);
+      }
+    });
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = account.enabled ? "Zablokuj" : "Odblokuj";
+    toggle.disabled = account.id === currentUser.id;
+    toggle.addEventListener("click", async () => {
+      toggle.disabled = true;
+      try {
+        await adminRequest(`/api/v1/operators/${account.id}`, "PATCH", {
+          enabled: !account.enabled,
+        });
+        await loadOperatorAccounts();
+      } catch (error) {
+        showToast(`Zmiana konta nie powiodła się: ${error.message}`, true);
+      } finally {
+        toggle.disabled = false;
+      }
+    });
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.textContent = "Resetuj hasło";
+    reset.disabled = account.id === currentUser.id;
+    reset.addEventListener("click", async () => {
+      const temporaryPassword = window.prompt(
+        `Podaj nowe hasło tymczasowe dla ${account.username} (min. 12 znaków):`,
+      );
+      if (!temporaryPassword) return;
+      try {
+        await adminRequest(`/api/v1/operators/${account.id}/password/reset`, "POST", {
+          temporary_password: temporaryPassword,
+        });
+        showToast("Hasło tymczasowe ustawione; aktywne sesje konta unieważniono.");
+        await loadOperatorAccounts();
+      } catch (error) {
+        showToast(`Reset hasła nie powiódł się: ${error.message}`, true);
+      }
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "Usuń";
+    remove.disabled = account.id === currentUser.id;
+    remove.addEventListener("click", async () => {
+      if (!window.confirm(`Usunąć konto ${account.username}?`)) return;
+      try {
+        await adminRequest(`/api/v1/operators/${account.id}`, "DELETE", {});
+        await loadOperatorAccounts();
+      } catch (error) {
+        showToast(`Usunięcie konta nie powiodło się: ${error.message}`, true);
+      }
+    });
+    actions.append(edit, toggle, reset, remove);
+    card.append(actions);
+    elements.operatorList.append(card);
+  }
+}
+
+async function loadOperatorAccounts() {
+  const payload = await fetchJson("/api/v1/operators");
+  renderOperatorAccounts(payload.operators ?? []);
+}
+
+async function openOperatorEditor() {
+  if (!canAdminister()) return;
+  setOperatorMenuOpen(false);
+  elements.operatorEditor.classList.remove("hidden");
+  try {
+    await loadOperatorAccounts();
+  } catch (error) {
+    showToast(`Nie udało się pobrać kont: ${error.message}`, true);
+  }
+}
+
+async function createOperatorAccount(event) {
+  event.preventDefault();
+  elements.accountCreate.disabled = true;
+  try {
+    await adminRequest("/api/v1/operators", "POST", {
+      username: elements.accountUsername.value.trim().toLowerCase(),
+      display_name: elements.accountDisplayName.value.trim(),
+      role: elements.accountRole.value,
+      temporary_password: elements.accountPassword.value,
+    });
+    elements.operatorCreateForm.reset();
+    showToast("Konto utworzone. Przy pierwszym logowaniu użytkownik zmieni hasło.");
+    await loadOperatorAccounts();
+  } catch (error) {
+    showToast(`Utworzenie konta nie powiodło się: ${error.message}`, true);
+  } finally {
+    elements.accountCreate.disabled = false;
+  }
 }
 
 async function runAlertAction(alert, action, button) {
@@ -758,7 +985,7 @@ async function runAlertAction(alert, action, button) {
     await adminRequest(
       `/api/v1/alerts/${encodeURIComponent(alert.id)}/${action}`,
       "POST",
-      { actor: activeOperator },
+      {},
     );
     showToast(
       action === "acknowledge"
@@ -816,7 +1043,7 @@ function renderAlertList(alerts) {
     main.append(titleRow, meta);
     card.append(main);
 
-    if (adminToken && alert.state !== "closed") {
+    if (canOperate() && alert.state !== "closed") {
       const actions = document.createElement("div");
       actions.className = "managed-actions";
       if (alert.state === "active") {
@@ -860,7 +1087,9 @@ function renderAuditList(events) {
       ? "alert"
       : event.event_type.startsWith("sensor_")
         ? "sensor"
-        : "zone";
+        : event.event_type.startsWith("operator_")
+          ? "operator"
+          : "zone";
     card.className = `entity-card audit-card audit-${category}${selected ? " selected" : ""}`;
     card.addEventListener("click", () => selectAuditEvent(event));
 
@@ -883,9 +1112,12 @@ function renderAuditList(events) {
       event.zone_name ||
       event.sensor_name ||
       event.sensor_key ||
+      event.account_display_name ||
+      event.account_username ||
       "system";
     const context = document.createElement("span");
-    context.textContent = event.zone_name || event.sensor_key || "—";
+    context.textContent =
+      event.zone_name || event.sensor_key || event.account_role || "—";
     const time = document.createElement("span");
     time.textContent = formatDateTime(event.occurred_at);
     meta.append(subject, context, time);
@@ -938,7 +1170,7 @@ async function runSensorStateChange(sensor, enabled, button) {
     await adminRequest(
       `/api/v1/sensors/${encodeURIComponent(sensor.id)}`,
       "PATCH",
-      { enabled, actor: activeOperator },
+      { enabled },
     );
     showToast(
       `Sensor „${sensor.display_name}” został ${enabled ? "włączony" : "wyłączony"}.`,
@@ -966,7 +1198,7 @@ async function runSensorTokenRotation(sensor, button) {
     const response = await adminRequest(
       `/api/v1/sensors/${encodeURIComponent(sensor.id)}/token/rotate`,
       "POST",
-      { actor: activeOperator },
+      {},
     );
     showSensorToken(response.sensor, response.credential);
     await refresh();
@@ -991,7 +1223,7 @@ async function runSensorDeletion(sensor, button) {
     await adminRequest(
       `/api/v1/sensors/${encodeURIComponent(sensor.id)}`,
       "DELETE",
-      { actor: activeOperator },
+      {},
     );
     if (selectedSensorId === sensor.id) {
       clearSelection();
@@ -1045,7 +1277,7 @@ function renderSensorList(sensors) {
     main.append(titleRow, meta);
     card.append(main);
 
-    if (adminToken) {
+    if (canAdminister()) {
       const actions = document.createElement("div");
       actions.className = "managed-actions";
       const edit = document.createElement("button");
@@ -1083,7 +1315,7 @@ async function runZoneStateChange(zone, active, button) {
     await adminRequest(
       `/api/v1/zones/${encodeURIComponent(zone.id)}`,
       "PATCH",
-      { active, actor: activeOperator },
+      { active },
     );
     showToast(`Strefa „${zone.name}” została ${active ? "włączona" : "wyłączona"}.`);
     await refresh();
@@ -1108,7 +1340,7 @@ async function runZoneDeletion(zone, button) {
     await adminRequest(
       `/api/v1/zones/${encodeURIComponent(zone.id)}`,
       "DELETE",
-      { actor: activeOperator },
+      {},
     );
     showToast(`Strefa „${zone.name}” została usunięta.`);
     await refresh();
@@ -1169,7 +1401,7 @@ function renderZoneList(zones, alerts) {
     main.append(titleRow, meta);
     card.append(main);
 
-    if (adminToken) {
+    if (canOperate()) {
       const actions = document.createElement("div");
       actions.className = "managed-actions";
       const edit = document.createElement("button");
@@ -1188,7 +1420,10 @@ function renderZoneList(zones, alerts) {
       remove.className = "danger-button";
       remove.textContent = "Usuń";
       remove.addEventListener("click", () => runZoneDeletion(zone, remove));
-      actions.append(edit, toggle, remove);
+      actions.append(edit, toggle);
+      if (canAdminister()) {
+        actions.append(remove);
+      }
       card.append(actions);
     }
 
@@ -1275,7 +1510,9 @@ function renderAuditTimeline(events) {
       ? "alert"
       : event.event_type.startsWith("sensor_")
         ? "sensor"
-        : "zone";
+        : event.event_type.startsWith("operator_")
+          ? "operator"
+          : "zone";
     item.className = `timeline-event ${category}`;
     const marker = document.createElement("span");
     marker.className = "timeline-marker";
@@ -1301,6 +1538,8 @@ function renderAuditSelection(event) {
     detailItem("Operator drona", event.operator_id),
     detailItem("Strefa", event.zone_name),
     detailItem("Sensor", event.sensor_name || event.sensor_key),
+    detailItem("Konto", event.account_display_name || event.account_username),
+    detailItem("Rola konta", event.account_role),
     detailItem("Poziom", severityLabel(event.alert_severity || event.details?.severity)),
     detailItem("Stan alarmu", stateLabel(event.alert_state)),
   );
@@ -1321,6 +1560,8 @@ async function refreshSelectedAuditTimeline() {
     parameter = `zone_id=${encodeURIComponent(selectedAuditEvent.zone_id)}`;
   } else if (selectedAuditEvent.sensor_id) {
     parameter = `sensor_id=${encodeURIComponent(selectedAuditEvent.sensor_id)}`;
+  } else if (selectedAuditEvent.operator_account_id) {
+    parameter = `operator_account_id=${encodeURIComponent(selectedAuditEvent.operator_account_id)}`;
   }
   if (!parameter) {
     renderAuditTimeline([selectedAuditEvent]);
@@ -1505,8 +1746,8 @@ function setZoneEditorStep(step) {
 }
 
 function startZoneDrawing() {
-  if (!adminToken) {
-    showToast("Najpierw odblokuj tryb operatora.", true);
+  if (!canOperate()) {
+    showToast("Ta operacja wymaga roli operator lub administrator.", true);
     return;
   }
 
@@ -1536,8 +1777,8 @@ function startZoneDrawing() {
 }
 
 function startZoneEditing(zone) {
-  if (!adminToken) {
-    showToast("Najpierw odblokuj tryb operatora.", true);
+  if (!canOperate()) {
+    showToast("Ta operacja wymaga roli operator lub administrator.", true);
     return;
   }
 
@@ -1639,8 +1880,8 @@ function cancelZoneDrawing() {
 }
 
 function startSensorRegistration() {
-  if (!adminToken) {
-    showToast("Najpierw odblokuj tryb operatora.", true);
+  if (!canAdminister()) {
+    showToast("Ta operacja wymaga roli administrator.", true);
     return;
   }
 
@@ -1664,8 +1905,8 @@ function startSensorRegistration() {
 }
 
 function startSensorEditing(sensor) {
-  if (!adminToken) {
-    showToast("Najpierw odblokuj tryb operatora.", true);
+  if (!canAdminister()) {
+    showToast("Ta operacja wymaga roli administrator.", true);
     return;
   }
 
@@ -1760,8 +2001,8 @@ async function copySensorToken() {
 
 async function saveSensorRegistration(event) {
   event.preventDefault();
-  if (!adminToken) {
-    showToast("Tryb operatora jest zablokowany.", true);
+  if (!canAdminister()) {
+    showToast("Ta operacja wymaga roli administrator.", true);
     return;
   }
 
@@ -1781,7 +2022,6 @@ async function saveSensorRegistration(event) {
           longitude: Number(longitudeText),
         }
       : null,
-    actor: activeOperator,
   };
   if (!sensorId) {
     payload.sensor_key = elements.sensorKey.value.trim();
@@ -1813,7 +2053,7 @@ async function saveSensorRegistration(event) {
 
 async function saveDrawnZone(event) {
   event.preventDefault();
-  if (!adminToken || drawingPoints.length < 3) {
+  if (!canOperate() || drawingPoints.length < 3) {
     showToast("Nie można zapisać niekompletnej strefy.", true);
     return;
   }
@@ -1829,7 +2069,6 @@ async function saveDrawnZone(event) {
     description: elements.zoneDescription.value.trim() || null,
     severity: elements.zoneSeverity.value,
     active: elements.zoneActive.checked,
-    actor: activeOperator,
     geometry: {
       type: "Polygon",
       coordinates: [coordinates],
@@ -1907,7 +2146,7 @@ function downloadAudit(format) {
 }
 
 async function refresh() {
-  if (refreshInProgress) {
+  if (refreshInProgress || !currentUser || currentUser.must_change_password) {
     return;
   }
   refreshInProgress = true;
@@ -1990,7 +2229,11 @@ async function refresh() {
     elements.lastUpdate.textContent = `Aktualizacja ${new Date().toLocaleTimeString("pl-PL")}`;
   } catch (error) {
     console.error("Odświeżenie mapy nie powiodło się", error);
-    setConnection(false, "Brak połączenia z API");
+    if (error instanceof ApiError && error.status === 401) {
+      clearSession("Sesja wygasła. Zaloguj się ponownie.");
+    } else {
+      setConnection(false, "Brak połączenia z API");
+    }
   } finally {
     refreshInProgress = false;
   }
@@ -2007,10 +2250,16 @@ elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
 elements.operatorMenuToggle.addEventListener("click", toggleOperatorMenu);
-elements.operatorLoginForm.addEventListener("submit", unlockOperator);
-elements.operatorLock.addEventListener("click", () => lockOperator());
+elements.loginForm.addEventListener("submit", login);
+elements.passwordForm.addEventListener("submit", changeOwnPassword);
+elements.operatorLock.addEventListener("click", logout);
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
+elements.manageOperators.addEventListener("click", openOperatorEditor);
+elements.operatorEditorClose.addEventListener("click", () => {
+  elements.operatorEditor.classList.add("hidden");
+});
+elements.operatorCreateForm.addEventListener("submit", createOperatorAccount);
 elements.zoneUndoPoint.addEventListener("click", undoZonePoint);
 elements.zoneClearPoints.addEventListener("click", clearZonePoints);
 elements.zoneFinishDrawing.addEventListener("click", finishZoneDrawing);
@@ -2049,5 +2298,22 @@ document.addEventListener("keydown", (event) => {
 initializeCollapsibleSections();
 updateOperatorUi();
 setOperatorMenuOpen(false);
-refresh();
+
+async function restoreSession() {
+  try {
+    const session = await requestJson("/api/v1/auth/me");
+    acceptSession(session);
+    if (!currentUser.must_change_password) {
+      await refresh();
+    }
+  } catch (error) {
+    clearSession(
+      error instanceof ApiError && error.status === 401
+        ? "Zaloguj się kontem RDDS."
+        : "API uwierzytelniania jest niedostępne.",
+    );
+  }
+}
+
+restoreSession();
 setInterval(refresh, REFRESH_INTERVAL_MS);

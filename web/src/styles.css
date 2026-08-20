@@ -37,6 +37,59 @@ body {
     var(--bg);
 }
 
+.login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(67, 213, 255, 0.1), transparent 38%),
+    rgba(7, 9, 13, 0.99);
+}
+
+.login-card {
+  width: min(390px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid rgba(67, 213, 255, 0.28);
+  background: rgba(13, 17, 24, 0.98);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
+}
+
+.login-brand {
+  margin-bottom: 8px;
+}
+
+.login-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.login-card input,
+.login-card button {
+  width: 100%;
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: #0a0e14;
+  padding: 10px;
+}
+
+.login-card input:focus {
+  outline: none;
+  border-color: rgba(67, 213, 255, 0.62);
+}
+
+.login-card button {
+  cursor: pointer;
+  border-color: rgba(67, 213, 255, 0.42);
+  background: rgba(67, 213, 255, 0.12);
+}
+
 button,
 input,
 select,
@@ -345,7 +398,8 @@ button {
 .zone-form input,
 .zone-form select,
 .zone-form textarea,
-.sensor-form input {
+.sensor-form input,
+.sensor-form select {
   min-width: 0;
   width: 100%;
   color: var(--text);
@@ -360,7 +414,8 @@ button {
 .zone-form input:focus,
 .zone-form select:focus,
 .zone-form textarea:focus,
-.sensor-form input:focus {
+.sensor-form input:focus,
+.sensor-form select:focus {
   border-color: rgba(67, 213, 255, 0.62);
 }
 
@@ -732,6 +787,10 @@ button.entity-card.selected {
   border-left-color: var(--cyan);
 }
 
+.audit-card.audit-operator {
+  border-left-color: var(--purple);
+}
+
 .audit-actor {
   max-width: 92px;
   overflow: hidden;
@@ -1012,6 +1071,23 @@ button.entity-card.selected {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
 }
 
+.operator-editor {
+  width: min(620px, calc(100% - 28px));
+}
+
+.operator-editor-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.operator-editor .entity-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 .zone-editor h2,
 .sensor-editor h2,
 .sensor-token-panel h2 {
@@ -1197,6 +1273,10 @@ button.entity-card.selected {
 
 .timeline-event.sensor .timeline-marker {
   border-color: var(--cyan);
+}
+
+.timeline-event.operator .timeline-marker {
+  border-color: var(--purple);
 }
 
 .timeline-event strong,
