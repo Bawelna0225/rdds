@@ -63,7 +63,7 @@ from app.models import (
     SensorTokenRotation,
     SensorUpdate,
 )
-from app.operations_store import get_maintenance_status
+from app.operations_store import get_database_storage, get_maintenance_status
 from app.security import (
     SESSION_COOKIE_NAME,
     IngestPrincipal,
@@ -120,7 +120,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.13.1",
+    version="0.14.0",
     lifespan=lifespan,
 )
 
@@ -307,6 +307,26 @@ def get_system_maintenance(
     return {
         "time": utc_now(),
         **status_payload,
+    }
+
+
+@app.get(
+    "/api/v1/system/storage",
+    tags=["system"],
+    dependencies=[Depends(require_administrator)],
+)
+def get_system_storage(
+    _: OperatorPrincipal = Depends(require_administrator),
+) -> dict[str, object]:
+    try:
+        storage_payload = get_database_storage()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Database storage query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        **storage_payload,
     }
 
 

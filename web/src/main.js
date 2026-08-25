@@ -5,6 +5,7 @@ import { forward as toMgrs } from "mgrs";
 import "./styles.css";
 
 const REFRESH_INTERVAL_MS = 2000;
+const STORAGE_REFRESH_INTERVAL_MS = 60000;
 const DEFAULT_CENTER = [52.2297, 21.0122];
 const SIDEBAR_STATE_KEY = "rdds.sidebar.sections.v1";
 
@@ -104,6 +105,14 @@ const elements = {
   drawZone: document.querySelector("#draw-zone"),
   registerSensor: document.querySelector("#register-sensor"),
   manageOperators: document.querySelector("#manage-operators"),
+  storagePanel: document.querySelector("#storage-panel"),
+  storageRefresh: document.querySelector("#storage-refresh"),
+  storageUsage: document.querySelector("#storage-usage"),
+  storageMeter: document.querySelector("#storage-meter"),
+  storageBar: document.querySelector("#storage-bar"),
+  storagePercent: document.querySelector("#storage-percent"),
+  storageLargestTable: document.querySelector("#storage-largest-table"),
+  storageMessage: document.querySelector("#storage-message"),
   operatorEditor: document.querySelector("#operator-editor"),
   operatorEditorClose: document.querySelector("#operator-editor-close"),
   operatorCreateForm: document.querySelector("#operator-create-form"),
@@ -125,6 +134,7 @@ const elements = {
   zoneList: document.querySelector("#zone-list"),
   auditList: document.querySelector("#audit-list"),
   auditCategory: document.querySelector("#audit-category"),
+  auditRefresh: document.querySelector("#audit-refresh"),
   auditExportCsv: document.querySelector("#audit-export-csv"),
   auditExportJson: document.querySelector("#audit-export-json"),
   showEnded: document.querySelector("#show-ended"),
@@ -211,8 +221,12 @@ const liveTrailLayers = new Map();
 const zoneLayers = new Map();
 let currentSensors = [];
 let currentTracks = [];
+let currentLiveTracks = [];
+let currentLiveTrails = [];
 let currentZones = [];
 let currentAlerts = [];
+let currentOpenAlerts = [];
+let currentClosedAlerts = [];
 let currentAuditEvents = [];
 let currentAuditTotal = 0;
 let selectedTrackId = null;
@@ -238,7 +252,15 @@ let archivePreviewMarker = null;
 let archivePreviewPilotMarker = null;
 let archivePreviewOperatorLine = null;
 let initialFitComplete = false;
+let initialLiveDataLoaded = false;
 let refreshInProgress = false;
+let archiveLoadInProgress = false;
+let closedAlertsLoadInProgress = false;
+let zonesLoadInProgress = false;
+let auditLoadInProgress = false;
+let zonesLoaded = false;
+let storageRefreshInProgress = false;
+let lastStorageRefreshAt = 0;
 let currentUser = null;
 let csrfToken = null;
 let operatorMenuOpen = false;
@@ -286,6 +308,12 @@ function formatInteger(value) {
 function formatBytes(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "—";
+  }
+  if (value >= 1024 ** 4) {
+    return `${(value / 1024 ** 4).toFixed(2)} TiB`;
+  }
+  if (value >= 1024 ** 3) {
+    return `${(value / 1024 ** 3).toFixed(2)} GiB`;
   }
   if (value >= 1024 * 1024) {
     return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
@@ -382,9 +410,7 @@ function auditEventLabel(eventType) {
 }
 
 function openAlertCountForTrack(trackId) {
-  return currentAlerts.filter(
-    (alert) => alert.track_id === trackId && alert.state !== "closed",
-  ).length;
+  return currentOpenAlerts.filter((alert) => alert.track_id === trackId).length;
 }
 
 function setConnection(online, message) {
@@ -435,6 +461,130 @@ function fetchJson(path) {
   return requestJson(path);
 }
 
+function renderLoadingCards(list, count = 3) {
+  list.replaceChildren();
+  list.classList.remove("empty-state");
+  list.classList.add("loading-list");
+  list.setAttribute("aria-busy", "true");
+  for (let index = 0; index < count; index += 1) {
+    const card = document.createElement("div");
+    card.className = "loading-card";
+    card.setAttribute("aria-hidden", "true");
+    const title = document.createElement("span");
+    title.className = "loading-line loading-line-title";
+    const meta = document.createElement("span");
+    meta.className = "loading-line loading-line-meta";
+    card.append(title, meta);
+    list.append(card);
+  }
+}
+
+function finishListLoading(list) {
+  list.classList.remove("loading-list");
+  list.removeAttribute("aria-busy");
+}
+
+function renderListFailure(list, message) {
+  list.replaceChildren();
+  finishListLoading(list);
+  list.classList.add("empty-state");
+  list.textContent = message;
+}
+
+function storageStatusMessage(status, thresholds) {
+  if (status === "warning") {
+    return `Przekroczono próg ostrzegawczy ${thresholds.warning_percent}%.`;
+  }
+  if (status === "critical") {
+    return `Przekroczono próg krytyczny ${thresholds.critical_percent}%.`;
+  }
+  if (status === "exceeded") {
+    return "Skonfigurowany budżet bazy został przekroczony.";
+  }
+  if (status === "unconfigured") {
+    return "Ustaw RDDS_DATABASE_CAPACITY_GB, aby włączyć procent wykorzystania.";
+  }
+  return "Wykorzystanie mieści się poniżej progu ostrzegawczego.";
+}
+
+function renderStorageUsage(payload) {
+  const status = payload.status ?? "unconfigured";
+  const usedPercent = payload.used_percent;
+  const capacityBytes = payload.capacity_bytes;
+  const largestTable = payload.largest_tables?.[0];
+
+  elements.storagePanel.classList.remove(
+    "storage-ok",
+    "storage-warning",
+    "storage-critical",
+    "storage-exceeded",
+    "storage-unconfigured",
+  );
+  elements.storagePanel.classList.add(`storage-${status}`);
+  elements.storageMeter.classList.toggle("unconfigured", usedPercent === null);
+  elements.storageBar.style.width = `${Math.min(100, Math.max(0, usedPercent ?? 0))}%`;
+  elements.storageUsage.textContent = capacityBytes
+    ? `${formatBytes(payload.database_size_bytes)} / ${formatBytes(capacityBytes)}`
+    : `${formatBytes(payload.database_size_bytes)} · limit nieustawiony`;
+  elements.storagePercent.textContent = usedPercent === null
+    ? "Brak limitu"
+    : `${usedPercent.toLocaleString("pl-PL", { maximumFractionDigits: 2 })}%`;
+  elements.storageLargestTable.textContent = largestTable
+    ? `Największa: ${largestTable.table_name} · ${formatBytes(largestTable.size_bytes)}`
+    : "Brak tabel użytkownika";
+  elements.storageMessage.textContent = storageStatusMessage(
+    status,
+    payload.thresholds,
+  );
+  if (usedPercent === null) {
+    elements.storageMeter.removeAttribute("aria-valuenow");
+  } else {
+    elements.storageMeter.setAttribute("aria-valuenow", String(usedPercent));
+  }
+}
+
+async function loadStorageUsage(force = false) {
+  if (!canAdminister() || storageRefreshInProgress) {
+    return;
+  }
+  if (
+    !force &&
+    lastStorageRefreshAt > 0 &&
+    Date.now() - lastStorageRefreshAt < STORAGE_REFRESH_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  storageRefreshInProgress = true;
+  elements.storageRefresh.disabled = true;
+  elements.storageRefresh.setAttribute("aria-busy", "true");
+  elements.storagePanel.setAttribute("aria-busy", "true");
+  if (lastStorageRefreshAt === 0) {
+    elements.storageUsage.textContent = "Wczytywanie…";
+    elements.storageMessage.textContent = "Pobieranie informacji o bazie…";
+  }
+  try {
+    const payload = await fetchJson("/api/v1/system/storage");
+    renderStorageUsage(payload);
+    lastStorageRefreshAt = Date.now();
+  } catch (error) {
+    elements.storagePanel.classList.remove(
+      "storage-ok",
+      "storage-warning",
+      "storage-critical",
+      "storage-exceeded",
+      "storage-unconfigured",
+    );
+    elements.storagePanel.classList.add("storage-critical");
+    elements.storageMessage.textContent = `Nie udało się pobrać danych: ${error.message}`;
+  } finally {
+    storageRefreshInProgress = false;
+    elements.storageRefresh.disabled = false;
+    elements.storageRefresh.removeAttribute("aria-busy");
+    elements.storagePanel.removeAttribute("aria-busy");
+  }
+}
+
 function showToast(message, error = false) {
   if (toastTimeout) {
     clearTimeout(toastTimeout);
@@ -482,9 +632,7 @@ function sensorIcon(status) {
 function droneIcon(track) {
   const heading = isCoordinate(track.heading_deg) ? track.heading_deg : 0;
   const state = track.state ?? "ended";
-  const hasOpenAlert = currentAlerts.some(
-    (alert) => alert.track_id === track.id && alert.state !== "closed",
-  );
+  const hasOpenAlert = currentOpenAlerts.some((alert) => alert.track_id === track.id);
   return L.divIcon({
     className: "",
     html: `<div class="drone-marker ${escapeHtml(state)}${hasOpenAlert ? " alerting" : ""}" style="--heading:${heading}deg"></div>`,
@@ -827,6 +975,7 @@ function updateOperatorUi(message = null, error = false) {
   elements.drawZone.classList.toggle("hidden", !canOperate());
   elements.registerSensor.classList.toggle("hidden", !canAdminister());
   elements.manageOperators.classList.toggle("hidden", !canAdminister());
+  elements.storagePanel.classList.toggle("hidden", !canAdminister());
   elements.loginScreen.classList.toggle("hidden", authenticated);
   elements.operatorMessage.classList.toggle("error", error);
   if (message !== null) {
@@ -846,6 +995,8 @@ function acceptSession(payload) {
   if (currentUser.must_change_password) {
     setOperatorMenuOpen(true);
     elements.currentPassword.focus();
+  } else if (canAdminister()) {
+    void loadStorageUsage();
   }
 }
 
@@ -869,7 +1020,7 @@ async function login(event) {
     renderZoneList(currentZones, currentAlerts);
     showToast(`Zalogowano jako ${currentUser.display_name}.`);
     if (!currentUser.must_change_password) {
-      await refresh();
+      await loadInitialDashboard();
     }
   } catch (error) {
     currentUser = null;
@@ -889,13 +1040,42 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   elements.operatorEditor.classList.add("hidden");
   currentUser = null;
   csrfToken = null;
+  initialLiveDataLoaded = false;
+  zonesLoaded = false;
+  currentSensors = [];
+  currentTracks = [];
+  currentLiveTracks = [];
+  currentLiveTrails = [];
+  currentZones = [];
+  currentAlerts = [];
+  currentOpenAlerts = [];
+  currentClosedAlerts = [];
+  currentAuditEvents = [];
+  currentAuditTotal = 0;
+  elements.showEnded.checked = false;
+  elements.showClosedAlerts.checked = false;
+  updateSensorMarkers([]);
+  updateTrackMarkers([]);
+  updateLiveTrailLayers([], []);
+  updateZoneLayers([], []);
+  lastStorageRefreshAt = 0;
   setOperatorMenuOpen(false);
   updateOperatorUi();
   elements.loginMessage.textContent = message;
   elements.loginMessage.classList.remove("error");
   renderAlertList(currentAlerts);
   renderSensorList(currentSensors);
+  renderTrackList(currentTracks);
   renderZoneList(currentZones, currentAlerts);
+  renderAuditList(currentAuditEvents);
+  elements.onlineSensors.textContent = "0";
+  elements.activeTracks.textContent = "0";
+  elements.openAlerts.textContent = "0";
+  elements.sensorCount.textContent = "0";
+  elements.trackCount.textContent = "0";
+  elements.alertCount.textContent = "0";
+  elements.zoneCount.textContent = "0";
+  elements.auditCount.textContent = "0";
   elements.loginUsername.focus();
 }
 
@@ -932,7 +1112,7 @@ async function changeOwnPassword(event) {
     acceptSession(session);
     setOperatorMenuOpen(false);
     showToast("Hasło zostało zmienione. Pozostałe sesje unieważniono.");
-    await refresh();
+    await loadInitialDashboard();
   } catch (error) {
     updateOperatorUi(`Zmiana hasła nie powiodła się: ${error.message}`, true);
   } finally {
@@ -1046,8 +1226,14 @@ function renderOperatorAccounts(accounts) {
 }
 
 async function loadOperatorAccounts() {
-  const payload = await fetchJson("/api/v1/operators");
-  renderOperatorAccounts(payload.operators ?? []);
+  renderLoadingCards(elements.operatorList, 4);
+  try {
+    const payload = await fetchJson("/api/v1/operators");
+    renderOperatorAccounts(payload.operators ?? []);
+  } finally {
+    elements.operatorList.classList.remove("loading-list");
+    elements.operatorList.removeAttribute("aria-busy");
+  }
 }
 
 async function openOperatorEditor() {
@@ -1095,6 +1281,9 @@ async function runAlertAction(alert, action, button) {
         : `Alarm został zamknięty. Jeśli naruszenie trwa, system otworzy nowy.`,
     );
     await refresh();
+    if (elements.showClosedAlerts.checked) {
+      await loadClosedAlerts();
+    }
   } catch (error) {
     showToast(`Operacja na alarmie nie powiodła się: ${error.message}`, true);
   } finally {
@@ -1107,7 +1296,9 @@ function renderAlertList(alerts) {
   elements.alertList.classList.toggle("empty-state", alerts.length === 0);
 
   if (alerts.length === 0) {
-    elements.alertList.textContent = "Brak otwartych alarmów";
+    elements.alertList.textContent = elements.showClosedAlerts.checked
+      ? "Brak zapisanych alarmów"
+      : "Brak otwartych alarmów";
     return;
   }
 
@@ -1428,6 +1619,7 @@ async function runZoneStateChange(zone, active, button) {
       { active },
     );
     showToast(`Strefa „${zone.name}” została ${active ? "włączona" : "wyłączona"}.`);
+    await loadZones();
     await refresh();
   } catch (error) {
     showToast(`Zmiana strefy nie powiodła się: ${error.message}`, true);
@@ -1453,6 +1645,7 @@ async function runZoneDeletion(zone, button) {
       {},
     );
     showToast(`Strefa „${zone.name}” została usunięta.`);
+    await loadZones();
     await refresh();
   } catch (error) {
     showToast(`Nie udało się usunąć strefy: ${error.message}`, true);
@@ -1541,6 +1734,148 @@ function renderZoneList(zones, alerts) {
   }
 }
 
+function alertTime(alert) {
+  const value = new Date(alert.last_detected_at ?? alert.closed_at ?? 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function combineDisplayedAlerts() {
+  currentAlerts = elements.showClosedAlerts.checked
+    ? [...currentOpenAlerts, ...currentClosedAlerts].sort(
+        (left, right) => alertTime(right) - alertTime(left),
+      )
+    : [...currentOpenAlerts];
+}
+
+function renderAlertSnapshot() {
+  combineDisplayedAlerts();
+  renderAlertList(currentAlerts);
+  elements.alertCount.textContent = String(currentAlerts.length);
+  elements.openAlerts.textContent = String(currentOpenAlerts.length);
+  if (zonesLoaded) {
+    updateZoneLayers(currentZones, currentOpenAlerts);
+    renderZoneList(currentZones, currentOpenAlerts);
+  }
+}
+
+async function loadClosedAlerts() {
+  if (closedAlertsLoadInProgress || !currentUser) {
+    return;
+  }
+  closedAlertsLoadInProgress = true;
+  elements.showClosedAlerts.disabled = true;
+  renderLoadingCards(elements.alertList);
+  try {
+    const payload = await fetchJson("/api/v1/alerts?include_closed=true&limit=1000");
+    currentClosedAlerts = (payload.alerts ?? []).filter(
+      (alert) => alert.state === "closed",
+    );
+    renderAlertSnapshot();
+  } catch (error) {
+    renderListFailure(elements.alertList, "Nie udało się wczytać archiwum alarmów");
+    console.error("Nie udało się pobrać zamkniętych alarmów", error);
+  } finally {
+    finishListLoading(elements.alertList);
+    elements.showClosedAlerts.disabled = false;
+    closedAlertsLoadInProgress = false;
+  }
+}
+
+async function loadArchivedTracks() {
+  if (archiveLoadInProgress || !currentUser) {
+    return;
+  }
+  archiveLoadInProgress = true;
+  elements.showEnded.disabled = true;
+  elements.trackSectionTitle.textContent = "Archiwum tras";
+  elements.trackCount.textContent = "…";
+  renderLoadingCards(elements.trackList, 4);
+  updateTrackMarkers([]);
+  updateLiveTrailLayers([], []);
+  try {
+    const payload = await fetchJson("/api/v1/tracks?include_ended=true");
+    if (!elements.showEnded.checked) {
+      return;
+    }
+    currentTracks = (payload.tracks ?? []).filter(
+      (track) => track.state === "ended",
+    );
+    renderTrackList(currentTracks);
+    elements.trackCount.textContent = String(currentTracks.length);
+  } catch (error) {
+    renderListFailure(elements.trackList, "Nie udało się wczytać archiwum tras");
+    console.error("Nie udało się pobrać archiwum tras", error);
+  } finally {
+    finishListLoading(elements.trackList);
+    elements.showEnded.disabled = false;
+    archiveLoadInProgress = false;
+  }
+}
+
+async function loadZones({ showLoader = true } = {}) {
+  if (zonesLoadInProgress || !currentUser) {
+    return;
+  }
+  zonesLoadInProgress = true;
+  if (showLoader) {
+    renderLoadingCards(elements.zoneList, 2);
+  }
+  try {
+    const payload = await fetchJson("/api/v1/zones");
+    currentZones = payload.zones ?? [];
+    zonesLoaded = true;
+    updateZoneLayers(currentZones, currentOpenAlerts);
+    renderZoneList(currentZones, currentOpenAlerts);
+    elements.zoneCount.textContent = String(currentZones.length);
+  } catch (error) {
+    if (showLoader) {
+      renderListFailure(elements.zoneList, "Nie udało się wczytać stref");
+    }
+    console.error("Nie udało się pobrać stref", error);
+  } finally {
+    finishListLoading(elements.zoneList);
+    zonesLoadInProgress = false;
+  }
+}
+
+async function loadAuditEvents() {
+  if (auditLoadInProgress || !currentUser) {
+    return;
+  }
+  auditLoadInProgress = true;
+  elements.auditCategory.disabled = true;
+  elements.auditRefresh.disabled = true;
+  elements.auditRefresh.setAttribute("aria-busy", "true");
+  renderLoadingCards(elements.auditList, 4);
+  try {
+    const category = encodeURIComponent(elements.auditCategory.value);
+    const payload = await fetchJson(
+      `/api/v1/audit/events?category=${category}&limit=100`,
+    );
+    currentAuditEvents = payload.events ?? [];
+    currentAuditTotal = payload.total ?? currentAuditEvents.length;
+    renderAuditList(currentAuditEvents);
+    elements.auditCount.textContent = String(currentAuditTotal);
+  } catch (error) {
+    renderListFailure(elements.auditList, "Nie udało się wczytać dziennika");
+    console.error("Nie udało się pobrać dziennika zdarzeń", error);
+  } finally {
+    finishListLoading(elements.auditList);
+    elements.auditCategory.disabled = false;
+    elements.auditRefresh.disabled = false;
+    elements.auditRefresh.removeAttribute("aria-busy");
+    auditLoadInProgress = false;
+  }
+}
+
+async function loadInitialDashboard() {
+  await Promise.all([
+    refresh({ initial: true }),
+    loadZones(),
+    loadAuditEvents(),
+  ]);
+}
+
 function detailItem(label, value) {
   const item = document.createElement("div");
   item.className = "detail-item";
@@ -1614,6 +1949,7 @@ function renderSensorSelection(sensor) {
 
 function renderAuditTimeline(events) {
   elements.selectionTimelineList.replaceChildren();
+  elements.selectionTimelineList.classList.remove("inline-loading");
 
   if (events.length === 0) {
     elements.selectionTimelineList.textContent = "Brak zdarzeń w tej historii.";
@@ -1661,6 +1997,7 @@ function renderAuditSelection(event) {
     detailItem("Stan alarmu", stateLabel(event.alert_state)),
   );
   elements.selectionTimeline.classList.remove("hidden");
+  elements.selectionTimelineList.classList.add("inline-loading");
   elements.selectionTimelineList.textContent = "Ładowanie historii…";
 }
 
@@ -2053,7 +2390,10 @@ async function startTrackReplay() {
   removeArchivePreviewLayers();
   replayTrackId = requestedTrackId;
   elements.trackReplayStatus.textContent = "Pobieranie historii trasy…";
+  elements.trackReplayStatus.classList.add("inline-loading");
   updateTrackModeControls();
+  elements.trackReplay.disabled = true;
+  elements.trackReplay.setAttribute("aria-busy", "true");
 
   try {
     const payload = await fetchJson(
@@ -2119,6 +2459,11 @@ async function startTrackReplay() {
       elements.trackReplayStatus.textContent = "Nie udało się pobrać trasy";
     }
     console.error("Nie udało się pobrać historii śladu", error);
+  } finally {
+    elements.trackReplayStatus.classList.remove("inline-loading");
+    elements.trackReplay.removeAttribute("aria-busy");
+    elements.trackReplay.disabled = false;
+    updateTrackModeControls();
   }
 }
 
@@ -2270,6 +2615,7 @@ function selectAuditEvent(event) {
   }
 
   refreshSelectedAuditTimeline().catch((error) => {
+    elements.selectionTimelineList.classList.remove("inline-loading");
     elements.selectionTimelineList.textContent = "Nie udało się pobrać historii.";
     console.error("Nie udało się pobrać historii audytu", error);
   });
@@ -2680,6 +3026,7 @@ async function saveDrawnZone(event) {
     showToast(
       `Strefa „${savedZone.name}” została ${zoneId ? "zaktualizowana" : "utworzona"}.`,
     );
+    await loadZones();
     await refresh();
     const layer = zoneLayers.get(savedZone.id);
     if (layer) {
@@ -2738,54 +3085,55 @@ function downloadAudit(format) {
   link.remove();
 }
 
-async function refresh() {
+async function refresh({ initial = false } = {}) {
   if (refreshInProgress || !currentUser || currentUser.must_change_password) {
     return;
   }
   refreshInProgress = true;
+  const firstLiveLoad = initial || !initialLiveDataLoaded;
+  if (firstLiveLoad) {
+    renderLoadingCards(elements.sensorList, 3);
+    if (!elements.showEnded.checked) {
+      renderLoadingCards(elements.trackList, 3);
+    }
+    if (!elements.showClosedAlerts.checked) {
+      renderLoadingCards(elements.alertList, 3);
+    }
+  }
 
   try {
-    const includeEnded = elements.showEnded.checked ? "true" : "false";
-    const includeClosedAlerts = elements.showClosedAlerts.checked ? "true" : "false";
-    const auditCategory = encodeURIComponent(elements.auditCategory.value);
-    const [
-      sensorPayload,
-      trackPayload,
-      trailPayload,
-      zonePayload,
-      alertPayload,
-      auditPayload,
-    ] = await Promise.all([
+    const [sensorPayload, trackPayload, trailPayload, alertPayload] = await Promise.all([
       fetchJson("/api/v1/sensors"),
-      fetchJson(`/api/v1/tracks?include_ended=${includeEnded}`),
+      fetchJson("/api/v1/tracks?include_ended=false"),
       fetchJson(
         `/api/v1/tracks/trails?seconds=${LIVE_TRAIL_SECONDS}&limit=${LIVE_TRAIL_POINT_LIMIT}`,
       ),
-      fetchJson("/api/v1/zones"),
-      fetchJson(`/api/v1/alerts?include_closed=${includeClosedAlerts}`),
-      fetchJson(`/api/v1/audit/events?category=${auditCategory}&limit=100`),
+      fetchJson("/api/v1/alerts?include_closed=false"),
     ]);
 
     currentSensors = sensorPayload.sensors ?? [];
-    const fetchedTracks = trackPayload.tracks ?? [];
-    const archiveMode = elements.showEnded.checked;
-    currentTracks = archiveMode
-      ? fetchedTracks.filter((track) => track.state === "ended")
-      : fetchedTracks.filter((track) => track.state !== "ended");
-    currentZones = zonePayload.zones ?? [];
-    currentAlerts = alertPayload.alerts ?? [];
-    currentAuditEvents = auditPayload.events ?? [];
-    currentAuditTotal = auditPayload.total ?? currentAuditEvents.length;
-
-    updateZoneLayers(currentZones, currentAlerts);
-    updateSensorMarkers(currentSensors);
-    updateTrackMarkers(archiveMode ? [] : currentTracks);
-    updateLiveTrailLayers(
-      archiveMode ? [] : (trailPayload.trails ?? []),
-      archiveMode ? [] : currentTracks,
+    currentLiveTracks = (trackPayload.tracks ?? []).filter(
+      (track) => track.state !== "ended",
     );
+    currentLiveTrails = trailPayload.trails ?? [];
+    currentOpenAlerts = (alertPayload.alerts ?? []).filter(
+      (alert) => alert.state !== "closed",
+    );
+    if (!elements.showClosedAlerts.checked) {
+      currentAlerts = [...currentOpenAlerts];
+    }
+    const archiveMode = elements.showEnded.checked;
+    if (!archiveMode) {
+      currentTracks = [...currentLiveTracks];
+    }
+
+    updateSensorMarkers(currentSensors);
+    if (!archiveMode) {
+      updateTrackMarkers(currentTracks);
+      updateLiveTrailLayers(currentLiveTrails, currentTracks);
+    }
     if (liveFollowTrackId) {
-      const followedTrack = currentTracks.find(
+      const followedTrack = currentLiveTracks.find(
         (track) => track.id === liveFollowTrackId,
       );
       if (followedTrack && hasPosition(followedTrack)) {
@@ -2797,22 +3145,27 @@ async function refresh() {
       }
     }
     renderSensorList(currentSensors);
-    renderTrackList(currentTracks);
-    renderAlertList(currentAlerts);
-    renderZoneList(currentZones, currentAlerts);
-    renderAuditList(currentAuditEvents);
+    if (!archiveMode && !archiveLoadInProgress) {
+      elements.trackSectionTitle.textContent = "Śledzone obiekty";
+      renderTrackList(currentTracks);
+      elements.trackCount.textContent = String(currentTracks.length);
+    }
+    if (!elements.showClosedAlerts.checked && !closedAlertsLoadInProgress) {
+      renderAlertList(currentAlerts);
+      elements.alertCount.textContent = String(currentAlerts.length);
+    }
+    if (zonesLoaded) {
+      updateZoneLayers(currentZones, currentOpenAlerts);
+      renderZoneList(currentZones, currentOpenAlerts);
+    }
 
     const onlineSensors = currentSensors.filter((sensor) => sensor.status === "online").length;
-    const activeTracks = fetchedTracks.filter((track) => track.state === "active").length;
-    const openAlerts = currentAlerts.filter((alert) => alert.state !== "closed").length;
+    const activeTracks = currentLiveTracks.filter((track) => track.state === "active").length;
     elements.onlineSensors.textContent = String(onlineSensors);
     elements.activeTracks.textContent = String(activeTracks);
-    elements.openAlerts.textContent = String(openAlerts);
+    elements.openAlerts.textContent = String(currentOpenAlerts.length);
     elements.sensorCount.textContent = String(currentSensors.length);
-    elements.trackCount.textContent = String(currentTracks.length);
-    elements.alertCount.textContent = String(currentAlerts.length);
-    elements.zoneCount.textContent = String(currentZones.length);
-    elements.auditCount.textContent = String(currentAuditTotal);
+    initialLiveDataLoaded = true;
 
     if (selectedTrackId) {
       const selected = currentTracks.find((track) => track.id === selectedTrackId);
@@ -2839,15 +3192,6 @@ async function refresh() {
       } else {
         clearSelection();
       }
-    } else if (selectedAuditEvent) {
-      const refreshedEvent = currentAuditEvents.find(
-        (event) => String(event.id) === String(selectedAuditEvent.id),
-      );
-      if (refreshedEvent) {
-        selectedAuditEvent = refreshedEvent;
-      }
-      renderAuditSelection(selectedAuditEvent);
-      await refreshSelectedAuditTimeline();
     }
 
     if (
@@ -2860,27 +3204,64 @@ async function refresh() {
 
     setConnection(true, "API online");
     elements.lastUpdate.textContent = `Aktualizacja ${new Date().toLocaleTimeString("pl-PL")}`;
+    if (canAdminister()) {
+      void loadStorageUsage();
+    }
   } catch (error) {
     console.error("Odświeżenie mapy nie powiodło się", error);
     if (error instanceof ApiError && error.status === 401) {
       clearSession("Sesja wygasła. Zaloguj się ponownie.");
     } else {
       setConnection(false, "Brak połączenia z API");
+      if (firstLiveLoad) {
+        renderListFailure(elements.sensorList, "Nie udało się wczytać sensorów");
+        if (!elements.showEnded.checked) {
+          renderListFailure(elements.trackList, "Nie udało się wczytać obiektów");
+        }
+        if (!elements.showClosedAlerts.checked) {
+          renderListFailure(elements.alertList, "Nie udało się wczytać alarmów");
+        }
+      }
     }
   } finally {
+    finishListLoading(elements.sensorList);
+    if (!elements.showEnded.checked && !archiveLoadInProgress) {
+      finishListLoading(elements.trackList);
+    }
+    if (!elements.showClosedAlerts.checked && !closedAlertsLoadInProgress) {
+      finishListLoading(elements.alertList);
+    }
     refreshInProgress = false;
   }
 }
 
-elements.showEnded.addEventListener("change", () => {
+elements.showEnded.addEventListener("change", async () => {
   clearSelection();
-  refresh();
+  if (elements.showEnded.checked) {
+    await loadArchivedTracks();
+  } else {
+    currentTracks = [...currentLiveTracks];
+    elements.trackSectionTitle.textContent = "Śledzone obiekty";
+    updateTrackMarkers(currentTracks);
+    updateLiveTrailLayers(currentLiveTrails, currentTracks);
+    renderTrackList(currentTracks);
+    elements.trackCount.textContent = String(currentTracks.length);
+    await refresh();
+  }
 });
-elements.showClosedAlerts.addEventListener("change", refresh);
+elements.showClosedAlerts.addEventListener("change", async () => {
+  if (elements.showClosedAlerts.checked) {
+    await loadClosedAlerts();
+  } else {
+    currentClosedAlerts = [];
+    renderAlertSnapshot();
+  }
+});
 elements.auditCategory.addEventListener("change", () => {
   clearSelection();
-  refresh();
+  void loadAuditEvents();
 });
+elements.auditRefresh.addEventListener("click", () => void loadAuditEvents());
 elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
 elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
@@ -2904,6 +3285,9 @@ elements.operatorLock.addEventListener("click", logout);
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.manageOperators.addEventListener("click", openOperatorEditor);
+elements.storageRefresh.addEventListener("click", () => {
+  void loadStorageUsage(true);
+});
 elements.operatorEditorClose.addEventListener("click", () => {
   elements.operatorEditor.classList.add("hidden");
 });
@@ -2952,7 +3336,7 @@ async function restoreSession() {
     const session = await requestJson("/api/v1/auth/me");
     acceptSession(session);
     if (!currentUser.must_change_password) {
-      await refresh();
+      await loadInitialDashboard();
     }
   } catch (error) {
     clearSession(

@@ -44,3 +44,60 @@ def get_maintenance_status() -> dict[str, Any]:
         "retention": retention_configuration(),
         "latest_run": None if latest_run is None else dict(latest_run),
     }
+
+
+def get_database_storage() -> dict[str, Any]:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                current_database() AS database_name,
+                pg_database_size(current_database()) AS database_size_bytes
+            """
+        )
+        database = cursor.fetchone()
+        if database is None:
+            raise RuntimeError("Database storage query returned no row")
+
+        cursor.execute(
+            """
+            SELECT
+                schemaname,
+                relname AS table_name,
+                pg_total_relation_size(relid) AS size_bytes,
+                COALESCE(n_live_tup, 0)::BIGINT AS estimated_rows
+            FROM pg_stat_user_tables
+            ORDER BY pg_total_relation_size(relid) DESC
+            LIMIT 5
+            """
+        )
+        largest_tables = [dict(row) for row in cursor.fetchall()]
+
+    database_size_bytes = int(database["database_size_bytes"])
+    capacity_bytes = int(settings.database_capacity_gb * 1024**3)
+    used_percent: float | None = None
+    storage_status = "unconfigured"
+
+    if capacity_bytes > 0:
+        used_percent = round(database_size_bytes / capacity_bytes * 100, 2)
+        if used_percent >= 100:
+            storage_status = "exceeded"
+        elif used_percent >= settings.database_critical_percent:
+            storage_status = "critical"
+        elif used_percent >= settings.database_warning_percent:
+            storage_status = "warning"
+        else:
+            storage_status = "ok"
+
+    return {
+        "database_name": database["database_name"],
+        "database_size_bytes": database_size_bytes,
+        "capacity_bytes": capacity_bytes or None,
+        "used_percent": used_percent,
+        "status": storage_status,
+        "thresholds": {
+            "warning_percent": settings.database_warning_percent,
+            "critical_percent": settings.database_critical_percent,
+        },
+        "largest_tables": largest_tables,
+    }

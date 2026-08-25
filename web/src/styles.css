@@ -468,6 +468,114 @@ button:disabled {
   margin-top: 12px;
 }
 
+.storage-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: rgba(7, 10, 15, 0.72);
+}
+
+.storage-heading,
+.storage-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.storage-heading > div {
+  min-width: 0;
+}
+
+.storage-heading span,
+.storage-meta,
+.storage-message {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.storage-heading strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.compact-button {
+  flex: 0 0 auto;
+  padding: 5px 7px !important;
+  font-size: 9px;
+}
+
+.storage-meter {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid rgba(53, 230, 154, 0.3);
+  background: rgba(53, 230, 154, 0.08);
+}
+
+.storage-meter > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--green);
+  transition: width 220ms ease, background-color 220ms ease;
+}
+
+.storage-meter.unconfigured > span {
+  width: 32% !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(67, 213, 255, 0.62),
+    transparent
+  );
+  animation: storage-indeterminate 1.6s ease-in-out infinite;
+}
+
+.storage-warning .storage-meter {
+  border-color: rgba(255, 184, 77, 0.45);
+}
+
+.storage-warning .storage-meter > span {
+  background: var(--amber);
+}
+
+.storage-critical .storage-meter,
+.storage-exceeded .storage-meter {
+  border-color: rgba(255, 77, 94, 0.52);
+}
+
+.storage-critical .storage-meter > span,
+.storage-exceeded .storage-meter > span {
+  background: var(--red);
+}
+
+.storage-warning .storage-message {
+  color: var(--amber);
+}
+
+.storage-critical .storage-message,
+.storage-exceeded .storage-message {
+  color: var(--red);
+}
+
+.storage-message {
+  min-height: 13px;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.storage-meta span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
 .secondary-button {
   color: #c5cfdb !important;
   border-color: var(--border) !important;
@@ -627,6 +735,80 @@ button:disabled {
   font-size: 12px;
   border: 1px dashed var(--border);
   padding: 12px;
+}
+
+.loading-list {
+  pointer-events: none;
+}
+
+.loading-card {
+  display: grid;
+  gap: 9px;
+  min-height: 58px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  background: rgba(20, 26, 35, 0.62);
+}
+
+.loading-line {
+  display: block;
+  height: 8px;
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.08) 0%,
+    rgba(148, 163, 184, 0.22) 45%,
+    rgba(148, 163, 184, 0.08) 100%
+  );
+  background-size: 220% 100%;
+  animation: loading-shimmer 1.25s ease-in-out infinite;
+}
+
+.loading-line-title {
+  width: 64%;
+  height: 10px;
+}
+
+.loading-line-meta {
+  width: 88%;
+}
+
+button[aria-busy="true"]::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-spin 700ms linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes loading-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes storage-indeterminate {
+  from {
+    transform: translateX(-115%);
+  }
+
+  to {
+    transform: translateX(315%);
+  }
 }
 
 .entity-card {
@@ -970,8 +1152,32 @@ button.entity-card.selected {
   }
 }
 
+.track-replay-status.inline-loading,
+.timeline-list.inline-loading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.track-replay-status.inline-loading::before,
+.timeline-list.inline-loading::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(67, 213, 255, 0.24);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: loading-spin 700ms linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .drone-marker.alerting {
+  .drone-marker.alerting,
+  .track-replay-status.inline-loading::before,
+  .timeline-list.inline-loading::before,
+  .loading-line,
+  .storage-meter.unconfigured > span,
+  button[aria-busy="true"]::before {
     animation: none;
   }
 }

@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.13.1**. The complete software path is tested
+> Current development version: **0.14.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -54,10 +54,12 @@ operator actions.
 - sensor and zone editing, disabling and soft deletion;
 - live Leaflet map with collapsible operational layers and panels;
 - synthetic multi-sensor simulator and Sky-Spy serial emulator;
-- enriched `skyspy/1.1` firmware output for ESP32-S3 and ESP32-C5.
+- enriched `skyspy/1.1` firmware output for ESP32-S3 and ESP32-C5;
 - verified scheduled PostgreSQL backups with checksums and guarded restore;
 - configurable data retention with a dry-run mode and maintenance history;
-- optional TLS gateway for HTTPS access without exposing the API port directly.
+- optional TLS gateway for HTTPS access without exposing the API port directly;
+- contextual loading indicators for audit, archives and track-history requests;
+- administrator-only database size and configured-capacity monitoring.
 
 Remote ID is broadcast data and does not by itself provide cryptographic proof
 of a drone or operator identity. RDDS should be treated as a detection and
@@ -224,6 +226,7 @@ annotated Git tag:
 | `rdds-v0.12.0` | operator accounts, sessions, CSRF protection and role-based access |
 | `rdds-v0.13.0` | backup, guarded restore, retention and optional TLS gateway |
 | `rdds-v0.13.1` | live-data priority, separate track sessions and 60-second trails |
+| `rdds-v0.14.0` | loading feedback and administrator database capacity monitoring |
 
 Start with:
 
@@ -233,6 +236,7 @@ Start with:
 - `docs/RDDS_STAGE12.md` for accounts, login, sessions and roles;
 - `docs/RDDS_STAGE13.md` for backup, restore, retention and HTTPS;
 - `docs/RDDS_STAGE13_1.md` for replay throttling and track-session behavior;
+- `docs/RDDS_STAGE14.md` for loading states and storage-budget monitoring;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
 
 ## Planned work

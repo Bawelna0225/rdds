@@ -52,6 +52,9 @@ class Settings:
     retention_audit_days: int
     retention_alerts_days: int
     retention_tracks_days: int
+    database_capacity_gb: float
+    database_warning_percent: float
+    database_critical_percent: float
 
 
 def load_settings() -> Settings:
@@ -109,6 +112,15 @@ def load_settings() -> Settings:
         retention_tracks_days=int(
             os.getenv("RDDS_RETENTION_TRACKS_DAYS", "365")
         ),
+        database_capacity_gb=float(
+            os.getenv("RDDS_DATABASE_CAPACITY_GB", "0")
+        ),
+        database_warning_percent=float(
+            os.getenv("RDDS_DATABASE_WARNING_PERCENT", "70")
+        ),
+        database_critical_percent=float(
+            os.getenv("RDDS_DATABASE_CRITICAL_PERCENT", "85")
+        ),
     )
 
     if settings.track_poll_seconds <= 0:
@@ -151,6 +163,19 @@ def load_settings() -> Settings:
     for name, days in retention_periods.items():
         if not 1 <= days <= 36500:
             raise RuntimeError(f"{name} must be between 1 and 36500")
+    if not 0 <= settings.database_capacity_gb <= 1000000:
+        raise RuntimeError(
+            "RDDS_DATABASE_CAPACITY_GB must be between 0 and 1000000"
+        )
+    if not (
+        0 < settings.database_warning_percent
+        < settings.database_critical_percent
+        <= 100
+    ):
+        raise RuntimeError(
+            "RDDS database warning and critical percentages must satisfy "
+            "0 < warning < critical <= 100"
+        )
 
     return settings
 

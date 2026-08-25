@@ -77,6 +77,43 @@
                 <button id="manage-operators" type="button">Konta operatorów</button>
               </div>
 
+              <section
+                id="storage-panel"
+                class="storage-panel hidden"
+                aria-labelledby="storage-title"
+              >
+                <div class="storage-heading">
+                  <div>
+                    <span id="storage-title">Wykorzystanie bazy</span>
+                    <strong id="storage-usage">Wczytywanie…</strong>
+                  </div>
+                  <button
+                    id="storage-refresh"
+                    type="button"
+                    class="secondary-button compact-button"
+                  >
+                    Odśwież
+                  </button>
+                </div>
+                <div
+                  id="storage-meter"
+                  class="storage-meter unconfigured"
+                  role="progressbar"
+                  aria-label="Wykorzystanie skonfigurowanego budżetu bazy"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <span id="storage-bar"></span>
+                </div>
+                <div class="storage-meta">
+                  <span id="storage-percent">—</span>
+                  <span id="storage-largest-table">—</span>
+                </div>
+                <p id="storage-message" class="storage-message">
+                  Pobieranie informacji o bazie…
+                </p>
+              </section>
+
               <form id="password-form" class="operator-login-form">
                 <label>
                   Obecne hasło
@@ -176,6 +213,9 @@
                   </select>
                 </label>
                 <div class="audit-export-actions">
+                  <button id="audit-refresh" type="button" class="secondary-button">
+                    Odśwież
+                  </button>
                   <button id="audit-export-csv" type="button">Eksport CSV</button>
                   <button id="audit-export-json" type="button" class="secondary-button">
                     JSON
