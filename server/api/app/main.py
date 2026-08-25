@@ -63,6 +63,7 @@ from app.models import (
     SensorTokenRotation,
     SensorUpdate,
 )
+from app.operations_store import get_maintenance_status
 from app.security import (
     SESSION_COOKIE_NAME,
     IngestPrincipal,
@@ -84,7 +85,7 @@ from app.sensor_store import (
     set_sensor_enabled,
     update_sensor,
 )
-from app.track_store import get_track_history, list_tracks
+from app.track_store import get_live_track_trails, get_track_history, list_tracks
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -119,7 +120,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.12.0",
+    version="0.13.0",
     lifespan=lifespan,
 )
 
@@ -286,6 +287,26 @@ def get_system_summary() -> dict[str, object]:
     return {
         "time": utc_now(),
         "counts": counts,
+    }
+
+
+@app.get(
+    "/api/v1/system/maintenance",
+    tags=["system"],
+    dependencies=[Depends(require_administrator)],
+)
+def get_system_maintenance(
+    _: OperatorPrincipal = Depends(require_administrator),
+) -> dict[str, object]:
+    try:
+        status_payload = get_maintenance_status()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Maintenance status query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        **status_payload,
     }
 
 
@@ -540,16 +561,44 @@ def get_tracks(
 
 
 @app.get(
+    "/api/v1/tracks/trails",
+    tags=["tracks"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_track_trails(
+    seconds: int = Query(default=20, ge=5, le=120),
+    limit: int = Query(default=100, ge=2, le=500),
+) -> dict[str, object]:
+    try:
+        trails = get_live_track_trails(
+            seconds=seconds,
+            limit_per_track=limit,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Live track trail query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "seconds": seconds,
+        "trails": trails,
+    }
+
+
+@app.get(
     "/api/v1/tracks/{track_id}/history",
     tags=["tracks"],
     dependencies=[Depends(require_viewer)],
 )
 def get_track_observation_history(
     track_id: UUID,
-    limit: int = Query(default=500, ge=1, le=5000),
+    limit: int = Query(default=5000, ge=2, le=10000),
 ) -> dict[str, object]:
     try:
-        observations = get_track_history(track_id=track_id, limit=limit)
+        observations, total_observations = get_track_history(
+            track_id=track_id,
+            limit=limit,
+        )
     except (psycopg.Error, RuntimeError) as exc:
         logger.exception("Track history query failed")
         raise HTTPException(status_code=503, detail="database unavailable") from exc
@@ -558,6 +607,8 @@ def get_track_observation_history(
         "time": utc_now(),
         "track_id": track_id,
         "observations": observations,
+        "total_observations": total_observations,
+        "sampled": total_observations > len(observations),
     }
 
 

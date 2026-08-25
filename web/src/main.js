@@ -72,6 +72,8 @@ const stateColors = {
   anomalous: "#ff4d5e",
   no_gps: "#b48cff",
 };
+const LIVE_TRAIL_SECONDS = 20;
+const LIVE_TRAIL_POINT_LIMIT = 100;
 
 const elements = {
   connectionDot: document.querySelector("#connection-dot"),
@@ -112,6 +114,7 @@ const elements = {
   accountCreate: document.querySelector("#account-create"),
   operatorList: document.querySelector("#operator-list"),
   trackCount: document.querySelector("#track-count"),
+  trackSectionTitle: document.querySelector("#track-section-title"),
   sensorCount: document.querySelector("#sensor-count"),
   alertCount: document.querySelector("#alert-count"),
   zoneCount: document.querySelector("#zone-count"),
@@ -131,6 +134,20 @@ const elements = {
   selectionEyebrow: document.querySelector("#selection-eyebrow"),
   selectionTitle: document.querySelector("#selection-title"),
   selectionDetails: document.querySelector("#selection-details"),
+  trackControls: document.querySelector("#track-controls"),
+  trackFollowLive: document.querySelector("#track-follow-live"),
+  trackReplay: document.querySelector("#track-replay"),
+  trackPlayer: document.querySelector("#track-player"),
+  trackReplaySeek: document.querySelector("#track-replay-seek"),
+  trackReplayStartTime: document.querySelector("#track-replay-start-time"),
+  trackReplayCurrentTime: document.querySelector("#track-replay-current-time"),
+  trackReplayEndTime: document.querySelector("#track-replay-end-time"),
+  trackReplayBack: document.querySelector("#track-replay-back"),
+  trackReplayPause: document.querySelector("#track-replay-pause"),
+  trackReplayForward: document.querySelector("#track-replay-forward"),
+  trackReplayStop: document.querySelector("#track-replay-stop"),
+  trackReplaySpeed: document.querySelector("#track-replay-speed"),
+  trackReplayStatus: document.querySelector("#track-replay-status"),
   selectionTimeline: document.querySelector("#selection-timeline"),
   selectionTimelineList: document.querySelector("#selection-timeline-list"),
   closeSelection: document.querySelector("#close-selection"),
@@ -190,6 +207,7 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 const sensorMarkers = new Map();
 const trackLayers = new Map();
+const liveTrailLayers = new Map();
 const zoneLayers = new Map();
 let currentSensors = [];
 let currentTracks = [];
@@ -198,9 +216,27 @@ let currentAlerts = [];
 let currentAuditEvents = [];
 let currentAuditTotal = 0;
 let selectedTrackId = null;
+let selectedTrackSnapshot = null;
 let selectedSensorId = null;
 let selectedAuditEvent = null;
-let selectedHistory = null;
+let liveFollowTrackId = null;
+let replayTrackId = null;
+let replayObservations = [];
+let replayTotalObservations = 0;
+let replayIndex = 0;
+let replayRenderedIndex = -1;
+let replayAnimationFrame = null;
+let replayClockTimeMs = 0;
+let replayLastFrameAt = null;
+let replayPaused = false;
+let replayCompleted = false;
+let replayMarker = null;
+let replayPilotMarker = null;
+let replayOperatorLine = null;
+let replayTrail = null;
+let archivePreviewMarker = null;
+let archivePreviewPilotMarker = null;
+let archivePreviewOperatorLine = null;
 let initialFitComplete = false;
 let refreshInProgress = false;
 let currentUser = null;
@@ -303,6 +339,22 @@ function formatDateTime(value) {
   return date.toLocaleString("pl-PL", {
     dateStyle: "medium",
     timeStyle: "medium",
+  });
+}
+
+function formatCompactDateTime(value) {
+  if (!value) {
+    return "—";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  return date.toLocaleString("pl-PL", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -436,6 +488,18 @@ function droneIcon(track) {
   return L.divIcon({
     className: "",
     html: `<div class="drone-marker ${escapeHtml(state)}${hasOpenAlert ? " alerting" : ""}" style="--heading:${heading}deg"></div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  });
+}
+
+function replayDroneIcon(observation) {
+  const heading = isCoordinate(observation.heading_deg)
+    ? observation.heading_deg
+    : 0;
+  return L.divIcon({
+    className: "",
+    html: `<div class="drone-marker replay" style="--heading:${heading}deg"></div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 16],
   });
@@ -642,6 +706,44 @@ function updateTrackMarkers(tracks) {
   for (const id of trackLayers.keys()) {
     if (!visibleIds.has(id)) {
       removeTrackLayer(id);
+    }
+  }
+}
+
+function updateLiveTrailLayers(trails, tracks) {
+  const visibleIds = new Set();
+  const tracksById = new Map(tracks.map((track) => [track.id, track]));
+
+  for (const trail of trails) {
+    const track = tracksById.get(trail.track_id);
+    const points = (trail.points ?? [])
+      .filter((point) => hasPosition(point))
+      .map((point) => [point.latitude, point.longitude]);
+    if (!track || points.length < 2) {
+      continue;
+    }
+
+    visibleIds.add(trail.track_id);
+    const color = stateColors[track.state] ?? stateColors.active;
+    let layer = liveTrailLayers.get(trail.track_id);
+    if (!layer) {
+      layer = L.polyline(points, {
+        color,
+        weight: 3,
+        opacity: 0.58,
+        interactive: false,
+      }).addTo(map);
+      liveTrailLayers.set(trail.track_id, layer);
+    } else {
+      layer.setLatLngs(points);
+      layer.setStyle({ color });
+    }
+  }
+
+  for (const [trackId, layer] of liveTrailLayers) {
+    if (!visibleIds.has(trackId)) {
+      layer.remove();
+      liveTrailLayers.delete(trackId);
     }
   }
 }
@@ -1130,9 +1232,15 @@ function renderAuditList(events) {
 function renderTrackList(tracks) {
   elements.trackList.replaceChildren();
   elements.trackList.classList.toggle("empty-state", tracks.length === 0);
+  const archiveMode = elements.showEnded.checked;
+  elements.trackSectionTitle.textContent = archiveMode
+    ? "Archiwum tras"
+    : "Ślady na żywo";
 
   if (tracks.length === 0) {
-    elements.trackList.textContent = "Brak widocznych śladów";
+    elements.trackList.textContent = archiveMode
+      ? "Brak zakończonych tras"
+      : "Brak aktywnych śladów";
     return;
   }
 
@@ -1156,7 +1264,9 @@ function renderTrackList(tracks) {
     const sensors = document.createElement("span");
     sensors.textContent = `${track.contributing_sensors} sensory`;
     const time = document.createElement("span");
-    time.textContent = formatTime(track.last_seen_at);
+    time.textContent = archiveMode
+      ? formatCompactDateTime(track.last_seen_at)
+      : formatTime(track.last_seen_at);
     meta.append(altitude, sensors, time);
 
     card.append(titleRow, meta);
@@ -1446,14 +1556,18 @@ function renderSelection(track) {
   if (!track) {
     elements.selectionPanel.classList.add("hidden");
     elements.selectionDetails.replaceChildren();
+    elements.trackControls.classList.add("hidden");
     elements.selectionTimeline.classList.add("hidden");
     elements.selectionTimelineList.replaceChildren();
     return;
   }
 
   elements.selectionPanel.classList.remove("hidden");
-  elements.selectionEyebrow.textContent = "Wybrany ślad";
+  elements.selectionEyebrow.textContent = track.state === "ended"
+    ? "Trasa archiwalna"
+    : "Wybrany ślad";
   elements.selectionTitle.textContent = track.basic_id || track.identity_key || track.track_key;
+  elements.trackControls.classList.remove("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
@@ -1466,15 +1580,17 @@ function renderSelection(track) {
     detailItem("Otwarte alarmy", String(openAlertCountForTrack(track.id))),
     detailItem("Obserwacje", String(track.observation_count ?? "—")),
     detailItem("MGRS", formatMgrs(track.latitude, track.longitude)),
-    detailItem("Pierwsza obserwacja", formatTime(track.first_seen_at)),
-    detailItem("Ostatnia obserwacja", formatTime(track.last_seen_at)),
+    detailItem("Pierwsza obserwacja", formatDateTime(track.first_seen_at)),
+    detailItem("Ostatnia obserwacja", formatDateTime(track.last_seen_at)),
   );
+  updateTrackModeControls();
 }
 
 function renderSensorSelection(sensor) {
   elements.selectionPanel.classList.remove("hidden");
   elements.selectionEyebrow.textContent = "Wybrany sensor";
   elements.selectionTitle.textContent = sensor.display_name || sensor.sensor_id;
+  elements.trackControls.classList.add("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
@@ -1531,6 +1647,7 @@ function renderAuditSelection(event) {
   elements.selectionPanel.classList.remove("hidden");
   elements.selectionEyebrow.textContent = "Zdarzenie audytowe";
   elements.selectionTitle.textContent = auditEventLabel(event.event_type);
+  elements.trackControls.classList.add("hidden");
   elements.selectionDetails.replaceChildren(
     detailItem("Czas", formatDateTime(event.occurred_at)),
     detailItem("Operator", event.actor),
@@ -1573,30 +1690,483 @@ async function refreshSelectedAuditTimeline() {
   }
 }
 
-async function refreshSelectedHistory() {
-  if (!selectedTrackId) {
+function clearReplayTimer() {
+  if (replayAnimationFrame !== null) {
+    cancelAnimationFrame(replayAnimationFrame);
+    replayAnimationFrame = null;
+  }
+}
+
+function removeReplayLayers() {
+  replayMarker?.remove();
+  replayPilotMarker?.remove();
+  replayOperatorLine?.remove();
+  replayTrail?.remove();
+  replayMarker = null;
+  replayPilotMarker = null;
+  replayOperatorLine = null;
+  replayTrail = null;
+}
+
+function removeArchivePreviewLayers() {
+  archivePreviewMarker?.remove();
+  archivePreviewPilotMarker?.remove();
+  archivePreviewOperatorLine?.remove();
+  archivePreviewMarker = null;
+  archivePreviewPilotMarker = null;
+  archivePreviewOperatorLine = null;
+}
+
+function showArchivePreview(track) {
+  removeArchivePreviewLayers();
+  if (!elements.showEnded.checked || !track || !hasPosition(track)) {
     return;
   }
 
-  const payload = await fetchJson(
-    `/api/v1/tracks/${encodeURIComponent(selectedTrackId)}/history?limit=1000`,
-  );
-  const points = payload.observations
-    .filter((observation) => hasPosition(observation))
-    .map((observation) => [observation.latitude, observation.longitude]);
+  const droneLatLng = [track.latitude, track.longitude];
+  archivePreviewMarker = L.marker(droneLatLng, {
+    icon: droneIcon({ ...track, state: "ended" }),
+    zIndexOffset: 550,
+  }).addTo(map);
+  archivePreviewMarker.bindPopup(trackPopup(track));
 
-  if (selectedHistory) {
-    selectedHistory.remove();
-    selectedHistory = null;
-  }
-
-  if (points.length > 1) {
-    selectedHistory = L.polyline(points, {
-      color: "#43d5ff",
-      weight: 3,
-      opacity: 0.78,
+  if (hasPosition(track, "pilot_")) {
+    const pilotLatLng = [track.pilot_latitude, track.pilot_longitude];
+    archivePreviewPilotMarker = L.marker(pilotLatLng, {
+      icon: pilotIcon(),
+      zIndexOffset: 425,
     }).addTo(map);
+    archivePreviewPilotMarker.bindPopup(
+      `<h3 class="popup-title">Ostatnia pozycja operatora</h3>` +
+      `<div class="popup-grid"><span>ID</span><strong>${escapeHtml(track.operator_id)}</strong>` +
+      `<span>MGRS</span><strong>${escapeHtml(formatMgrs(track.pilot_latitude, track.pilot_longitude))}</strong></div>`,
+    );
+    archivePreviewOperatorLine = L.polyline(
+      [droneLatLng, pilotLatLng],
+      {
+        color: "#778292",
+        weight: 2,
+        opacity: 0.58,
+        dashArray: "5 7",
+      },
+    ).addTo(map);
   }
+}
+
+function observationTimeMilliseconds(observation, fallbackIndex = 0) {
+  const value = new Date(observation?.message_time).getTime();
+  return Number.isFinite(value) ? value : fallbackIndex * 1000;
+}
+
+function replaySpeed() {
+  return Math.max(1, Number(elements.trackReplaySpeed.value) || 1);
+}
+
+function updateTrackModeControls() {
+  const trackSelected = Boolean(selectedTrackId);
+  elements.trackControls.classList.toggle("hidden", !trackSelected);
+  if (!trackSelected) {
+    return;
+  }
+
+  const followingLive = liveFollowTrackId === selectedTrackId;
+  const selectedTrack = currentTracks.find((track) => track.id === selectedTrackId);
+  const canFollowLive = selectedTrack?.state !== "ended" && !elements.showEnded.checked;
+  const replayActive = replayTrackId === selectedTrackId && replayObservations.length > 0;
+  elements.trackFollowLive.disabled = !canFollowLive;
+  elements.trackFollowLive.classList.toggle("active", followingLive);
+  elements.trackFollowLive.textContent = followingLive
+    ? "Zatrzymaj śledzenie"
+    : "Śledź na żywo";
+  elements.trackReplay.textContent = replayActive
+    ? "Od początku"
+    : "Odtwórz trasę";
+  elements.trackPlayer.classList.toggle("hidden", !replayActive);
+  elements.trackReplayPause.textContent = replayPaused || replayCompleted
+    ? replayCompleted
+      ? "Od początku"
+      : "Wznów"
+    : "Pauza";
+  elements.trackReplaySpeed.disabled = !replayActive;
+}
+
+function stopTrackReplay({ clearStatus = true } = {}) {
+  clearReplayTimer();
+  removeReplayLayers();
+  replayTrackId = null;
+  replayObservations = [];
+  replayTotalObservations = 0;
+  replayIndex = 0;
+  replayRenderedIndex = -1;
+  replayClockTimeMs = 0;
+  replayLastFrameAt = null;
+  replayPaused = false;
+  replayCompleted = false;
+  elements.trackReplaySeek.min = "0";
+  elements.trackReplaySeek.max = "1";
+  elements.trackReplaySeek.value = "0";
+  elements.trackReplayStartTime.textContent = "—";
+  elements.trackReplayCurrentTime.textContent = "—";
+  elements.trackReplayEndTime.textContent = "—";
+  if (clearStatus) {
+    elements.trackReplayStatus.textContent = "Wybierz tryb pracy";
+  }
+  updateTrackModeControls();
+  if (
+    clearStatus &&
+    selectedTrackSnapshot?.id === selectedTrackId
+  ) {
+    renderSelection(selectedTrackSnapshot);
+    showArchivePreview(selectedTrackSnapshot);
+  }
+}
+
+function renderReplayObservationDetails(observation) {
+  const source = observation.replayed
+    ? "zaległa kolejka sensora"
+    : "dane bieżące";
+  elements.selectionEyebrow.textContent = replayPaused
+    ? "Odtwarzanie wstrzymane"
+    : "Odtwarzanie trasy";
+  elements.selectionDetails.replaceChildren(
+    detailItem("Czas obserwacji", formatDateTime(observation.message_time)),
+    detailItem("Operator", observation.operator_id),
+    detailItem("Wysokość", formatNumber(observation.altitude_m, 1, " m")),
+    detailItem("Prędkość", formatNumber(observation.speed_mps, 1, " m/s")),
+    detailItem("Kierunek", formatNumber(observation.heading_deg, 0, "°")),
+    detailItem("Sensor", observation.sensor_id),
+    detailItem("MGRS", formatMgrs(observation.latitude, observation.longitude)),
+    detailItem("Odebrano przez RDDS", formatDateTime(observation.received_at)),
+    detailItem("Źródło", source),
+  );
+}
+
+function updateReplayMap(index, rebuildTrail = false) {
+  const observation = replayObservations[index];
+  const droneLatLng = [observation.latitude, observation.longitude];
+  replayMarker.setLatLng(droneLatLng);
+  replayMarker.setIcon(replayDroneIcon(observation));
+
+  if (hasPosition(observation, "pilot_")) {
+    const pilotLatLng = [
+      observation.pilot_latitude,
+      observation.pilot_longitude,
+    ];
+    if (!replayPilotMarker) {
+      replayPilotMarker = L.marker(pilotLatLng, {
+        icon: pilotIcon(),
+        zIndexOffset: 450,
+      }).addTo(map);
+    } else {
+      replayPilotMarker.setLatLng(pilotLatLng);
+    }
+    const connection = [droneLatLng, pilotLatLng];
+    if (!replayOperatorLine) {
+      replayOperatorLine = L.polyline(connection, {
+        color: "#b48cff",
+        weight: 2,
+        opacity: 0.65,
+        dashArray: "5 7",
+      }).addTo(map);
+    } else {
+      replayOperatorLine.setLatLngs(connection);
+    }
+  } else {
+    replayPilotMarker?.remove();
+    replayOperatorLine?.remove();
+    replayPilotMarker = null;
+    replayOperatorLine = null;
+  }
+
+  if (rebuildTrail || index < replayRenderedIndex) {
+    replayTrail.setLatLngs(
+      replayObservations
+        .slice(0, index + 1)
+        .map((point) => [point.latitude, point.longitude]),
+    );
+  } else {
+    for (let pointIndex = replayRenderedIndex + 1; pointIndex <= index; pointIndex += 1) {
+      const point = replayObservations[pointIndex];
+      replayTrail.addLatLng([point.latitude, point.longitude]);
+    }
+  }
+  replayRenderedIndex = index;
+}
+
+function replayStatusText(observation) {
+  const sourceLabel = observation.replayed ? " · dane z kolejki" : "";
+  const sampleLabel = replayTotalObservations > replayObservations.length
+    ? ` · próbka z ${formatInteger(replayTotalObservations)}`
+    : "";
+  const stateLabelText = replayCompleted
+    ? " · zakończono"
+    : replayPaused
+      ? " · pauza"
+      : "";
+  return (
+    `Punkt ${replayIndex + 1}/${replayObservations.length}` +
+    `${sampleLabel}${sourceLabel}${stateLabelText}`
+  );
+}
+
+function renderReplayIndex(index, rebuildTrail = false) {
+  if (replayObservations.length === 0) {
+    return;
+  }
+  replayIndex = Math.max(0, Math.min(index, replayObservations.length - 1));
+  const observation = replayObservations[replayIndex];
+  updateReplayMap(replayIndex, rebuildTrail);
+  renderReplayObservationDetails(observation);
+  elements.trackReplaySeek.value = String(replayIndex);
+  elements.trackReplayCurrentTime.textContent = formatCompactDateTime(
+    observation.message_time,
+  );
+  elements.trackReplayStatus.textContent = replayStatusText(observation);
+}
+
+function replayIndexAtTime(targetTimeMs) {
+  let low = 0;
+  let high = replayObservations.length - 1;
+  let match = 0;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (observationTimeMilliseconds(replayObservations[middle], middle) <= targetTimeMs) {
+      match = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return match;
+}
+
+function replayIndexAtOrAfterTime(targetTimeMs) {
+  let low = 0;
+  let high = replayObservations.length - 1;
+  let match = high;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (observationTimeMilliseconds(replayObservations[middle], middle) >= targetTimeMs) {
+      match = middle;
+      high = middle - 1;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return match;
+}
+
+function scheduleReplayFrame() {
+  clearReplayTimer();
+  if (!replayPaused && !replayCompleted) {
+    replayAnimationFrame = requestAnimationFrame(advanceTrackReplay);
+  }
+}
+
+function advanceTrackReplay(frameTime) {
+  replayAnimationFrame = null;
+  if (
+    replayPaused ||
+    replayCompleted ||
+    replayTrackId !== selectedTrackId ||
+    replayObservations.length === 0
+  ) {
+    return;
+  }
+
+  if (replayLastFrameAt === null) {
+    replayLastFrameAt = frameTime;
+  } else {
+    const elapsed = Math.min(500, Math.max(0, frameTime - replayLastFrameAt));
+    replayLastFrameAt = frameTime;
+    replayClockTimeMs += elapsed * replaySpeed();
+  }
+
+  const endIndex = replayObservations.length - 1;
+  const endTime = observationTimeMilliseconds(replayObservations[endIndex], endIndex);
+  if (replayClockTimeMs >= endTime) {
+    replayClockTimeMs = endTime;
+    replayCompleted = true;
+    renderReplayIndex(endIndex);
+    updateTrackModeControls();
+    return;
+  }
+
+  const nextIndex = replayIndexAtTime(replayClockTimeMs);
+  if (nextIndex !== replayIndex) {
+    renderReplayIndex(nextIndex);
+  }
+  scheduleReplayFrame();
+}
+
+function seekTrackReplay(index) {
+  if (replayObservations.length === 0) {
+    return;
+  }
+  clearReplayTimer();
+  const boundedIndex = Math.max(
+    0,
+    Math.min(Number(index) || 0, replayObservations.length - 1),
+  );
+  replayClockTimeMs = observationTimeMilliseconds(
+    replayObservations[boundedIndex],
+    boundedIndex,
+  );
+  replayLastFrameAt = null;
+  replayCompleted = boundedIndex === replayObservations.length - 1;
+  renderReplayIndex(boundedIndex, true);
+  updateTrackModeControls();
+  scheduleReplayFrame();
+}
+
+function stepTrackReplay(seconds) {
+  if (replayObservations.length === 0) {
+    return;
+  }
+  const firstTime = observationTimeMilliseconds(replayObservations[0], 0);
+  const lastIndex = replayObservations.length - 1;
+  const lastTime = observationTimeMilliseconds(
+    replayObservations[lastIndex],
+    lastIndex,
+  );
+  const currentTime = observationTimeMilliseconds(
+    replayObservations[replayIndex],
+    replayIndex,
+  );
+  const target = Math.max(
+    firstTime,
+    Math.min(lastTime, currentTime + seconds * 1000),
+  );
+  const targetIndex = seconds > 0
+    ? replayIndexAtOrAfterTime(target)
+    : replayIndexAtTime(target);
+  seekTrackReplay(targetIndex);
+}
+
+async function startTrackReplay() {
+  if (!selectedTrackId) {
+    return;
+  }
+  const requestedTrackId = selectedTrackId;
+  liveFollowTrackId = null;
+  stopTrackReplay({ clearStatus: false });
+  removeArchivePreviewLayers();
+  replayTrackId = requestedTrackId;
+  elements.trackReplayStatus.textContent = "Pobieranie historii trasy…";
+  updateTrackModeControls();
+
+  try {
+    const payload = await fetchJson(
+      `/api/v1/tracks/${encodeURIComponent(requestedTrackId)}/history?limit=10000`,
+    );
+    if (selectedTrackId !== requestedTrackId) {
+      return;
+    }
+    const observations = (payload.observations ?? []).filter((observation) =>
+      hasPosition(observation),
+    );
+    if (observations.length < 2) {
+      stopTrackReplay({ clearStatus: false });
+      elements.trackReplayStatus.textContent = "Za mało punktów do odtworzenia trasy";
+      return;
+    }
+
+    replayTrackId = requestedTrackId;
+    replayObservations = observations;
+    replayTotalObservations = payload.total_observations ?? observations.length;
+    replayIndex = 0;
+    replayRenderedIndex = -1;
+    replayPaused = false;
+    replayCompleted = false;
+    replayLastFrameAt = null;
+    replayClockTimeMs = observationTimeMilliseconds(observations[0], 0);
+    const firstPoint = [observations[0].latitude, observations[0].longitude];
+    replayMarker = L.marker(firstPoint, {
+      icon: replayDroneIcon(observations[0]),
+      zIndexOffset: 600,
+    }).addTo(map);
+    replayTrail = L.polyline([], {
+      color: "#b48cff",
+      weight: 3,
+      opacity: 0.82,
+    }).addTo(map);
+
+    elements.trackReplaySeek.min = "0";
+    elements.trackReplaySeek.max = String(observations.length - 1);
+    elements.trackReplaySeek.value = "0";
+    elements.trackReplayStartTime.textContent = formatCompactDateTime(
+      observations[0].message_time,
+    );
+    elements.trackReplayEndTime.textContent = formatCompactDateTime(
+      observations[observations.length - 1].message_time,
+    );
+
+    const bounds = L.latLngBounds(
+      observations.map((observation) => [
+        observation.latitude,
+        observation.longitude,
+      ]),
+    );
+    if (bounds.isValid()) {
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+    }
+    renderReplayIndex(0, true);
+    updateTrackModeControls();
+    scheduleReplayFrame();
+  } catch (error) {
+    if (selectedTrackId === requestedTrackId) {
+      stopTrackReplay({ clearStatus: false });
+      elements.trackReplayStatus.textContent = "Nie udało się pobrać trasy";
+    }
+    console.error("Nie udało się pobrać historii śladu", error);
+  }
+}
+
+function toggleTrackReplayPause() {
+  if (replayTrackId !== selectedTrackId || replayObservations.length === 0) {
+    return;
+  }
+
+  if (replayCompleted) {
+    replayPaused = false;
+    seekTrackReplay(0);
+  } else if (replayPaused) {
+    replayPaused = false;
+    replayLastFrameAt = null;
+    renderReplayIndex(replayIndex);
+    scheduleReplayFrame();
+  } else {
+    replayPaused = true;
+    clearReplayTimer();
+    renderReplayIndex(replayIndex);
+  }
+  updateTrackModeControls();
+}
+
+function toggleLiveTracking() {
+  if (!selectedTrackId) {
+    return;
+  }
+  const selectedTrack = currentTracks.find((track) => track.id === selectedTrackId);
+  if (selectedTrack?.state === "ended" || elements.showEnded.checked) {
+    elements.trackReplayStatus.textContent =
+      "Trasa archiwalna — użyj odtwarzania";
+    updateTrackModeControls();
+    return;
+  }
+  if (liveFollowTrackId === selectedTrackId) {
+    liveFollowTrackId = null;
+    elements.trackReplayStatus.textContent = "Śledzenie na żywo zatrzymane";
+  } else {
+    stopTrackReplay({ clearStatus: false });
+    liveFollowTrackId = selectedTrackId;
+    elements.trackReplayStatus.textContent = "Śledzenie pozycji na żywo";
+    const track = currentTracks.find((candidate) => candidate.id === selectedTrackId);
+    if (track && hasPosition(track)) {
+      map.panTo([track.latitude, track.longitude]);
+    }
+  }
+  updateTrackModeControls();
 }
 
 function selectTrack(trackId) {
@@ -1607,23 +2177,40 @@ function selectTrack(trackId) {
   ) {
     return;
   }
+  if (selectedTrackId !== trackId) {
+    liveFollowTrackId = null;
+    stopTrackReplay();
+    removeArchivePreviewLayers();
+  }
   selectedAuditEvent = null;
   selectedSensorId = null;
   selectedTrackId = trackId;
   const track = currentTracks.find((candidate) => candidate.id === trackId);
+  selectedTrackSnapshot = track ? { ...track } : null;
   renderAuditList(currentAuditEvents);
   renderSensorList(currentSensors);
   renderTrackList(currentTracks);
   renderSelection(track);
 
   if (track && hasPosition(track)) {
-    map.panTo([track.latitude, track.longitude]);
-    trackLayers.get(track.id)?.marker.openPopup();
+    showArchivePreview(track);
+    if (elements.showEnded.checked && hasPosition(track, "pilot_")) {
+      map.fitBounds(
+        [
+          [track.latitude, track.longitude],
+          [track.pilot_latitude, track.pilot_longitude],
+        ],
+        { padding: [55, 55], maxZoom: 15 },
+      );
+    } else {
+      map.panTo([track.latitude, track.longitude]);
+    }
+    const marker = elements.showEnded.checked
+      ? archivePreviewMarker
+      : trackLayers.get(track.id)?.marker;
+    marker?.openPopup();
   }
 
-  refreshSelectedHistory().catch((error) => {
-    console.error("Nie udało się pobrać historii śladu", error);
-  });
 }
 
 function selectSensor(sensorId) {
@@ -1636,10 +2223,12 @@ function selectSensor(sensorId) {
   }
 
   selectedTrackId = null;
+  selectedTrackSnapshot = null;
   selectedAuditEvent = null;
   selectedSensorId = sensorId;
-  selectedHistory?.remove();
-  selectedHistory = null;
+  liveFollowTrackId = null;
+  stopTrackReplay();
+  removeArchivePreviewLayers();
   const sensor = currentSensors.find((candidate) => candidate.id === sensorId);
   renderTrackList(currentTracks);
   renderAuditList(currentAuditEvents);
@@ -1663,9 +2252,11 @@ function selectAuditEvent(event) {
   }
 
   selectedTrackId = null;
+  selectedTrackSnapshot = null;
   selectedSensorId = null;
-  selectedHistory?.remove();
-  selectedHistory = null;
+  liveFollowTrackId = null;
+  stopTrackReplay();
+  removeArchivePreviewLayers();
   selectedAuditEvent = event;
   renderTrackList(currentTracks);
   renderSensorList(currentSensors);
@@ -1686,10 +2277,12 @@ function selectAuditEvent(event) {
 
 function clearSelection() {
   selectedTrackId = null;
+  selectedTrackSnapshot = null;
   selectedSensorId = null;
   selectedAuditEvent = null;
-  selectedHistory?.remove();
-  selectedHistory = null;
+  liveFollowTrackId = null;
+  stopTrackReplay();
+  removeArchivePreviewLayers();
   renderSelection(null);
   renderTrackList(currentTracks);
   renderSensorList(currentSensors);
@@ -2155,16 +2748,30 @@ async function refresh() {
     const includeEnded = elements.showEnded.checked ? "true" : "false";
     const includeClosedAlerts = elements.showClosedAlerts.checked ? "true" : "false";
     const auditCategory = encodeURIComponent(elements.auditCategory.value);
-    const [sensorPayload, trackPayload, zonePayload, alertPayload, auditPayload] = await Promise.all([
+    const [
+      sensorPayload,
+      trackPayload,
+      trailPayload,
+      zonePayload,
+      alertPayload,
+      auditPayload,
+    ] = await Promise.all([
       fetchJson("/api/v1/sensors"),
       fetchJson(`/api/v1/tracks?include_ended=${includeEnded}`),
+      fetchJson(
+        `/api/v1/tracks/trails?seconds=${LIVE_TRAIL_SECONDS}&limit=${LIVE_TRAIL_POINT_LIMIT}`,
+      ),
       fetchJson("/api/v1/zones"),
       fetchJson(`/api/v1/alerts?include_closed=${includeClosedAlerts}`),
       fetchJson(`/api/v1/audit/events?category=${auditCategory}&limit=100`),
     ]);
 
     currentSensors = sensorPayload.sensors ?? [];
-    currentTracks = trackPayload.tracks ?? [];
+    const fetchedTracks = trackPayload.tracks ?? [];
+    const archiveMode = elements.showEnded.checked;
+    currentTracks = archiveMode
+      ? fetchedTracks.filter((track) => track.state === "ended")
+      : fetchedTracks.filter((track) => track.state !== "ended");
     currentZones = zonePayload.zones ?? [];
     currentAlerts = alertPayload.alerts ?? [];
     currentAuditEvents = auditPayload.events ?? [];
@@ -2172,7 +2779,23 @@ async function refresh() {
 
     updateZoneLayers(currentZones, currentAlerts);
     updateSensorMarkers(currentSensors);
-    updateTrackMarkers(currentTracks);
+    updateTrackMarkers(archiveMode ? [] : currentTracks);
+    updateLiveTrailLayers(
+      archiveMode ? [] : (trailPayload.trails ?? []),
+      archiveMode ? [] : currentTracks,
+    );
+    if (liveFollowTrackId) {
+      const followedTrack = currentTracks.find(
+        (track) => track.id === liveFollowTrackId,
+      );
+      if (followedTrack && hasPosition(followedTrack)) {
+        map.panTo([followedTrack.latitude, followedTrack.longitude]);
+      } else {
+        liveFollowTrackId = null;
+        elements.trackReplayStatus.textContent = "Ślad nie jest już dostępny na żywo";
+        updateTrackModeControls();
+      }
+    }
     renderSensorList(currentSensors);
     renderTrackList(currentTracks);
     renderAlertList(currentAlerts);
@@ -2180,7 +2803,7 @@ async function refresh() {
     renderAuditList(currentAuditEvents);
 
     const onlineSensors = currentSensors.filter((sensor) => sensor.status === "online").length;
-    const activeTracks = currentTracks.filter((track) => track.state === "active").length;
+    const activeTracks = fetchedTracks.filter((track) => track.state === "active").length;
     const openAlerts = currentAlerts.filter((alert) => alert.state !== "closed").length;
     elements.onlineSensors.textContent = String(onlineSensors);
     elements.activeTracks.textContent = String(activeTracks);
@@ -2193,9 +2816,19 @@ async function refresh() {
 
     if (selectedTrackId) {
       const selected = currentTracks.find((track) => track.id === selectedTrackId);
-      if (selected) {
+      const replayActive = (
+        replayTrackId === selectedTrackId && replayObservations.length > 0
+      );
+      if (replayActive) {
+        renderReplayIndex(replayIndex);
+      } else if (selected && archiveMode) {
+        selectedTrackSnapshot ??= { ...selected };
+        renderSelection(selectedTrackSnapshot);
+      } else if (selected) {
+        selectedTrackSnapshot = { ...selected };
         renderSelection(selected);
-        await refreshSelectedHistory();
+      } else if (selectedTrackSnapshot && archiveMode) {
+        renderSelection(selectedTrackSnapshot);
       } else {
         clearSelection();
       }
@@ -2239,7 +2872,10 @@ async function refresh() {
   }
 }
 
-elements.showEnded.addEventListener("change", refresh);
+elements.showEnded.addEventListener("change", () => {
+  clearSelection();
+  refresh();
+});
 elements.showClosedAlerts.addEventListener("change", refresh);
 elements.auditCategory.addEventListener("change", () => {
   clearSelection();
@@ -2249,6 +2885,18 @@ elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
 elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
+elements.trackFollowLive.addEventListener("click", toggleLiveTracking);
+elements.trackReplay.addEventListener("click", startTrackReplay);
+elements.trackReplaySeek.addEventListener("input", () => {
+  seekTrackReplay(elements.trackReplaySeek.value);
+});
+elements.trackReplayBack.addEventListener("click", () => stepTrackReplay(-10));
+elements.trackReplayPause.addEventListener("click", toggleTrackReplayPause);
+elements.trackReplayForward.addEventListener("click", () => stepTrackReplay(10));
+elements.trackReplayStop.addEventListener("click", () => stopTrackReplay());
+elements.trackReplaySpeed.addEventListener("change", () => {
+  replayLastFrameAt = null;
+});
 elements.operatorMenuToggle.addEventListener("click", toggleOperatorMenu);
 elements.loginForm.addEventListener("submit", login);
 elements.passwordForm.addEventListener("submit", changeOwnPassword);

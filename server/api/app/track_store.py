@@ -1,9 +1,22 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
 from app.config import settings
 from app.database import connection
 from app.track_identity import resolve_track_identity
+
+
+def is_live_observation(
+    message_time: datetime,
+    now: datetime | None = None,
+) -> bool:
+    reference_time = now or datetime.now(timezone.utc)
+    if message_time.tzinfo is None:
+        message_time = message_time.replace(tzinfo=timezone.utc)
+    return message_time >= reference_time - timedelta(
+        seconds=settings.track_ended_after_seconds
+    )
 
 
 def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
@@ -57,6 +70,8 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                 rejected += 1
                 continue
 
+            observation_is_live = is_live_observation(observation["message_time"])
+
             cursor.execute(
                 """
                 INSERT INTO tracks (
@@ -74,6 +89,7 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     last_drone_mac,
                     first_seen_at,
                     last_seen_at,
+                    ended_at,
                     observation_count,
                     last_observation_id
                 )
@@ -81,7 +97,10 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     %(track_key)s,
                     %(identity_key)s,
                     %(identity_type)s,
-                    'new',
+                    CASE
+                        WHEN %(observation_is_live)s THEN 'new'
+                        ELSE 'ended'
+                    END,
                     CASE
                         WHEN CAST(%(drone_longitude)s AS DOUBLE PRECISION) IS NULL
                           OR CAST(%(drone_latitude)s AS DOUBLE PRECISION) IS NULL
@@ -114,6 +133,10 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     %(drone_mac)s,
                     %(message_time)s,
                     %(message_time)s,
+                    CASE
+                        WHEN %(observation_is_live)s THEN NULL
+                        ELSE NOW()
+                    END,
                     1,
                     %(observation_id)s
                 )
@@ -121,8 +144,12 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     identity_key = EXCLUDED.identity_key,
                     identity_type = EXCLUDED.identity_type,
                     state = CASE
+                        WHEN EXCLUDED.last_seen_at < tracks.last_seen_at
+                            THEN tracks.state
                         WHEN tracks.state IN ('anomalous', 'no_gps')
                             THEN tracks.state
+                        WHEN NOT %(observation_is_live)s
+                            THEN 'ended'
                         WHEN tracks.observation_count + 1 >= 2
                             THEN 'active'
                         ELSE 'new'
@@ -199,7 +226,13 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                         tracks.last_seen_at,
                         EXCLUDED.last_seen_at
                     ),
-                    ended_at = NULL,
+                    ended_at = CASE
+                        WHEN EXCLUDED.last_seen_at < tracks.last_seen_at
+                            THEN tracks.ended_at
+                        WHEN NOT %(observation_is_live)s
+                            THEN COALESCE(tracks.ended_at, NOW())
+                        ELSE NULL
+                    END,
                     observation_count = tracks.observation_count + 1,
                     last_observation_id = CASE
                         WHEN EXCLUDED.last_seen_at >= tracks.last_seen_at
@@ -224,6 +257,7 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     "basic_id": observation["basic_id"],
                     "drone_mac": observation["drone_mac"],
                     "message_time": observation["message_time"],
+                    "observation_is_live": observation_is_live,
                     "observation_id": observation["id"],
                 },
             )
@@ -331,36 +365,127 @@ def list_tracks(include_ended: bool = False) -> list[dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_track_history(track_id: UUID, limit: int) -> list[dict[str, Any]]:
+def get_live_track_trails(
+    seconds: int,
+    limit_per_track: int,
+) -> list[dict[str, Any]]:
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
             """
+            WITH recent AS (
+                SELECT
+                    track.id AS track_id,
+                    observation.id AS observation_id,
+                    observation.message_time,
+                    ST_Y(observation.drone_position::geometry) AS latitude,
+                    ST_X(observation.drone_position::geometry) AS longitude,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY track.id
+                        ORDER BY observation.message_time DESC, observation.id DESC
+                    ) AS recent_row
+                FROM tracks AS track
+                JOIN track_observations AS link
+                    ON link.track_id = track.id
+                JOIN observations AS observation
+                    ON observation.id = link.observation_id
+                WHERE track.state <> 'ended'
+                  AND observation.drone_position IS NOT NULL
+                  AND observation.received_at
+                      >= NOW() - (%s * INTERVAL '1 second')
+                  AND observation.message_time
+                      >= NOW() - (%s * INTERVAL '1 second')
+                  AND observation.message_time <= NOW() + INTERVAL '5 seconds'
+            )
             SELECT *
-            FROM (
+            FROM recent
+            WHERE recent_row <= %s
+            ORDER BY track_id, message_time, observation_id
+            """,
+            (seconds, seconds, limit_per_track),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+
+    trails: list[dict[str, Any]] = []
+    trail_by_track: dict[UUID, dict[str, Any]] = {}
+    for row in rows:
+        track_id = row.pop("track_id")
+        row.pop("recent_row", None)
+        trail = trail_by_track.get(track_id)
+        if trail is None:
+            trail = {"track_id": track_id, "points": []}
+            trail_by_track[track_id] = trail
+            trails.append(trail)
+        trail["points"].append(row)
+    return trails
+
+
+def get_track_history(
+    track_id: UUID,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH ordered AS (
                 SELECT
                     observation.id AS observation_id,
                     sensor.sensor_key AS sensor_id,
+                    observation.basic_id,
+                    observation.operator_id,
                     observation.message_time,
                     observation.received_at,
+                    observation.message_time < observation.received_at
+                        - (%s * INTERVAL '1 second') AS replayed,
                     observation.transport,
                     observation.channel,
                     observation.rssi,
                     ST_Y(observation.drone_position::geometry) AS latitude,
                     ST_X(observation.drone_position::geometry) AS longitude,
+                    ST_Y(observation.pilot_position::geometry) AS pilot_latitude,
+                    ST_X(observation.pilot_position::geometry) AS pilot_longitude,
                     observation.altitude_m,
                     observation.speed_mps,
-                    observation.heading_deg
+                    observation.heading_deg,
+                    ROW_NUMBER() OVER (
+                        ORDER BY observation.message_time, observation.id
+                    ) AS history_row,
+                    COUNT(*) OVER () AS total_observations
                 FROM track_observations AS link
                 JOIN observations AS observation
                     ON observation.id = link.observation_id
                 JOIN sensors AS sensor
                     ON sensor.id = observation.sensor_id
                 WHERE link.track_id = %s
-                ORDER BY observation.message_time DESC, observation.id DESC
-                LIMIT %s
-            ) AS recent
-            ORDER BY recent.message_time, recent.observation_id
+                  AND observation.drone_position IS NOT NULL
+            ),
+            bucketed AS (
+                SELECT
+                    ordered.*,
+                    FLOOR(
+                        (history_row - 1) * (%s - 1)::NUMERIC
+                        / GREATEST(total_observations - 1, 1)
+                    )::BIGINT AS sample_bucket
+                FROM ordered
+            ),
+            sampled AS (
+                SELECT DISTINCT ON (sample_bucket) *
+                FROM bucketed
+                ORDER BY sample_bucket, history_row
+            )
+            SELECT *
+            FROM sampled
+            ORDER BY message_time, observation_id
             """,
-            (track_id, limit),
+            (settings.track_ended_after_seconds, track_id, limit),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        total_observations = (
+            int(rows[0]["total_observations"])
+            if rows
+            else 0
+        )
+        for row in rows:
+            row.pop("history_row", None)
+            row.pop("sample_bucket", None)
+            row.pop("total_observations", None)
+        return rows, total_observations

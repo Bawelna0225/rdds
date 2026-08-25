@@ -108,8 +108,75 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(self.outbox.depth(), 0)
         self.assertEqual(self.outbox.dead_letter_depth(), 1)
 
+    def test_message_can_be_read_by_id_without_changing_fifo(self) -> None:
+        first = self.outbox.enqueue("/first", {"value": 1})
+        second = self.outbox.enqueue("/second", {"value": 2})
+
+        selected = self.outbox.get(second)
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.message_id, second)
+        self.assertEqual(self.outbox.oldest_due(now=10**12).message_id, first)
+
 
 class DeliveryTests(unittest.TestCase):
+    def test_current_message_bypasses_historical_fifo(self) -> None:
+        received: list[dict[str, object]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                received.append(json.loads(self.rfile.read(length)))
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"accepted":true}')
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                api_url=f"http://127.0.0.1:{server.server_port}",
+                ingest_token="individual-test-token",
+                sensor_id="skyspy-test-01",
+                display_name="Test receiver",
+                source="loop://",
+                baud_rate=115200,
+                sensor_position=None,
+                transport="unknown",
+                heartbeat_seconds=10,
+                reconnect_seconds=1,
+                request_timeout_seconds=2,
+                spool_path=Path(directory) / "outbox.sqlite3",
+                max_queue_messages=100,
+            )
+            agent = SensorAgent(config)
+            try:
+                old_message = agent.outbox.enqueue("/api/test", {"value": "old"})
+                current_message = agent.outbox.enqueue(
+                    "/api/test",
+                    {"value": "current"},
+                )
+
+                self.assertTrue(agent.deliver_message_by_id(current_message))
+                self.assertEqual(agent.outbox.depth(), 1)
+                self.assertEqual(
+                    agent.outbox.oldest_due(now=10**12).message_id,
+                    old_message,
+                )
+            finally:
+                agent.outbox.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+        self.assertEqual(received, [{"value": "current"}])
+
     def test_retry_then_replay_keeps_payload_and_token(self) -> None:
         received: list[tuple[str, str, dict[str, object]]] = []
         response_codes = [503, 202]

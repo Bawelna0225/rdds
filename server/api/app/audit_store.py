@@ -23,13 +23,13 @@ def list_audit_events(
     }
 
     if category == "alerts":
-        conditions.append("event.event_type LIKE 'alert_%'")
+        conditions.append("event.event_type LIKE 'alert_%%'")
     elif category == "zones":
-        conditions.append("event.event_type LIKE 'zone_%'")
+        conditions.append("event.event_type LIKE 'zone_%%'")
     elif category == "sensors":
-        conditions.append("event.event_type LIKE 'sensor_%'")
+        conditions.append("event.event_type LIKE 'sensor_%%'")
     elif category == "operators":
-        conditions.append("event.event_type LIKE 'operator_%'")
+        conditions.append("event.event_type LIKE 'operator_%%'")
 
     if event_type is not None:
         conditions.append("event.event_type = %(event_type)s")

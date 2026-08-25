@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.12.0**. The complete software path is tested
+> Current development version: **0.13.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -53,6 +53,9 @@ operator actions.
 - live Leaflet map with collapsible operational layers and panels;
 - synthetic multi-sensor simulator and Sky-Spy serial emulator;
 - enriched `skyspy/1.1` firmware output for ESP32-S3 and ESP32-C5.
+- verified scheduled PostgreSQL backups with checksums and guarded restore;
+- configurable data retention with a dry-run mode and maintenance history;
+- optional TLS gateway for HTTPS access without exposing the API port directly.
 
 Remote ID is broadcast data and does not by itself provide cryptographic proof
 of a drone or operator identity. RDDS should be treated as a detection and
@@ -74,6 +77,8 @@ enforcement decisions.
 | `simulator/` | synthetic multi-sensor RDDS protocol source |
 | `skyspy-emulator/` | synthetic Sky-Spy serial JSON source |
 | `protocol/` | machine-readable RDDS protocol schema |
+| `operations/` | scheduled PostgreSQL backup and guarded restore tools |
+| `gateway/` | optional Nginx TLS termination profile |
 | `docs/` | stage documentation, examples and operating notes |
 
 ## Development deployment
@@ -121,8 +126,8 @@ sudo docker compose run --rm api \
 Default development endpoints:
 
 - operator interface: `http://SERVER_IP:8080`;
-- API and OpenAPI documentation: `http://SERVER_IP:8000/docs`;
-- readiness probe: `http://SERVER_IP:8000/api/v1/health/ready`.
+- API and OpenAPI documentation from the VM: `http://127.0.0.1:8000/docs`;
+- readiness probe from the VM: `http://127.0.0.1:8000/api/v1/health/ready`.
 
 Verify the API locally:
 
@@ -135,6 +140,11 @@ curl -fsS http://127.0.0.1:8000/api/v1/health/ready \
 The direct HTTP bindings are intended for a controlled development network.
 Use a reverse proxy, TLS and appropriate network filtering before exposing RDDS
 outside that environment.
+
+Stage 13 adds scheduled backup and disabled-by-default retention services to the
+normal Compose stack. Before the first start, create the backup directory named
+by `RDDS_BACKUP_PATH` and ensure that `RDDS_OPERATIONS_UID/GID` can write it.
+See `docs/RDDS_STAGE13.md` before enabling retention or restoring a backup.
 
 ## Run without receiver hardware
 
@@ -164,6 +174,8 @@ Parser, queue and delivery tests do not require Docker or hardware:
 
 ```bash
 python3 -m unittest discover -s sensor-agent/tests -v
+PYTHONPATH=server/api python3 -m unittest discover -s server/api/tests -v
+sh operations/tests/test_operations.sh
 python3 -m py_compile sensor-agent/rdds_agent.py skyspy-emulator/main.py
 git diff --check
 ```
@@ -208,6 +220,7 @@ annotated Git tag:
 | `rdds-v0.11.0` | enriched Sky-Spy firmware output |
 | `rdds-v0.11.1` | web proxy DNS refresh hotfix |
 | `rdds-v0.12.0` | operator accounts, sessions, CSRF protection and role-based access |
+| `rdds-v0.13.0` | backup, guarded restore, retention and optional TLS gateway |
 
 Start with:
 
@@ -215,13 +228,14 @@ Start with:
 - `docs/RDDS_STAGE9.md` for the field agent and offline queue;
 - `docs/RDDS_STAGE10.md` for the operator workspace;
 - `docs/RDDS_STAGE12.md` for accounts, login, sessions and roles;
+- `docs/RDDS_STAGE13.md` for backup, restore, retention and HTTPS;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
 
 ## Planned work
 
 - validation with physical ESP32-S3 and ESP32-C5 receivers;
-- production TLS and optional central identity integration;
-- database backup, restore, retention and operational monitoring;
+- validation of backup restore drills on a separate host;
+- optional central identity integration;
 - notification outputs and controlled external integrations;
 - optional TAK Server integration as a separate future adapter.
 

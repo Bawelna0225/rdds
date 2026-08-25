@@ -64,7 +64,7 @@ class Config:
     max_queue_messages: int
 
     @classmethod
-    def from_environment(cls) -> "Config":
+    def from_environment(cls) -> Config:
         sensor_id = os.getenv("RDDS_AGENT_SENSOR_ID", "skyspy-sensor-01").strip()
         ingest_token = os.getenv("RDDS_AGENT_SENSOR_TOKEN", "").strip()
         if not ingest_token:
@@ -231,6 +231,24 @@ class Outbox:
             """
         ).fetchone()
         if row is None or float(row["next_attempt_at"]) > now:
+            return None
+        return QueuedMessage(
+            message_id=int(row["id"]),
+            path=str(row["path"]),
+            payload_json=str(row["payload_json"]),
+            attempts=int(row["attempts"]),
+        )
+
+    def get(self, message_id: int) -> QueuedMessage | None:
+        row = self.connection.execute(
+            """
+            SELECT id, path, payload_json, attempts
+            FROM outbox
+            WHERE id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        if row is None:
             return None
         return QueuedMessage(
             message_id=int(row["id"]),
@@ -437,7 +455,7 @@ class SensorAgent:
             context["position"] = self.config.sensor_position
         return context
 
-    def enqueue_heartbeat(self) -> None:
+    def enqueue_heartbeat(self) -> int:
         payload = {
             "protocol_version": PROTOCOL_VERSION,
             "message_type": "heartbeat",
@@ -447,16 +465,16 @@ class SensorAgent:
                 "queue_depth": self.outbox.depth(),
             },
         }
-        self.outbox.enqueue(HEARTBEAT_PATH, payload)
+        return self.outbox.enqueue(HEARTBEAT_PATH, payload)
 
-    def enqueue_detection(self, detection: dict[str, Any]) -> None:
+    def enqueue_detection(self, detection: dict[str, Any]) -> int:
         payload = {
             "protocol_version": PROTOCOL_VERSION,
             "message_type": "observation",
             "sensor": self.sensor_context(),
             **detection,
         }
-        self.outbox.enqueue(OBSERVATION_PATH, payload)
+        return self.outbox.enqueue(OBSERVATION_PATH, payload)
 
     def connect_source(self) -> None:
         if serial is None:
@@ -484,8 +502,8 @@ class SensorAgent:
         if self.source_connection is not None:
             try:
                 self.source_connection.close()
-            except Exception:
-                pass
+            except OSError:
+                LOG.debug("error while closing Sky-Spy source", exc_info=True)
         self.source_connection = None
         self.next_source_connect_monotonic = (
             time.monotonic() + self.config.reconnect_seconds
@@ -511,8 +529,9 @@ class SensorAgent:
             self.ignored_lines += 1
             return
         try:
-            self.enqueue_detection(detection)
+            message_id = self.enqueue_detection(detection)
             self.accepted_detections += 1
+            self.deliver_message_by_id(message_id)
         except OutboxFull as exc:
             LOG.error("detection rejected because %s", exc)
 
@@ -560,7 +579,7 @@ class SensorAgent:
                 continue
 
             attempts = message.attempts + 1
-            if error.startswith("HTTP 401") or error.startswith("HTTP 403"):
+            if error.startswith(("HTTP 401", "HTTP 403")):
                 delay = 60.0
             else:
                 delay = min(60.0, 2.0 ** min(attempts, 6))
@@ -573,6 +592,40 @@ class SensorAgent:
             )
             break
         return sent
+
+    def deliver_message_by_id(self, message_id: int) -> bool:
+        """Try a newly queued message before draining the historical FIFO."""
+        message = self.outbox.get(message_id)
+        if message is None:
+            return False
+
+        outcome, error = self.post_message(message)
+        if outcome == "accepted":
+            self.outbox.acknowledge(message.message_id)
+            return True
+        if outcome == "dead_letter":
+            LOG.error(
+                "message %d moved to dead letter: %s",
+                message.message_id,
+                error,
+            )
+            self.outbox.move_to_dead_letter(message.message_id, error)
+            return False
+
+        attempts = message.attempts + 1
+        delay = (
+            60.0
+            if error.startswith(("HTTP 401", "HTTP 403"))
+            else min(60.0, 2.0 ** min(attempts, 6))
+        )
+        self.outbox.retry(message.message_id, error, delay)
+        LOG.warning(
+            "current message delivery deferred for %.0fs after attempt %d: %s",
+            delay,
+            attempts,
+            error,
+        )
+        return False
 
     def run(self) -> None:
         signal.signal(signal.SIGINT, self.stop)
@@ -593,8 +646,9 @@ class SensorAgent:
                     >= self.config.heartbeat_seconds
                 ):
                     try:
-                        self.enqueue_heartbeat()
+                        message_id = self.enqueue_heartbeat()
                         self.last_heartbeat_monotonic = now
+                        self.deliver_message_by_id(message_id)
                     except OutboxFull as exc:
                         LOG.error("heartbeat rejected because %s", exc)
 

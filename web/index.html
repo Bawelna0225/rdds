@@ -131,7 +131,7 @@
           <div class="toolbar">
             <label class="toggle-row">
               <input id="show-ended" type="checkbox" />
-              <span>Pokaż zakończone</span>
+              <span>Archiwum tras</span>
             </label>
             <label class="toggle-row">
               <input id="show-closed-alerts" type="checkbox" />
@@ -190,7 +190,7 @@
 
           <section class="sidebar-section" data-section-key="tracks">
             <button class="section-heading section-toggle" type="button" aria-expanded="true">
-              <h2>Ślady dronów</h2>
+              <h2 id="track-section-title">Ślady na żywo</h2>
               <span class="section-heading-meta">
                 <span id="track-count" class="counter">0</span>
                 <span class="section-chevron" aria-hidden="true"></span>
@@ -242,6 +242,7 @@
             <div><span class="legend-symbol active"></span>Dron aktywny</div>
             <div><span class="legend-symbol stale"></span>Ślad nieaktualny</div>
             <div><span class="legend-symbol pilot"></span>Operator</div>
+            <div><span class="legend-symbol replay"></span>Dron odtwarzany</div>
             <div><span class="legend-symbol zone"></span>Strefa chroniona</div>
             <div><span class="legend-symbol alert"></span>Alarm aktywny</div>
           </div>
@@ -251,6 +252,59 @@
             <p id="selection-eyebrow" class="eyebrow">Wybrany ślad</p>
             <h2 id="selection-title">—</h2>
             <div id="selection-details" class="selection-details"></div>
+            <div id="track-controls" class="track-controls hidden">
+              <div class="track-mode-actions">
+                <button id="track-follow-live" type="button">Śledź na żywo</button>
+                <button id="track-replay" type="button" class="secondary-button">
+                  Odtwórz trasę
+                </button>
+              </div>
+              <div id="track-player" class="track-player hidden">
+                <input
+                  id="track-replay-seek"
+                  class="track-replay-seek"
+                  type="range"
+                  min="0"
+                  max="1"
+                  value="0"
+                  step="1"
+                  aria-label="Pozycja odtwarzania"
+                />
+                <div class="track-replay-times">
+                  <span id="track-replay-start-time">—</span>
+                  <strong id="track-replay-current-time">—</strong>
+                  <span id="track-replay-end-time">—</span>
+                </div>
+                <div class="track-player-actions">
+                  <button id="track-replay-back" type="button" class="secondary-button">
+                    −10 s
+                  </button>
+                  <button id="track-replay-pause" type="button">Pauza</button>
+                  <button id="track-replay-forward" type="button" class="secondary-button">
+                    +10 s
+                  </button>
+                  <button id="track-replay-stop" type="button" class="secondary-button">
+                    Zamknij
+                  </button>
+                </div>
+              </div>
+              <div class="track-playback-settings">
+                <label>
+                  <span>Prędkość</span>
+                  <select id="track-replay-speed">
+                    <option value="1">×1</option>
+                    <option value="4">×4</option>
+                    <option value="16">×16</option>
+                    <option value="64" selected>×64</option>
+                    <option value="256">×256</option>
+                    <option value="1024">×1024</option>
+                  </select>
+                </label>
+                <span id="track-replay-status" class="track-replay-status">
+                  Wybierz tryb pracy
+                </span>
+              </div>
+            </div>
             <div id="selection-timeline" class="selection-timeline hidden">
               <h3>Historia incydentu</h3>
               <div id="selection-timeline-list" class="timeline-list"></div>

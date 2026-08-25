@@ -62,7 +62,15 @@ ALTER TABLE audit_events
             'sensor_updated',
             'sensor_deleted',
             'sensor_token_issued',
-            'sensor_token_rotated'
+            'sensor_token_rotated',
+            'operator_created',
+            'operator_updated',
+            'operator_enabled',
+            'operator_disabled',
+            'operator_deleted',
+            'operator_password_changed',
+            'operator_logged_in',
+            'operator_logged_out'
         )
     );
 

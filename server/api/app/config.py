@@ -43,6 +43,15 @@ class Settings:
     track_ended_after_seconds: int
     track_batch_size: int
     alert_poll_seconds: float
+    retention_enabled: bool
+    maintenance_interval_seconds: int
+    retention_batch_size: int
+    retention_sessions_days: int
+    retention_heartbeats_days: int
+    retention_observations_days: int
+    retention_audit_days: int
+    retention_alerts_days: int
+    retention_tracks_days: int
 
 
 def load_settings() -> Settings:
@@ -75,6 +84,31 @@ def load_settings() -> Settings:
         ),
         track_batch_size=int(os.getenv("RDDS_TRACK_BATCH_SIZE", "500")),
         alert_poll_seconds=float(os.getenv("RDDS_ALERT_POLL_SECONDS", "1")),
+        retention_enabled=_boolean("RDDS_RETENTION_ENABLED", False),
+        maintenance_interval_seconds=int(
+            os.getenv("RDDS_MAINTENANCE_INTERVAL_SECONDS", "86400")
+        ),
+        retention_batch_size=int(
+            os.getenv("RDDS_RETENTION_BATCH_SIZE", "10000")
+        ),
+        retention_sessions_days=int(
+            os.getenv("RDDS_RETENTION_SESSIONS_DAYS", "30")
+        ),
+        retention_heartbeats_days=int(
+            os.getenv("RDDS_RETENTION_HEARTBEATS_DAYS", "30")
+        ),
+        retention_observations_days=int(
+            os.getenv("RDDS_RETENTION_OBSERVATIONS_DAYS", "90")
+        ),
+        retention_audit_days=int(
+            os.getenv("RDDS_RETENTION_AUDIT_DAYS", "365")
+        ),
+        retention_alerts_days=int(
+            os.getenv("RDDS_RETENTION_ALERTS_DAYS", "365")
+        ),
+        retention_tracks_days=int(
+            os.getenv("RDDS_RETENTION_TRACKS_DAYS", "365")
+        ),
     )
 
     if settings.track_poll_seconds <= 0:
@@ -100,6 +134,23 @@ def load_settings() -> Settings:
         raise RuntimeError("RDDS_LOGIN_MAX_FAILURES must be between 3 and 20")
     if settings.login_lock_seconds < 60:
         raise RuntimeError("RDDS_LOGIN_LOCK_SECONDS must be at least 60")
+    if settings.maintenance_interval_seconds < 300:
+        raise RuntimeError(
+            "RDDS_MAINTENANCE_INTERVAL_SECONDS must be at least 300"
+        )
+    if not 100 <= settings.retention_batch_size <= 100000:
+        raise RuntimeError("RDDS_RETENTION_BATCH_SIZE must be between 100 and 100000")
+    retention_periods = {
+        "RDDS_RETENTION_SESSIONS_DAYS": settings.retention_sessions_days,
+        "RDDS_RETENTION_HEARTBEATS_DAYS": settings.retention_heartbeats_days,
+        "RDDS_RETENTION_OBSERVATIONS_DAYS": settings.retention_observations_days,
+        "RDDS_RETENTION_AUDIT_DAYS": settings.retention_audit_days,
+        "RDDS_RETENTION_ALERTS_DAYS": settings.retention_alerts_days,
+        "RDDS_RETENTION_TRACKS_DAYS": settings.retention_tracks_days,
+    }
+    for name, days in retention_periods.items():
+        if not 1 <= days <= 36500:
+            raise RuntimeError(f"{name} must be between 1 and 36500")
 
     return settings
 
