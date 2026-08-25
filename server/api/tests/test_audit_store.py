@@ -92,6 +92,42 @@ class LiveObservationTests(unittest.TestCase):
         )
         self.assertFalse(track_store.is_live_observation(message_time, now))
 
+    def test_future_observation_is_not_live(self) -> None:
+        now = datetime(2026, 8, 20, 18, 0, tzinfo=timezone.utc)
+        self.assertFalse(
+            track_store.is_live_observation(now + timedelta(seconds=6), now)
+        )
+
+    def test_track_session_keys_are_unique_but_keep_entity_prefix(self) -> None:
+        entity_key = "basic_id:0123456789abcdef01234567"
+
+        first = track_store.new_track_session_key(entity_key)
+        second = track_store.new_track_session_key(entity_key)
+
+        self.assertTrue(first.startswith(f"{entity_key}:session:"))
+        self.assertTrue(second.startswith(f"{entity_key}:session:"))
+        self.assertNotEqual(first, second)
+
+
+class TrackPriorityTests(unittest.TestCase):
+    def test_live_observations_are_selected_before_replayed_rows(self) -> None:
+        cursor = FakeCursor()
+
+        @contextmanager
+        def fake_connection():
+            yield FakeConnection(cursor)
+
+        with patch.object(track_store, "connection", fake_connection):
+            linked, rejected = track_store.process_observation_batch(limit=25)
+
+        self.assertEqual((0, 0), (linked, rejected))
+        self.assertIn("CASE", cursor.queries[0])
+        self.assertIn("o.message_time", cursor.queries[0])
+        self.assertEqual(
+            (track_store.settings.track_ended_after_seconds, 25),
+            cursor.parameters[0],
+        )
+
 
 class TrackHistoryTests(unittest.TestCase):
     def test_history_is_sampled_and_contains_operator_position(self) -> None:
@@ -177,7 +213,9 @@ class LiveTrackTrailTests(unittest.TestCase):
         self.assertEqual(2, len(trails[0]["points"]))
         self.assertNotIn("recent_row", trails[0]["points"][0])
         self.assertEqual((20, 20, 100), cursor.parameters[0])
-        self.assertIn("PARTITION BY track.id", cursor.queries[0])
+        self.assertIn("DATE_TRUNC('second'", cursor.queries[0])
+        self.assertIn("DISTINCT ON (track_id, sample_time)", cursor.queries[0])
+        self.assertIn("PARTITION BY track_id", cursor.queries[0])
         self.assertIn("track.state <> 'ended'", cursor.queries[0])
         self.assertIn("observation.received_at", cursor.queries[0])
 

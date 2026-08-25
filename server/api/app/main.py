@@ -120,7 +120,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.13.0",
+    version="0.13.1",
     lifespan=lifespan,
 )
 
@@ -566,7 +566,7 @@ def get_tracks(
     dependencies=[Depends(require_viewer)],
 )
 def get_track_trails(
-    seconds: int = Query(default=20, ge=5, le=120),
+    seconds: int = Query(default=60, ge=5, le=120),
     limit: int = Query(default=100, ge=2, le=500),
 ) -> dict[str, object]:
     try:

@@ -60,6 +60,7 @@ class Config:
     heartbeat_seconds: float
     reconnect_seconds: float
     request_timeout_seconds: float
+    replay_messages_per_second: float
     spool_path: Path
     max_queue_messages: int
 
@@ -107,6 +108,13 @@ class Config:
             raise ConfigurationError(
                 f"RDDS_AGENT_TRANSPORT must be one of {sorted(VALID_TRANSPORTS)}"
             )
+        replay_messages_per_second = float(
+            os.getenv("RDDS_AGENT_REPLAY_MESSAGES_PER_SECOND", "2")
+        )
+        if not 0.1 <= replay_messages_per_second <= 100:
+            raise ConfigurationError(
+                "RDDS_AGENT_REPLAY_MESSAGES_PER_SECOND must be between 0.1 and 100"
+            )
 
         return cls(
             api_url=api_url,
@@ -126,6 +134,7 @@ class Config:
             request_timeout_seconds=max(
                 1.0, float(os.getenv("RDDS_AGENT_REQUEST_TIMEOUT_SECONDS", "5"))
             ),
+            replay_messages_per_second=replay_messages_per_second,
             spool_path=Path(
                 os.getenv(
                     "RDDS_AGENT_SPOOL_PATH",
@@ -427,6 +436,7 @@ class SensorAgent:
         self.sequence = 0
         self.started_monotonic = time.monotonic()
         self.last_heartbeat_monotonic = 0.0
+        self.next_replay_monotonic = 0.0
         self.source_connection: Any = None
         self.next_source_connect_monotonic = 0.0
         self.running = True
@@ -558,40 +568,44 @@ class SensorAgent:
         except (URLError, TimeoutError, OSError) as exc:
             return "retry", f"connection error: {exc}"
 
-    def flush_outbox(self, limit: int = 25) -> int:
-        sent = 0
-        for _ in range(limit):
-            message = self.outbox.oldest_due()
-            if message is None:
-                break
-            outcome, error = self.post_message(message)
-            if outcome == "accepted":
-                self.outbox.acknowledge(message.message_id)
-                sent += 1
-                continue
-            if outcome == "dead_letter":
-                LOG.error(
-                    "message %d moved to dead letter: %s",
-                    message.message_id,
-                    error,
-                )
-                self.outbox.move_to_dead_letter(message.message_id, error)
-                continue
+    def flush_outbox(self) -> int:
+        now = time.monotonic()
+        if now < self.next_replay_monotonic:
+            return 0
 
-            attempts = message.attempts + 1
-            if error.startswith(("HTTP 401", "HTTP 403")):
-                delay = 60.0
-            else:
-                delay = min(60.0, 2.0 ** min(attempts, 6))
-            self.outbox.retry(message.message_id, error, delay)
-            LOG.warning(
-                "delivery paused for %.0fs after attempt %d: %s",
-                delay,
-                attempts,
+        message = self.outbox.oldest_due()
+        if message is None:
+            return 0
+
+        outcome, error = self.post_message(message)
+        self.next_replay_monotonic = time.monotonic() + (
+            1.0 / self.config.replay_messages_per_second
+        )
+        if outcome == "accepted":
+            self.outbox.acknowledge(message.message_id)
+            return 1
+        if outcome == "dead_letter":
+            LOG.error(
+                "message %d moved to dead letter: %s",
+                message.message_id,
                 error,
             )
-            break
-        return sent
+            self.outbox.move_to_dead_letter(message.message_id, error)
+            return 0
+
+        attempts = message.attempts + 1
+        if error.startswith(("HTTP 401", "HTTP 403")):
+            delay = 60.0
+        else:
+            delay = min(60.0, 2.0 ** min(attempts, 6))
+        self.outbox.retry(message.message_id, error, delay)
+        LOG.warning(
+            "delivery paused for %.0fs after attempt %d: %s",
+            delay,
+            attempts,
+            error,
+        )
+        return 0
 
     def deliver_message_by_id(self, message_id: int) -> bool:
         """Try a newly queued message before draining the historical FIFO."""
@@ -652,7 +666,6 @@ class SensorAgent:
                     except OutboxFull as exc:
                         LOG.error("heartbeat rejected because %s", exc)
 
-                self.flush_outbox()
                 self.read_source_once()
                 self.flush_outbox()
         finally:

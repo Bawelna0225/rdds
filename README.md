@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.13.0**. The complete software path is tested
+> Current development version: **0.13.1**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -46,7 +46,9 @@ operator actions.
 - per-sensor credentials, token rotation and sensor disable/enable controls;
 - Argon2id operator accounts with server-side sessions, CSRF protection and roles;
 - durable offline queue with retry, replay and dead-letter storage;
-- multi-sensor track correlation and track history;
+- rate-limited offline replay with current observations processed first;
+- multi-sensor track correlation, separate detection sessions and track history;
+- deduplicated 60-second live trails;
 - protected zones with intrusion alerts;
 - alert acknowledgement and closure with an audit trail;
 - sensor and zone editing, disabling and soft deletion;
@@ -180,7 +182,7 @@ python3 -m py_compile sensor-agent/rdds_agent.py skyspy-emulator/main.py
 git diff --check
 ```
 
-The expected result is eight passing sensor-agent unit tests.
+The expected result is eleven passing sensor-agent unit tests.
 
 ## Firmware builds
 
@@ -221,6 +223,7 @@ annotated Git tag:
 | `rdds-v0.11.1` | web proxy DNS refresh hotfix |
 | `rdds-v0.12.0` | operator accounts, sessions, CSRF protection and role-based access |
 | `rdds-v0.13.0` | backup, guarded restore, retention and optional TLS gateway |
+| `rdds-v0.13.1` | live-data priority, separate track sessions and 60-second trails |
 
 Start with:
 
@@ -229,6 +232,7 @@ Start with:
 - `docs/RDDS_STAGE10.md` for the operator workspace;
 - `docs/RDDS_STAGE12.md` for accounts, login, sessions and roles;
 - `docs/RDDS_STAGE13.md` for backup, restore, retention and HTTPS;
+- `docs/RDDS_STAGE13_1.md` for replay throttling and track-session behavior;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
 
 ## Planned work

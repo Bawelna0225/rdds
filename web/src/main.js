@@ -72,7 +72,7 @@ const stateColors = {
   anomalous: "#ff4d5e",
   no_gps: "#b48cff",
 };
-const LIVE_TRAIL_SECONDS = 20;
+const LIVE_TRAIL_SECONDS = 60;
 const LIVE_TRAIL_POINT_LIMIT = 100;
 
 const elements = {

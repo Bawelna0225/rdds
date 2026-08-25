@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.config import settings
 from app.database import connection
@@ -14,9 +14,15 @@ def is_live_observation(
     reference_time = now or datetime.now(timezone.utc)
     if message_time.tzinfo is None:
         message_time = message_time.replace(tzinfo=timezone.utc)
-    return message_time >= reference_time - timedelta(
-        seconds=settings.track_ended_after_seconds
+    return (
+        message_time
+        >= reference_time - timedelta(seconds=settings.track_ended_after_seconds)
+        and message_time <= reference_time + timedelta(seconds=5)
     )
+
+
+def new_track_session_key(entity_key: str) -> str:
+    return f"{entity_key}:session:{uuid4().hex}"
 
 
 def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
@@ -46,11 +52,20 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                 o.heading_deg
             FROM observations o
             WHERE o.processed_at IS NULL
-            ORDER BY o.received_at, o.id
+            ORDER BY
+                CASE
+                    WHEN o.message_time
+                        >= NOW() - (%s * INTERVAL '1 second')
+                      AND o.message_time <= NOW() + INTERVAL '5 seconds'
+                    THEN 0
+                    ELSE 1
+                END,
+                o.received_at,
+                o.id
             LIMIT %s
             FOR UPDATE OF o SKIP LOCKED
             """,
-            (batch_limit,),
+            (settings.track_ended_after_seconds, batch_limit),
         )
         observations = cursor.fetchall()
 
@@ -74,8 +89,37 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
 
             cursor.execute(
                 """
+                SELECT track_key
+                FROM tracks
+                WHERE entity_key = %(entity_key)s
+                  AND first_seen_at
+                      <= %(message_time)s
+                        + (%(session_gap)s * INTERVAL '1 second')
+                  AND last_seen_at
+                      >= %(message_time)s
+                        - (%(session_gap)s * INTERVAL '1 second')
+                ORDER BY last_seen_at DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                {
+                    "entity_key": identity.track_key,
+                    "message_time": observation["message_time"],
+                    "session_gap": settings.track_ended_after_seconds,
+                },
+            )
+            existing_session = cursor.fetchone()
+            session_track_key = (
+                existing_session["track_key"]
+                if existing_session is not None
+                else new_track_session_key(identity.track_key)
+            )
+
+            cursor.execute(
+                """
                 INSERT INTO tracks (
                     track_key,
+                    entity_key,
                     identity_key,
                     identity_type,
                     state,
@@ -95,6 +139,7 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                 )
                 VALUES (
                     %(track_key)s,
+                    %(entity_key)s,
                     %(identity_key)s,
                     %(identity_type)s,
                     CASE
@@ -141,6 +186,7 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                     %(observation_id)s
                 )
                 ON CONFLICT (track_key) DO UPDATE SET
+                    entity_key = EXCLUDED.entity_key,
                     identity_key = EXCLUDED.identity_key,
                     identity_type = EXCLUDED.identity_type,
                     state = CASE
@@ -243,7 +289,8 @@ def process_observation_batch(limit: int | None = None) -> tuple[int, int]:
                 RETURNING id
                 """,
                 {
-                    "track_key": identity.track_key,
+                    "track_key": session_track_key,
+                    "entity_key": identity.track_key,
                     "identity_key": identity.identity_value,
                     "identity_type": identity.identity_type,
                     "drone_longitude": observation["drone_longitude"],
@@ -333,6 +380,7 @@ def list_tracks(include_ended: bool = False) -> list[dict[str, Any]]:
             SELECT
                 track.id,
                 track.track_key,
+                track.entity_key,
                 track.identity_type,
                 track.identity_key,
                 track.state,
@@ -372,17 +420,14 @@ def get_live_track_trails(
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
             """
-            WITH recent AS (
+            WITH candidates AS (
                 SELECT
                     track.id AS track_id,
                     observation.id AS observation_id,
                     observation.message_time,
+                    DATE_TRUNC('second', observation.message_time) AS sample_time,
                     ST_Y(observation.drone_position::geometry) AS latitude,
-                    ST_X(observation.drone_position::geometry) AS longitude,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY track.id
-                        ORDER BY observation.message_time DESC, observation.id DESC
-                    ) AS recent_row
+                    ST_X(observation.drone_position::geometry) AS longitude
                 FROM tracks AS track
                 JOIN track_observations AS link
                     ON link.track_id = track.id
@@ -395,6 +440,28 @@ def get_live_track_trails(
                   AND observation.message_time
                       >= NOW() - (%s * INTERVAL '1 second')
                   AND observation.message_time <= NOW() + INTERVAL '5 seconds'
+            ),
+            deduplicated AS (
+                SELECT DISTINCT ON (track_id, sample_time) *
+                FROM candidates
+                ORDER BY
+                    track_id,
+                    sample_time,
+                    message_time DESC,
+                    observation_id DESC
+            ),
+            recent AS (
+                SELECT
+                    track_id,
+                    observation_id,
+                    message_time,
+                    latitude,
+                    longitude,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY track_id
+                        ORDER BY message_time DESC, observation_id DESC
+                    ) AS recent_row
+                FROM deduplicated
             )
             SELECT *
             FROM recent

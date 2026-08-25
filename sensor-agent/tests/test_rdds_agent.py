@@ -5,6 +5,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -152,6 +153,7 @@ class DeliveryTests(unittest.TestCase):
                 heartbeat_seconds=10,
                 reconnect_seconds=1,
                 request_timeout_seconds=2,
+                replay_messages_per_second=2,
                 spool_path=Path(directory) / "outbox.sqlite3",
                 max_queue_messages=100,
             )
@@ -214,6 +216,7 @@ class DeliveryTests(unittest.TestCase):
                 heartbeat_seconds=10,
                 reconnect_seconds=1,
                 request_timeout_seconds=2,
+                replay_messages_per_second=2,
                 spool_path=Path(directory) / "outbox.sqlite3",
                 max_queue_messages=100,
             )
@@ -227,6 +230,7 @@ class DeliveryTests(unittest.TestCase):
                 agent.outbox.connection.execute(
                     "UPDATE outbox SET next_attempt_at = 0"
                 )
+                agent.next_replay_monotonic = 0
                 self.assertEqual(agent.flush_outbox(), 1)
                 self.assertEqual(agent.outbox.depth(), 0)
             finally:
@@ -239,6 +243,43 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(received[0], received[1])
         self.assertEqual(received[0][0], "/api/test")
         self.assertEqual(received[0][1], "individual-test-token")
+
+    def test_historical_replay_is_rate_limited(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                api_url="http://127.0.0.1:1",
+                ingest_token="individual-test-token",
+                sensor_id="skyspy-test-01",
+                display_name="Test receiver",
+                source="loop://",
+                baud_rate=115200,
+                sensor_position=None,
+                transport="unknown",
+                heartbeat_seconds=10,
+                reconnect_seconds=1,
+                request_timeout_seconds=2,
+                replay_messages_per_second=2,
+                spool_path=Path(directory) / "outbox.sqlite3",
+                max_queue_messages=100,
+            )
+            agent = SensorAgent(config)
+            try:
+                agent.outbox.enqueue("/api/test", {"value": "first"})
+                agent.outbox.enqueue("/api/test", {"value": "second"})
+                with patch.object(
+                    agent,
+                    "post_message",
+                    return_value=("accepted", ""),
+                ) as post_message:
+                    self.assertEqual(agent.flush_outbox(), 1)
+                    self.assertEqual(agent.flush_outbox(), 0)
+                    self.assertEqual(post_message.call_count, 1)
+
+                    agent.next_replay_monotonic = 0
+                    self.assertEqual(agent.flush_outbox(), 1)
+                    self.assertEqual(post_message.call_count, 2)
+            finally:
+                agent.outbox.close()
 
 
 if __name__ == "__main__":
