@@ -9,6 +9,75 @@ const STORAGE_REFRESH_INTERVAL_MS = 60000;
 const SECURITY_SUMMARY_INTERVAL_MS = 60000;
 const DEFAULT_CENTER = [52.2297, 21.0122];
 const SIDEBAR_STATE_KEY = "rdds.sidebar.sections.v1";
+const ALERT_AUDIO_SETTINGS_KEY = "rdds.alert.audio.v1";
+const CRITICAL_REPEAT_INTERVAL_MS = 30000;
+
+const ALERT_SOUND_PROFILES = {
+  detected: {
+    waveform: "sawtooth",
+    gain: 0.78,
+    attackSeconds: 0.004,
+    releaseSeconds: 0.025,
+    steps: [
+      { frequency: 1350, endFrequency: 720, duration: 0.26, gap: 0.09 },
+      { frequency: 1350, endFrequency: 720, duration: 0.26, gap: 0.09 },
+      { frequency: 1350, endFrequency: 720, duration: 0.26, gap: 0.09 },
+      { frequency: 1350, endFrequency: 720, duration: 0.38, gap: 0 },
+    ],
+  },
+  low: {
+    waveform: "sawtooth",
+    gain: 0.7,
+    attackSeconds: 0.008,
+    releaseSeconds: 0.04,
+    steps: [
+      { frequency: 420, endFrequency: 260, duration: 0.56, gap: 0.24 },
+      { frequency: 420, endFrequency: 260, duration: 0.56, gap: 0.24 },
+      { frequency: 420, endFrequency: 260, duration: 0.7, gap: 0 },
+    ],
+  },
+  medium: {
+    waveform: "square",
+    gain: 0.74,
+    attackSeconds: 0.004,
+    releaseSeconds: 0.025,
+    steps: [
+      { frequency: 880, duration: 0.17, gap: 0.06 },
+      { frequency: 620, duration: 0.17, gap: 0.24 },
+      { frequency: 880, duration: 0.17, gap: 0.06 },
+      { frequency: 620, duration: 0.17, gap: 0.24 },
+      { frequency: 880, duration: 0.17, gap: 0.06 },
+      { frequency: 620, duration: 0.17, gap: 0.24 },
+      { frequency: 880, duration: 0.17, gap: 0.06 },
+      { frequency: 620, duration: 0.28, gap: 0 },
+    ],
+  },
+  high: {
+    waveform: "sawtooth",
+    gain: 0.8,
+    attackSeconds: 0.006,
+    releaseSeconds: 0.035,
+    steps: [
+      { frequency: 620, endFrequency: 1450, duration: 0.64, gap: 0.04 },
+      { frequency: 1450, endFrequency: 620, duration: 0.64, gap: 0.1 },
+      { frequency: 620, endFrequency: 1450, duration: 0.64, gap: 0.04 },
+      { frequency: 1450, endFrequency: 620, duration: 0.64, gap: 0.1 },
+      { frequency: 620, endFrequency: 1450, duration: 0.64, gap: 0.04 },
+      { frequency: 1450, endFrequency: 620, duration: 0.78, gap: 0 },
+    ],
+  },
+  critical: {
+    waveform: "square",
+    gain: 0.82,
+    attackSeconds: 0.003,
+    releaseSeconds: 0.02,
+    steps: Array.from({ length: 18 }, (_, index) => ({
+      frequency: index % 2 === 0 ? 1450 : 580,
+      duration: index === 17 ? 0.3 : 0.13,
+      gap: index === 17 ? 0 : 0.045,
+    })),
+  },
+};
 
 const stateLabels = {
   new: "nowy",
@@ -33,6 +102,12 @@ const severityLabels = {
   critical: "krytyczny",
 };
 
+const alertStateLabels = {
+  active: "nowy",
+  acknowledged: "potwierdzony",
+  closed: "zamknięty",
+};
+
 const severityColors = {
   low: "#43d5ff",
   medium: "#ffb84d",
@@ -40,10 +115,18 @@ const severityColors = {
   critical: "#ff2841",
 };
 
+const presenceLabels = {
+  inside: "w strefie",
+  left: "opuścił strefę",
+  lost: "utracono ślad",
+};
+
 const auditEventLabels = {
+  track_detected: "Nowy dron w zasięgu sensora",
   alert_opened: "Otwarto alarm",
   alert_acknowledged: "Potwierdzono alarm",
   alert_closed: "Zamknięto alarm",
+  alert_presence_changed: "Zmienił się stan obecności",
   zone_created: "Utworzono strefę",
   zone_enabled: "Włączono strefę",
   zone_disabled: "Wyłączono strefę",
@@ -62,10 +145,10 @@ const auditEventLabels = {
   operator_disabled: "Wyłączono konto",
   operator_deleted: "Usunięto konto",
   operator_password_changed: "Zmieniono hasło konta",
-  operator_logged_in: "Logowanie operatora",
-  operator_logged_out: "Wylogowanie operatora",
-  operator_session_revoked: "Zakończono sesję operatora",
-  operator_sessions_revoked: "Zakończono sesje operatora",
+  operator_logged_in: "Logowanie do RDDS",
+  operator_logged_out: "Wylogowanie z RDDS",
+  operator_session_revoked: "Zakończono sesję konta RDDS",
+  operator_sessions_revoked: "Zakończono sesje konta RDDS",
   operator_security_exported: "Wyeksportowano dziennik bezpieczeństwa",
 };
 
@@ -93,6 +176,12 @@ const elements = {
   connectionDot: document.querySelector("#connection-dot"),
   connectionLabel: document.querySelector("#connection-label"),
   lastUpdate: document.querySelector("#last-update"),
+  alarmAudioToggle: document.querySelector("#alarm-audio-toggle"),
+  alarmAudioTest: document.querySelector("#alarm-audio-test"),
+  alarmAudioTestProfile: document.querySelector("#alarm-audio-test-profile"),
+  alarmAudioVolume: document.querySelector("#alarm-audio-volume"),
+  alarmAudioVolumeValue: document.querySelector("#alarm-audio-volume-value"),
+  alarmAudioRepeat: document.querySelector("#alarm-audio-repeat"),
   onlineSensors: document.querySelector("#online-sensors"),
   activeTracks: document.querySelector("#active-tracks"),
   openAlerts: document.querySelector("#open-alerts"),
@@ -108,6 +197,11 @@ const elements = {
   operatorPanel: document.querySelector("#operator-panel"),
   operatorModeLabel: document.querySelector("#operator-mode-label"),
   operatorLockIndicator: document.querySelector("#operator-lock-indicator"),
+  operatorTabButtons: document.querySelectorAll("[data-operator-tab]"),
+  operatorTabPanels: document.querySelectorAll("[data-operator-tab-panel]"),
+  operatorAdminTab: document.querySelector("#operator-tab-admin"),
+  operatorAccountTab: document.querySelector("#operator-tab-account"),
+  alarmTrainingTools: document.querySelector("#alarm-training-tools"),
   passwordForm: document.querySelector("#password-form"),
   currentPassword: document.querySelector("#current-password"),
   newPassword: document.querySelector("#new-password"),
@@ -164,6 +258,7 @@ const elements = {
   trackList: document.querySelector("#track-list"),
   sensorList: document.querySelector("#sensor-list"),
   alertList: document.querySelector("#alert-list"),
+  alertsSection: document.querySelector('[data-section-key="alerts"]'),
   zoneList: document.querySelector("#zone-list"),
   auditList: document.querySelector("#audit-list"),
   auditCategory: document.querySelector("#audit-category"),
@@ -177,6 +272,11 @@ const elements = {
   selectionEyebrow: document.querySelector("#selection-eyebrow"),
   selectionTitle: document.querySelector("#selection-title"),
   selectionDetails: document.querySelector("#selection-details"),
+  selectionTimelineTitle: document.querySelector("#selection-timeline-title"),
+  incidentControls: document.querySelector("#incident-controls"),
+  incidentShowEntry: document.querySelector("#incident-show-entry"),
+  incidentShowLive: document.querySelector("#incident-show-live"),
+  incidentShowRoute: document.querySelector("#incident-show-route"),
   trackControls: document.querySelector("#track-controls"),
   trackFollowLive: document.querySelector("#track-follow-live"),
   trackReplay: document.querySelector("#track-replay"),
@@ -260,12 +360,16 @@ let currentZones = [];
 let currentAlerts = [];
 let currentOpenAlerts = [];
 let currentClosedAlerts = [];
+const pendingAlertActions = new Map();
+let alertDataRevision = 0;
 let currentAuditEvents = [];
 let currentAuditTotal = 0;
 let selectedTrackId = null;
 let selectedTrackSnapshot = null;
 let selectedSensorId = null;
 let selectedAuditEvent = null;
+let selectedAlertId = null;
+let selectedAlertSnapshot = null;
 let liveFollowTrackId = null;
 let replayTrackId = null;
 let replayObservations = [];
@@ -284,6 +388,20 @@ let replayTrail = null;
 let archivePreviewMarker = null;
 let archivePreviewPilotMarker = null;
 let archivePreviewOperatorLine = null;
+let incidentTrail = null;
+let incidentEntryMarker = null;
+let alertAudioContext = null;
+let alertAudioMasterGain = null;
+let activeAlertOscillators = new Set();
+let alertAudioBaselineReady = false;
+let knownAlertIds = new Set();
+let trackAudioBaselineReady = false;
+let knownTrackIds = new Set();
+let alertAudioSettings = {
+  enabled: false,
+  volume: 0.8,
+  repeatCritical: true,
+};
 let initialFitComplete = false;
 let initialLiveDataLoaded = false;
 let refreshInProgress = false;
@@ -374,6 +492,9 @@ function formatDuration(value) {
   if (hours > 0) {
     return `${hours} h ${minutes} min`;
   }
+  if (minutes === 0) {
+    return `${seconds} s`;
+  }
   return `${minutes} min`;
 }
 
@@ -437,12 +558,270 @@ function stateLabel(state) {
   return stateLabels[state] ?? state ?? "—";
 }
 
+function alertStateLabel(state) {
+  return alertStateLabels[state] ?? stateLabel(state);
+}
+
 function severityLabel(severity) {
   return severityLabels[severity] ?? severity ?? "—";
 }
 
+function presenceLabel(presence) {
+  return presenceLabels[presence] ?? presence ?? "—";
+}
+
+function readAlertAudioSettings() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(ALERT_AUDIO_SETTINGS_KEY) || "{}");
+    const storedVolume = Number(stored.volume);
+    return {
+      enabled: stored.enabled === true,
+      volume: Number.isFinite(storedVolume)
+        ? Math.min(1, Math.max(0, storedVolume))
+        : 0.8,
+      repeatCritical: stored.repeatCritical !== false,
+    };
+  } catch {
+    return { enabled: false, volume: 0.8, repeatCritical: true };
+  }
+}
+
+function writeAlertAudioSettings() {
+  try {
+    localStorage.setItem(ALERT_AUDIO_SETTINGS_KEY, JSON.stringify(alertAudioSettings));
+  } catch {
+    // Powiadomienia nadal działają w bieżącej karcie bez localStorage.
+  }
+}
+
+function renderAlertAudioSettings() {
+  elements.alarmAudioToggle.classList.toggle("muted", !alertAudioSettings.enabled);
+  elements.alarmAudioToggle.classList.toggle("enabled", alertAudioSettings.enabled);
+  elements.alarmAudioToggle.setAttribute("aria-pressed", String(!alertAudioSettings.enabled));
+  elements.alarmAudioToggle.textContent = alertAudioSettings.enabled
+    ? "Wycisz alarmy"
+    : "Alarmy wyciszone";
+  elements.alarmAudioToggle.title = alertAudioSettings.enabled
+    ? "Natychmiast zatrzymaj i wycisz alarmy"
+    : "Włącz alarmy wykrycia i naruszenia stref";
+  elements.alarmAudioVolume.value = String(alertAudioSettings.volume);
+  elements.alarmAudioVolumeValue.textContent = `${Math.round(
+    alertAudioSettings.volume * 100,
+  )}%`;
+  elements.alarmAudioTest.disabled = !alertAudioSettings.enabled;
+  elements.alarmAudioTestProfile.disabled = !alertAudioSettings.enabled;
+  elements.alarmAudioRepeat.checked = alertAudioSettings.repeatCritical;
+}
+
+function updateAlertAudioMasterVolume() {
+  if (!alertAudioContext || !alertAudioMasterGain) return;
+  const now = alertAudioContext.currentTime;
+  alertAudioMasterGain.gain.cancelScheduledValues(now);
+  alertAudioMasterGain.gain.setTargetAtTime(
+    alertAudioSettings.volume,
+    now,
+    0.01,
+  );
+}
+
+async function ensureAlertAudioContext() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error("Ta przeglądarka nie obsługuje dźwięku alarmowego");
+  }
+  if (!alertAudioContext) {
+    alertAudioContext = new AudioContextClass();
+    alertAudioMasterGain = alertAudioContext.createGain();
+    alertAudioMasterGain.gain.setValueAtTime(
+      alertAudioSettings.volume,
+      alertAudioContext.currentTime,
+    );
+    alertAudioMasterGain.connect(alertAudioContext.destination);
+  }
+  if (alertAudioContext.state === "suspended") {
+    await alertAudioContext.resume();
+  }
+  return alertAudioContext;
+}
+
+function stopActiveAlertSounds() {
+  for (const oscillator of activeAlertOscillators) {
+    oscillator.onended = null;
+    try {
+      oscillator.stop();
+    } catch {
+      // Oscylator mógł zakończyć się pomiędzy iteracjami.
+    }
+  }
+  activeAlertOscillators = new Set();
+}
+
+async function playAlertSound(profileName = "high") {
+  if (!alertAudioSettings.enabled) return;
+  const profile = ALERT_SOUND_PROFILES[profileName] ?? ALERT_SOUND_PROFILES.high;
+  try {
+    const context = await ensureAlertAudioContext();
+    if (!alertAudioSettings.enabled) return;
+    stopActiveAlertSounds();
+    updateAlertAudioMasterVolume();
+    const start = context.currentTime + 0.02;
+    let offset = 0;
+    profile.steps.forEach((step) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const toneStart = start + offset;
+      const toneEnd = toneStart + step.duration;
+      const attackSeconds = Math.min(
+        profile.attackSeconds ?? 0.02,
+        step.duration / 4,
+      );
+      const releaseSeconds = Math.min(
+        profile.releaseSeconds ?? 0.06,
+        step.duration / 4,
+      );
+      oscillator.type = profile.waveform;
+      oscillator.frequency.setValueAtTime(step.frequency, toneStart);
+      if (step.endFrequency && step.endFrequency !== step.frequency) {
+        oscillator.frequency.exponentialRampToValueAtTime(
+          step.endFrequency,
+          toneEnd - releaseSeconds,
+        );
+      }
+      gain.gain.setValueAtTime(0.0001, toneStart);
+      gain.gain.exponentialRampToValueAtTime(
+        profile.gain,
+        toneStart + attackSeconds,
+      );
+      gain.gain.setValueAtTime(profile.gain, toneEnd - releaseSeconds);
+      gain.gain.exponentialRampToValueAtTime(0.0001, toneEnd);
+      oscillator.connect(gain);
+      gain.connect(alertAudioMasterGain);
+      activeAlertOscillators.add(oscillator);
+      oscillator.onended = () => activeAlertOscillators.delete(oscillator);
+      oscillator.start(toneStart);
+      oscillator.stop(toneEnd + 0.03);
+      offset += step.duration + step.gap;
+    });
+  } catch (error) {
+    showToast(`Nie udało się odtworzyć alarmu: ${error.message}`, true);
+  }
+}
+
+function highestAlertSeverity(alerts) {
+  const order = { low: 0, medium: 1, high: 2, critical: 3 };
+  return alerts.reduce(
+    (highest, alert) => order[alert.severity] > order[highest] ? alert.severity : highest,
+    "low",
+  );
+}
+
+function processOperationalSounds(tracks, alerts) {
+  const audibleTracks = tracks.filter(
+    (track) => ["new", "active", "anomalous"].includes(track.state),
+  );
+  const trackIds = audibleTracks.map((track) => String(track.id));
+  const alertIds = alerts.map((alert) => String(alert.id));
+  if (!alertAudioBaselineReady || !trackAudioBaselineReady) {
+    knownAlertIds = new Set(alertIds);
+    knownTrackIds = new Set(trackIds);
+    alertAudioBaselineReady = true;
+    trackAudioBaselineReady = true;
+    return;
+  }
+  const newAlerts = alerts.filter(
+    (alert) => alert.state === "active" && !knownAlertIds.has(String(alert.id)),
+  );
+  const newTracks = audibleTracks.filter(
+    (track) => !knownTrackIds.has(String(track.id)),
+  );
+  alertIds.forEach((id) => knownAlertIds.add(id));
+  trackIds.forEach((id) => knownTrackIds.add(id));
+  if (newAlerts.length > 0) {
+    revealAlertsSectionForNewAlarm();
+    void playAlertSound(highestAlertSeverity(newAlerts));
+  } else if (newTracks.length > 0) {
+    void playAlertSound("detected");
+  }
+}
+
+function initializeAlertAudioSettings() {
+  alertAudioSettings = readAlertAudioSettings();
+  renderAlertAudioSettings();
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      if (alertAudioSettings.enabled) {
+        void ensureAlertAudioContext();
+      }
+    },
+    { once: true, capture: true },
+  );
+}
+
+async function toggleAlertAudio() {
+  if (!alertAudioSettings.enabled) {
+    try {
+      await ensureAlertAudioContext();
+      alertAudioSettings.enabled = true;
+      updateAlertAudioMasterVolume();
+      showToast("Alarmy dźwiękowe zostały włączone.");
+    } catch (error) {
+      alertAudioSettings.enabled = false;
+      showToast(`Nie udało się włączyć dźwięku: ${error.message}`, true);
+    }
+  } else {
+    alertAudioSettings.enabled = false;
+    stopActiveAlertSounds();
+    showToast("Bieżący alarm zatrzymano. Następne alarmy są wyciszone.");
+  }
+  writeAlertAudioSettings();
+  renderAlertAudioSettings();
+}
+
+function repeatCriticalAlertSound() {
+  if (
+    alertAudioSettings.enabled &&
+    alertAudioSettings.repeatCritical &&
+    activeAlertOscillators.size === 0 &&
+    currentOpenAlerts.some(
+      (alert) => alert.state === "active" && alert.severity === "critical",
+    )
+  ) {
+    void playAlertSound("critical");
+  }
+}
+
 function auditEventLabel(eventType) {
   return auditEventLabels[eventType] ?? eventType ?? "—";
+}
+
+function auditEventCategory(event) {
+  const eventType = event?.event_type ?? "";
+  if (eventType.startsWith("track_")) return "track";
+  if (eventType.startsWith("alert_")) return "alert";
+  if (eventType.startsWith("zone_")) return "zone";
+  if (eventType.startsWith("sensor_")) return "sensor";
+  if (eventType.startsWith("operator_")) return "account";
+  return "system";
+}
+
+function auditTimelineTitle(event) {
+  if (event?.alert_id || auditEventCategory(event) === "alert") {
+    return "Historia alarmu strefowego";
+  }
+  if (event?.track_id || auditEventCategory(event) === "track") {
+    return "Historia wykrycia drona";
+  }
+  if (event?.sensor_id || auditEventCategory(event) === "sensor") {
+    return "Historia sensora";
+  }
+  if (event?.operator_account_id || auditEventCategory(event) === "account") {
+    return "Historia konta RDDS";
+  }
+  if (event?.zone_id || auditEventCategory(event) === "zone") {
+    return "Historia strefy chronionej";
+  }
+  return "Powiązane zdarzenia";
 }
 
 function openAlertCountForTrack(trackId) {
@@ -1119,7 +1498,7 @@ function updateTrackMarkers(tracks) {
         layer.pilot.setLatLng(pilotLatLng);
       }
       layer.pilot.bindPopup(
-        `<h3 class="popup-title">Operator</h3><div class="popup-grid"><span>ID</span><strong>${escapeHtml(track.operator_id)}</strong><span>MGRS</span><strong>${escapeHtml(formatMgrs(track.pilot_latitude, track.pilot_longitude))}</strong></div>`,
+        `<h3 class="popup-title">Operator drona (Remote ID)</h3><div class="popup-grid"><span>ID</span><strong>${escapeHtml(track.operator_id)}</strong><span>MGRS</span><strong>${escapeHtml(formatMgrs(track.pilot_latitude, track.pilot_longitude))}</strong></div>`,
       );
 
       const connection = [droneLatLng, pilotLatLng];
@@ -1197,10 +1576,62 @@ function createBadge(state) {
 function createAlertBadge(state) {
   const badge = createBadge(state);
   badge.classList.add("alert-badge");
+  badge.textContent = alertStateLabel(state);
   return badge;
 }
 
+function selectableOperatorTabs() {
+  return [...elements.operatorTabButtons].filter(
+    (button) => !button.classList.contains("hidden") && !button.disabled,
+  );
+}
+
+function selectOperatorTab(tabName, { focus = false } = {}) {
+  const availableTabs = selectableOperatorTabs();
+  if (availableTabs.length === 0) return;
+  const selectedButton = availableTabs.find(
+    (button) => button.dataset.operatorTab === tabName,
+  ) ?? availableTabs[0];
+  const selectedName = selectedButton.dataset.operatorTab;
+
+  for (const button of elements.operatorTabButtons) {
+    const selected = button === selectedButton;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  for (const panel of elements.operatorTabPanels) {
+    panel.classList.toggle(
+      "hidden",
+      panel.dataset.operatorTabPanel !== selectedName,
+    );
+  }
+  if (focus) selectedButton.focus();
+}
+
+function handleOperatorTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const availableTabs = selectableOperatorTabs();
+  if (availableTabs.length === 0) return;
+  event.preventDefault();
+  const currentIndex = Math.max(0, availableTabs.indexOf(event.currentTarget));
+  let nextIndex = currentIndex;
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = availableTabs.length - 1;
+  if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + availableTabs.length) % availableTabs.length;
+  }
+  if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % availableTabs.length;
+  }
+  selectOperatorTab(availableTabs[nextIndex].dataset.operatorTab, { focus: true });
+}
+
 function setOperatorMenuOpen(open) {
+  if (open) {
+    elements.alarmTrainingTools.open = false;
+    selectOperatorTab(currentUser?.must_change_password ? "account" : "admin");
+  }
   operatorMenuOpen = open;
   elements.operatorMenu.classList.toggle("open", open);
   elements.operatorPanel.classList.toggle("hidden", !open);
@@ -1253,6 +1684,12 @@ function initializeCollapsibleSections() {
   }
 }
 
+function revealAlertsSectionForNewAlarm() {
+  if (elements.alertsSection?.classList.contains("collapsed")) {
+    setSectionCollapsed(elements.alertsSection, false, false);
+  }
+}
+
 function updateOperatorUi(message = null, error = false) {
   const authenticated = Boolean(currentUser);
   elements.operatorMenu.classList.toggle("unlocked", authenticated);
@@ -1268,6 +1705,18 @@ function updateOperatorUi(message = null, error = false) {
   elements.manageOperators.classList.toggle("hidden", !canAdminister());
   elements.manageSecurity.classList.toggle("hidden", !canAdminister());
   elements.storagePanel.classList.toggle("hidden", !canAdminister());
+  elements.operatorAdminTab.classList.toggle("hidden", !canOperate());
+  elements.operatorAdminTab.disabled = Boolean(currentUser?.must_change_password);
+  if (currentUser?.must_change_password) {
+    selectOperatorTab("account");
+  } else {
+    const selectedTab = [...elements.operatorTabButtons].find(
+      (button) => button.getAttribute("aria-selected") === "true",
+    );
+    if (!selectedTab || selectedTab.classList.contains("hidden")) {
+      selectOperatorTab(canOperate() ? "admin" : "account");
+    }
+  }
   elements.loginScreen.classList.toggle("hidden", authenticated);
   elements.operatorMessage.classList.toggle("error", error);
   if (message !== null) {
@@ -1344,6 +1793,15 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   currentAlerts = [];
   currentOpenAlerts = [];
   currentClosedAlerts = [];
+  pendingAlertActions.clear();
+  alertDataRevision += 1;
+  selectedAlertId = null;
+  selectedAlertSnapshot = null;
+  stopActiveAlertSounds();
+  alertAudioBaselineReady = false;
+  knownAlertIds = new Set();
+  trackAudioBaselineReady = false;
+  knownTrackIds = new Set();
   currentAuditEvents = [];
   currentAuditTotal = 0;
   elements.showEnded.checked = false;
@@ -1352,6 +1810,7 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   updateTrackMarkers([]);
   updateLiveTrailLayers([], []);
   updateZoneLayers([], []);
+  removeIncidentLayers();
   lastStorageRefreshAt = 0;
   lastSecuritySummaryAt = 0;
   elements.operatorMenuToggle.classList.remove("security-alert");
@@ -1564,28 +2023,88 @@ async function createOperatorAccount(event) {
   }
 }
 
-async function runAlertAction(alert, action, button) {
-  button.disabled = true;
+async function reloadAlertsAfterAction() {
+  alertDataRevision += 1;
+  const includeClosed = elements.showClosedAlerts.checked;
+  const path = includeClosed
+    ? "/api/v1/alerts?include_closed=true&limit=1000"
+    : "/api/v1/alerts?include_closed=false";
+  const payload = await fetchJson(path);
+  const receivedAlerts = payload.alerts ?? [];
+  const receivedOpenAlerts = receivedAlerts.filter(
+    (alert) => alert.state !== "closed",
+  );
+  processOperationalSounds(currentLiveTracks, receivedOpenAlerts);
+  currentOpenAlerts = receivedOpenAlerts;
+  currentClosedAlerts = includeClosed
+    ? receivedAlerts.filter((alert) => alert.state === "closed")
+    : [];
+  renderAlertSnapshot();
+}
+
+async function runAlertAction(alert, action) {
+  const alertId = String(alert.id);
+  if (pendingAlertActions.has(alertId)) return;
+
+  alertDataRevision += 1;
+  pendingAlertActions.set(alertId, action);
+  renderAlertSnapshot();
+  let actionCompleted = false;
   try {
     await adminRequest(
       `/api/v1/alerts/${encodeURIComponent(alert.id)}/${action}`,
       "POST",
       {},
     );
+    actionCompleted = true;
+    await reloadAlertsAfterAction();
     showToast(
       action === "acknowledge"
         ? `Alarm dla ${alert.basic_id || alert.identity_key} został przyjęty.`
         : `Alarm został zamknięty. Jeśli naruszenie trwa, system otworzy nowy.`,
     );
-    await refresh();
-    if (elements.showClosedAlerts.checked) {
-      await loadClosedAlerts();
+    if (action === "close" && selectedAlertId === alert.id) {
+      clearSelection();
+    } else if (selectedAlertId === alert.id) {
+      await refreshSelectedIncidentTimeline();
     }
   } catch (error) {
-    showToast(`Operacja na alarmie nie powiodła się: ${error.message}`, true);
+    if (actionCompleted) {
+      showToast(
+        `Alarm został zmieniony, ale nie udało się odświeżyć widoku: ${error.message}`,
+        true,
+      );
+      void refresh();
+    } else {
+      showToast(`Operacja na alarmie nie powiodła się: ${error.message}`, true);
+    }
   } finally {
-    button.disabled = false;
+    pendingAlertActions.delete(alertId);
+    renderAlertSnapshot();
   }
+}
+
+function createAlertActionLoader(action) {
+  const loader = document.createElement("div");
+  loader.className = "alert-action-loader";
+  loader.setAttribute("role", "status");
+  loader.setAttribute("aria-live", "polite");
+
+  const spinner = document.createElement("span");
+  spinner.className = "alert-action-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+
+  const copy = document.createElement("span");
+  copy.className = "alert-action-loader-copy";
+  const title = document.createElement("strong");
+  title.textContent = action === "acknowledge"
+    ? "Potwierdzanie alarmu…"
+    : "Zamykanie alarmu…";
+  const detail = document.createElement("small");
+  detail.textContent = "Oczekiwanie na zapis i odpowiedź systemu";
+  copy.append(title, detail);
+  loader.append(spinner, copy);
+  return loader;
 }
 
 function renderAlertList(alerts) {
@@ -1600,19 +2119,19 @@ function renderAlertList(alerts) {
   }
 
   for (const alert of alerts) {
+    const pendingAction = pendingAlertActions.get(String(alert.id));
     const card = document.createElement("div");
-    card.className = `entity-card managed-card alert-card severity-${alert.severity} alert-${alert.state}`;
+    card.className = `entity-card managed-card alert-card severity-${alert.severity} alert-${alert.state}${alert.id === selectedAlertId ? " selected" : ""}`;
+    if (pendingAction) {
+      card.classList.add("is-processing");
+      card.setAttribute("aria-busy", "true");
+    }
 
     const main = document.createElement("button");
     main.type = "button";
     main.className = "managed-card-main";
-    main.addEventListener("click", () => {
-      if (currentTracks.some((track) => track.id === alert.track_id)) {
-        selectTrack(alert.track_id);
-      } else if (hasPosition(alert)) {
-        map.setView([alert.latitude, alert.longitude], Math.max(map.getZoom(), 15));
-      }
-    });
+    main.disabled = Boolean(pendingAction);
+    main.addEventListener("click", () => selectAlert(alert));
 
     const titleRow = document.createElement("div");
     titleRow.className = "entity-title-row";
@@ -1629,7 +2148,10 @@ function renderAlertList(alerts) {
     severity.textContent = severityLabel(alert.severity);
     const time = document.createElement("span");
     time.textContent = formatTime(alert.last_detected_at);
-    meta.append(zone, severity, time);
+    const presence = document.createElement("span");
+    presence.className = `presence-label presence-${alert.presence_state}`;
+    presence.textContent = presenceLabel(alert.presence_state);
+    meta.append(zone, severity, presence, time);
     main.append(titleRow, meta);
     card.append(main);
 
@@ -1640,8 +2162,9 @@ function renderAlertList(alerts) {
         const acknowledge = document.createElement("button");
         acknowledge.type = "button";
         acknowledge.textContent = "Potwierdź";
+        acknowledge.disabled = Boolean(pendingAction);
         acknowledge.addEventListener("click", () => {
-          runAlertAction(alert, "acknowledge", acknowledge);
+          void runAlertAction(alert, "acknowledge");
         });
         actions.append(acknowledge);
       }
@@ -1649,11 +2172,16 @@ function renderAlertList(alerts) {
       close.type = "button";
       close.className = "danger-button";
       close.textContent = "Zamknij";
+      close.disabled = Boolean(pendingAction);
       close.addEventListener("click", () => {
-        runAlertAction(alert, "close", close);
+        void runAlertAction(alert, "close");
       });
       actions.append(close);
       card.append(actions);
+    }
+
+    if (pendingAction) {
+      card.append(createAlertActionLoader(pendingAction));
     }
 
     elements.alertList.append(card);
@@ -1673,13 +2201,7 @@ function renderAuditList(events) {
     const card = document.createElement("button");
     card.type = "button";
     const selected = String(event.id) === String(selectedAuditEvent?.id);
-    const category = event.event_type.startsWith("alert_")
-      ? "alert"
-      : event.event_type.startsWith("sensor_")
-        ? "sensor"
-        : event.event_type.startsWith("operator_")
-          ? "operator"
-          : "zone";
+    const category = auditEventCategory(event);
     card.className = `entity-card audit-card audit-${category}${selected ? " selected" : ""}`;
     card.addEventListener("click", () => selectAuditEvent(event));
 
@@ -2184,11 +2706,19 @@ function detailItem(label, value) {
   return item;
 }
 
+function detailSection(title) {
+  const section = document.createElement("h3");
+  section.className = "detail-section-title";
+  section.textContent = title;
+  return section;
+}
+
 function renderSelection(track) {
   if (!track) {
     elements.selectionPanel.classList.add("hidden");
     elements.selectionDetails.replaceChildren();
     elements.trackControls.classList.add("hidden");
+    elements.incidentControls.classList.add("hidden");
     elements.selectionTimeline.classList.add("hidden");
     elements.selectionTimelineList.replaceChildren();
     return;
@@ -2200,11 +2730,12 @@ function renderSelection(track) {
     : "Wybrany ślad";
   elements.selectionTitle.textContent = track.basic_id || track.identity_key || track.track_key;
   elements.trackControls.classList.remove("hidden");
+  elements.incidentControls.classList.add("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
     detailItem("Status", stateLabel(track.state)),
-    detailItem("Operator", track.operator_id),
+    detailItem("Operator drona (Remote ID)", track.operator_id),
     detailItem("Wysokość", formatNumber(track.altitude_m, 1, " m")),
     detailItem("Prędkość", formatNumber(track.speed_mps, 1, " m/s")),
     detailItem("Kierunek", formatNumber(track.heading_deg, 0, "°")),
@@ -2223,6 +2754,7 @@ function renderSensorSelection(sensor) {
   elements.selectionEyebrow.textContent = "Wybrany sensor";
   elements.selectionTitle.textContent = sensor.display_name || sensor.sensor_id;
   elements.trackControls.classList.add("hidden");
+  elements.incidentControls.classList.add("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
@@ -2244,6 +2776,68 @@ function renderSensorSelection(sensor) {
   );
 }
 
+function renderIncidentSelection(alert) {
+  elements.selectionPanel.classList.remove("hidden");
+  elements.selectionEyebrow.textContent = "Incydent strefowy";
+  elements.selectionTitle.textContent = alert.basic_id || alert.identity_key || alert.track_key;
+  elements.trackControls.classList.add("hidden");
+  elements.incidentControls.classList.remove("hidden");
+  elements.incidentShowEntry.disabled = !hasPosition(alert);
+  elements.incidentShowLive.disabled = !hasPosition(alert, "live_");
+  elements.incidentShowRoute.disabled = !alert.track_id;
+  elements.selectionTimelineTitle.textContent = "Historia alarmu strefowego";
+  elements.selectionDetails.replaceChildren(
+    detailSection("Incydent"),
+    detailItem("Obsługa incydentu", alertStateLabel(alert.state)),
+    detailItem("Obecność drona", presenceLabel(alert.presence_state)),
+    detailItem("Priorytet", severityLabel(alert.severity)),
+    detailItem("Pierwsze wejście", formatDateTime(alert.first_detected_at)),
+    detailItem("Ostatnia detekcja", formatDateTime(alert.last_detected_at)),
+    detailItem("Wyjście / utrata", formatDateTime(alert.exited_at)),
+    detailItem("Czas od wejścia", formatDuration(alert.presence_duration_seconds)),
+    ...(alert.acknowledged_at
+      ? [
+          detailItem("Potwierdził", alert.acknowledged_by),
+          detailItem("Czas potwierdzenia", formatDateTime(alert.acknowledged_at)),
+        ]
+      : []),
+    ...(alert.closed_at
+      ? [
+          detailItem("Zamknął", alert.closed_by),
+          detailItem("Czas zamknięcia", formatDateTime(alert.closed_at)),
+        ]
+      : []),
+    detailSection("Zapis w chwili naruszenia"),
+    detailItem("Strefa", alert.zone_name),
+    detailItem("Opis strefy", alert.zone_description),
+    detailItem("Basic ID", alert.basic_id),
+    detailItem("Klucz tożsamości", alert.identity_key),
+    detailItem("Klucz sesji śladu", alert.track_key),
+    detailItem("Operator Remote ID", alert.operator_id),
+    detailItem("MAC drona", alert.drone_mac),
+    detailItem("Sensor wejścia", alert.sensor_key),
+    detailItem("Pozycja wejścia", formatMgrs(alert.latitude, alert.longitude)),
+    detailItem(
+      "Pozycja pilota przy wejściu",
+      formatMgrs(alert.pilot_latitude, alert.pilot_longitude),
+    ),
+    detailItem("Wysokość przy wejściu", formatNumber(alert.altitude_m, 1, " m")),
+    detailItem("Prędkość przy wejściu", formatNumber(alert.speed_mps, 1, " m/s")),
+    detailItem("Kierunek przy wejściu", formatNumber(alert.heading_deg, 0, "°")),
+    detailSection("Obiekt teraz"),
+    detailItem("Stan śladu", stateLabel(alert.track_state)),
+    detailItem("Aktualny Basic ID", alert.live_basic_id),
+    detailItem("Aktualny operator RID", alert.live_operator_id),
+    detailItem("Ostatnia aktywność", formatDateTime(alert.live_last_seen_at)),
+    detailItem("Aktualna pozycja", formatMgrs(alert.live_latitude, alert.live_longitude)),
+    detailItem("Aktualna wysokość", formatNumber(alert.live_altitude_m, 1, " m")),
+    detailItem("Aktualna prędkość", formatNumber(alert.live_speed_mps, 1, " m/s")),
+    detailItem("Aktualny kierunek", formatNumber(alert.live_heading_deg, 0, "°")),
+    detailItem("Sensory śladu", formatInteger(alert.contributing_sensors)),
+  );
+  elements.selectionTimeline.classList.remove("hidden");
+}
+
 function renderAuditTimeline(events) {
   elements.selectionTimelineList.replaceChildren();
   elements.selectionTimelineList.classList.remove("inline-loading");
@@ -2255,13 +2849,7 @@ function renderAuditTimeline(events) {
 
   for (const event of [...events].reverse()) {
     const item = document.createElement("div");
-    const category = event.event_type.startsWith("alert_")
-      ? "alert"
-      : event.event_type.startsWith("sensor_")
-        ? "sensor"
-        : event.event_type.startsWith("operator_")
-          ? "operator"
-          : "zone";
+    const category = auditEventCategory(event);
     item.className = `timeline-event ${category}`;
     const marker = document.createElement("span");
     marker.className = "timeline-marker";
@@ -2269,7 +2857,10 @@ function renderAuditTimeline(events) {
     const title = document.createElement("strong");
     title.textContent = auditEventLabel(event.event_type);
     const meta = document.createElement("span");
-    meta.textContent = `${formatDateTime(event.occurred_at)} · ${event.actor || "system"}`;
+    const presenceChange = event.event_type === "alert_presence_changed"
+      ? ` · ${presenceLabel(event.details?.from_presence)} → ${presenceLabel(event.details?.to_presence)}`
+      : "";
+    meta.textContent = `${formatDateTime(event.occurred_at)} · ${event.actor || "system"}${presenceChange}`;
     content.append(title, meta);
     item.append(marker, content);
     elements.selectionTimelineList.append(item);
@@ -2280,22 +2871,137 @@ function renderAuditSelection(event) {
   elements.selectionPanel.classList.remove("hidden");
   elements.selectionEyebrow.textContent = "Zdarzenie audytowe";
   elements.selectionTitle.textContent = auditEventLabel(event.event_type);
+  elements.selectionTimelineTitle.textContent = auditTimelineTitle(event);
   elements.trackControls.classList.add("hidden");
+  elements.incidentControls.classList.add("hidden");
   elements.selectionDetails.replaceChildren(
     detailItem("Czas", formatDateTime(event.occurred_at)),
-    detailItem("Operator", event.actor),
+    detailItem("Wykonawca zdarzenia", event.actor),
     detailItem("Dron", event.basic_id || event.identity_key),
-    detailItem("Operator drona", event.operator_id),
+    detailItem("Operator drona (Remote ID)", event.operator_id),
     detailItem("Strefa", event.zone_name),
     detailItem("Sensor", event.sensor_name || event.sensor_key),
-    detailItem("Konto", event.account_display_name || event.account_username),
+    detailItem("Konto RDDS", event.account_display_name || event.account_username),
     detailItem("Rola konta", event.account_role),
     detailItem("Poziom", severityLabel(event.alert_severity || event.details?.severity)),
-    detailItem("Stan alarmu", stateLabel(event.alert_state)),
+    detailItem("Stan alarmu", alertStateLabel(event.alert_state)),
+    detailItem("Obecność drona", presenceLabel(event.alert_presence_state)),
   );
   elements.selectionTimeline.classList.remove("hidden");
   elements.selectionTimelineList.classList.add("inline-loading");
   elements.selectionTimelineList.textContent = "Ładowanie historii…";
+}
+
+async function refreshSelectedIncidentTimeline() {
+  if (!selectedAlertId) return;
+  const requestedAlertId = String(selectedAlertId);
+  elements.selectionTimelineTitle.textContent = "Historia alarmu strefowego";
+  elements.selectionTimeline.classList.remove("hidden");
+  elements.selectionTimelineList.classList.add("inline-loading");
+  elements.selectionTimelineList.textContent = "Ładowanie historii alarmu…";
+  const payload = await fetchJson(
+    `/api/v1/audit/events?alert_id=${encodeURIComponent(requestedAlertId)}&limit=200`,
+  );
+  if (String(selectedAlertId) === requestedAlertId) {
+    renderAuditTimeline(payload.events ?? []);
+  }
+}
+
+function removeIncidentTrail() {
+  incidentTrail?.remove();
+  incidentTrail = null;
+}
+
+function removeIncidentEntryMarker() {
+  incidentEntryMarker?.remove();
+  incidentEntryMarker = null;
+}
+
+function removeIncidentLayers() {
+  removeIncidentTrail();
+  removeIncidentEntryMarker();
+}
+
+function showIncidentEntry() {
+  const alert = selectedAlertSnapshot;
+  if (alert && hasPosition(alert)) {
+    removeIncidentEntryMarker();
+    incidentEntryMarker = L.circleMarker(
+      [alert.latitude, alert.longitude],
+      {
+        radius: 8,
+        color: severityColors[alert.severity] ?? severityColors.high,
+        fillColor: "#101723",
+        fillOpacity: 0.92,
+        weight: 3,
+      },
+    )
+      .addTo(map)
+      .bindPopup(
+        `<strong>Punkt wejścia</strong><br>${escapeHtml(
+          alert.basic_id || alert.identity_key || alert.track_key,
+        )}<br>${escapeHtml(formatDateTime(alert.first_detected_at))}`,
+      );
+    if (hasPosition(alert, "pilot_")) {
+      map.fitBounds(
+        [
+          [alert.latitude, alert.longitude],
+          [alert.pilot_latitude, alert.pilot_longitude],
+        ],
+        { padding: [55, 55], maxZoom: 16 },
+      );
+    } else {
+      map.setView([alert.latitude, alert.longitude], Math.max(map.getZoom(), 16));
+    }
+    incidentEntryMarker.openPopup();
+  }
+}
+
+function showIncidentLivePosition() {
+  const alert = selectedAlertSnapshot;
+  if (alert && hasPosition(alert, "live_")) {
+    map.setView(
+      [alert.live_latitude, alert.live_longitude],
+      Math.max(map.getZoom(), 15),
+    );
+    trackLayers.get(alert.track_id)?.marker.openPopup();
+  }
+}
+
+async function showIncidentRoute() {
+  const alert = selectedAlertSnapshot;
+  if (!alert?.track_id) return;
+  elements.incidentShowRoute.disabled = true;
+  elements.incidentShowRoute.setAttribute("aria-busy", "true");
+  try {
+    const payload = await fetchJson(
+      `/api/v1/tracks/${encodeURIComponent(alert.track_id)}/history?limit=10000`,
+    );
+    if (selectedAlertId !== alert.id) return;
+    const start = new Date(alert.first_detected_at).getTime();
+    const end = new Date(
+      alert.exited_at || alert.last_detected_at || alert.first_detected_at,
+    ).getTime();
+    const points = (payload.observations ?? []).filter((observation) => {
+      const time = new Date(observation.message_time).getTime();
+      return hasPosition(observation) && time >= start && time <= end;
+    });
+    if (points.length < 2) {
+      showToast("Za mało zapisanych punktów do pokazania trasy incydentu.", true);
+      return;
+    }
+    removeIncidentTrail();
+    incidentTrail = L.polyline(
+      points.map((point) => [point.latitude, point.longitude]),
+      { color: "#ff4d5e", weight: 4, opacity: 0.88 },
+    ).addTo(map);
+    map.fitBounds(incidentTrail.getBounds(), { padding: [55, 55], maxZoom: 16 });
+  } catch (error) {
+    showToast(`Nie udało się pobrać trasy incydentu: ${error.message}`, true);
+  } finally {
+    elements.incidentShowRoute.disabled = false;
+    elements.incidentShowRoute.removeAttribute("aria-busy");
+  }
 }
 
 async function refreshSelectedAuditTimeline() {
@@ -2309,6 +3015,8 @@ async function refreshSelectedAuditTimeline() {
     parameter = `alert_id=${encodeURIComponent(selectedAuditEvent.alert_id)}`;
   } else if (selectedAuditEvent.zone_id) {
     parameter = `zone_id=${encodeURIComponent(selectedAuditEvent.zone_id)}`;
+  } else if (selectedAuditEvent.track_id) {
+    parameter = `track_id=${encodeURIComponent(selectedAuditEvent.track_id)}`;
   } else if (selectedAuditEvent.sensor_id) {
     parameter = `sensor_id=${encodeURIComponent(selectedAuditEvent.sensor_id)}`;
   } else if (selectedAuditEvent.operator_account_id) {
@@ -2464,7 +3172,7 @@ function renderReplayObservationDetails(observation) {
     : "Odtwarzanie trasy";
   elements.selectionDetails.replaceChildren(
     detailItem("Czas obserwacji", formatDateTime(observation.message_time)),
-    detailItem("Operator", observation.operator_id),
+    detailItem("Operator drona (Remote ID)", observation.operator_id),
     detailItem("Wysokość", formatNumber(observation.altitude_m, 1, " m")),
     detailItem("Prędkość", formatNumber(observation.speed_mps, 1, " m/s")),
     detailItem("Kierunek", formatNumber(observation.heading_deg, 0, "°")),
@@ -2823,8 +3531,11 @@ function selectTrack(trackId) {
     liveFollowTrackId = null;
     stopTrackReplay();
     removeArchivePreviewLayers();
+    removeIncidentLayers();
   }
   selectedAuditEvent = null;
+  selectedAlertId = null;
+  selectedAlertSnapshot = null;
   selectedSensorId = null;
   selectedTrackId = trackId;
   const track = currentTracks.find((candidate) => candidate.id === trackId);
@@ -2832,6 +3543,7 @@ function selectTrack(trackId) {
   renderAuditList(currentAuditEvents);
   renderSensorList(currentSensors);
   renderTrackList(currentTracks);
+  renderAlertList(currentAlerts);
   renderSelection(track);
 
   if (track && hasPosition(track)) {
@@ -2855,6 +3567,41 @@ function selectTrack(trackId) {
 
 }
 
+function selectAlert(alert) {
+  if (
+    !elements.zoneEditor.classList.contains("hidden") ||
+    !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
+    return;
+  }
+  selectedTrackId = null;
+  selectedTrackSnapshot = null;
+  selectedSensorId = null;
+  selectedAuditEvent = null;
+  selectedAlertId = alert.id;
+  selectedAlertSnapshot = { ...alert };
+  liveFollowTrackId = null;
+  stopTrackReplay();
+  removeArchivePreviewLayers();
+  removeIncidentLayers();
+  renderTrackList(currentTracks);
+  renderSensorList(currentSensors);
+  renderAlertList(currentAlerts);
+  renderAuditList(currentAuditEvents);
+  renderIncidentSelection(selectedAlertSnapshot);
+  if (alert.presence_state === "inside" && hasPosition(alert, "live_")) {
+    showIncidentLivePosition();
+  } else {
+    showIncidentEntry();
+  }
+  refreshSelectedIncidentTimeline().catch((error) => {
+    elements.selectionTimelineList.classList.remove("inline-loading");
+    elements.selectionTimelineList.textContent = "Nie udało się pobrać historii incydentu.";
+    console.error("Nie udało się pobrać historii incydentu", error);
+  });
+}
+
 function selectSensor(sensorId) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
@@ -2867,14 +3614,18 @@ function selectSensor(sensorId) {
   selectedTrackId = null;
   selectedTrackSnapshot = null;
   selectedAuditEvent = null;
+  selectedAlertId = null;
+  selectedAlertSnapshot = null;
   selectedSensorId = sensorId;
   liveFollowTrackId = null;
   stopTrackReplay();
   removeArchivePreviewLayers();
+  removeIncidentLayers();
   const sensor = currentSensors.find((candidate) => candidate.id === sensorId);
   renderTrackList(currentTracks);
   renderAuditList(currentAuditEvents);
   renderSensorList(currentSensors);
+  renderAlertList(currentAlerts);
   if (sensor) {
     renderSensorSelection(sensor);
     if (hasPosition(sensor)) {
@@ -2896,13 +3647,17 @@ function selectAuditEvent(event) {
   selectedTrackId = null;
   selectedTrackSnapshot = null;
   selectedSensorId = null;
+  selectedAlertId = null;
+  selectedAlertSnapshot = null;
   liveFollowTrackId = null;
   stopTrackReplay();
   removeArchivePreviewLayers();
+  removeIncidentLayers();
   selectedAuditEvent = event;
   renderTrackList(currentTracks);
   renderSensorList(currentSensors);
   renderAuditList(currentAuditEvents);
+  renderAlertList(currentAlerts);
   renderAuditSelection(event);
 
   const track = currentTracks.find((candidate) => candidate.id === event.track_id);
@@ -2923,13 +3678,17 @@ function clearSelection() {
   selectedTrackSnapshot = null;
   selectedSensorId = null;
   selectedAuditEvent = null;
+  selectedAlertId = null;
+  selectedAlertSnapshot = null;
   liveFollowTrackId = null;
   stopTrackReplay();
   removeArchivePreviewLayers();
+  removeIncidentLayers();
   renderSelection(null);
   renderTrackList(currentTracks);
   renderSensorList(currentSensors);
   renderAuditList(currentAuditEvents);
+  renderAlertList(currentAlerts);
 }
 
 function updateDrawingLayer() {
@@ -3387,6 +4146,7 @@ async function refresh({ initial = false } = {}) {
     return;
   }
   refreshInProgress = true;
+  const alertRevisionAtStart = alertDataRevision;
   const firstLiveLoad = initial || !initialLiveDataLoaded;
   if (firstLiveLoad) {
     renderLoadingCards(elements.sensorList, 3);
@@ -3413,11 +4173,16 @@ async function refresh({ initial = false } = {}) {
       (track) => track.state !== "ended",
     );
     currentLiveTrails = trailPayload.trails ?? [];
-    currentOpenAlerts = (alertPayload.alerts ?? []).filter(
+    const incomingOpenAlerts = (alertPayload.alerts ?? []).filter(
       (alert) => alert.state !== "closed",
     );
-    if (!elements.showClosedAlerts.checked) {
-      currentAlerts = [...currentOpenAlerts];
+    const alertPayloadIsCurrent = alertRevisionAtStart === alertDataRevision;
+    if (alertPayloadIsCurrent) {
+      processOperationalSounds(currentLiveTracks, incomingOpenAlerts);
+      currentOpenAlerts = incomingOpenAlerts;
+      if (!elements.showClosedAlerts.checked) {
+        currentAlerts = [...currentOpenAlerts];
+      }
     }
     const archiveMode = elements.showEnded.checked;
     if (!archiveMode) {
@@ -3447,7 +4212,11 @@ async function refresh({ initial = false } = {}) {
       renderTrackList(currentTracks);
       elements.trackCount.textContent = String(currentTracks.length);
     }
-    if (!elements.showClosedAlerts.checked && !closedAlertsLoadInProgress) {
+    if (
+      alertPayloadIsCurrent &&
+      !elements.showClosedAlerts.checked &&
+      !closedAlertsLoadInProgress
+    ) {
       renderAlertList(currentAlerts);
       elements.alertCount.textContent = String(currentAlerts.length);
     }
@@ -3486,6 +4255,17 @@ async function refresh({ initial = false } = {}) {
       const selected = currentSensors.find((sensor) => sensor.id === selectedSensorId);
       if (selected) {
         renderSensorSelection(selected);
+      } else {
+        clearSelection();
+      }
+    } else if (selectedAlertId) {
+      const selected = currentOpenAlerts.find((alert) => alert.id === selectedAlertId)
+        ?? currentAlerts.find((alert) => alert.id === selectedAlertId);
+      if (selected) {
+        selectedAlertSnapshot = { ...selected };
+        renderIncidentSelection(selectedAlertSnapshot);
+      } else if (selectedAlertSnapshot) {
+        renderIncidentSelection(selectedAlertSnapshot);
       } else {
         clearSelection();
       }
@@ -3564,6 +4344,9 @@ elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
 elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
+elements.incidentShowEntry.addEventListener("click", showIncidentEntry);
+elements.incidentShowLive.addEventListener("click", showIncidentLivePosition);
+elements.incidentShowRoute.addEventListener("click", () => void showIncidentRoute());
 elements.trackFollowLive.addEventListener("click", toggleLiveTracking);
 elements.trackReplay.addEventListener("click", startTrackReplay);
 elements.trackReplaySeek.addEventListener("input", () => {
@@ -3577,9 +4360,34 @@ elements.trackReplaySpeed.addEventListener("change", () => {
   replayLastFrameAt = null;
 });
 elements.operatorMenuToggle.addEventListener("click", toggleOperatorMenu);
+elements.alarmAudioToggle.addEventListener("click", () => void toggleAlertAudio());
+elements.alarmAudioTest.addEventListener("click", () => {
+  void playAlertSound(elements.alarmAudioTestProfile.value);
+});
+elements.alarmAudioVolume.addEventListener("input", () => {
+  alertAudioSettings.volume = Math.min(
+    1,
+    Math.max(0, Number(elements.alarmAudioVolume.value)),
+  );
+  updateAlertAudioMasterVolume();
+  elements.alarmAudioVolumeValue.textContent = `${Math.round(
+    alertAudioSettings.volume * 100,
+  )}%`;
+  writeAlertAudioSettings();
+});
+elements.alarmAudioRepeat.addEventListener("change", () => {
+  alertAudioSettings.repeatCritical = elements.alarmAudioRepeat.checked;
+  writeAlertAudioSettings();
+});
 elements.loginForm.addEventListener("submit", login);
 elements.passwordForm.addEventListener("submit", changeOwnPassword);
 elements.operatorLock.addEventListener("click", logout);
+for (const button of elements.operatorTabButtons) {
+  button.addEventListener("click", () => {
+    selectOperatorTab(button.dataset.operatorTab);
+  });
+  button.addEventListener("keydown", handleOperatorTabKeydown);
+}
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.manageOperators.addEventListener("click", openOperatorEditor);
@@ -3644,6 +4452,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 initializeCollapsibleSections();
+initializeAlertAudioSettings();
 updateOperatorUi();
 setOperatorMenuOpen(false);
 
@@ -3665,3 +4474,4 @@ async function restoreSession() {
 
 restoreSession();
 setInterval(refresh, REFRESH_INTERVAL_MS);
+setInterval(repeatCriticalAlertSound, CRITICAL_REPEAT_INTERVAL_MS);

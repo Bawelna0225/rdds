@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.15.0**. The complete software path is tested
+> Current development version: **0.16.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -51,8 +51,8 @@ operator actions.
 - rate-limited offline replay with current observations processed first;
 - multi-sensor track correlation, separate detection sessions and track history;
 - deduplicated 60-second live trails;
-- protected zones with intrusion alerts;
-- alert acknowledgement and closure with an audit trail;
+- protected zones with persistent incident snapshots and live presence status;
+- alert acknowledgement, closure, timeline and controlled audible notification;
 - sensor and zone editing, disabling and soft deletion;
 - live Leaflet map with collapsible operational layers and panels;
 - synthetic multi-sensor simulator and Sky-Spy serial emulator;
@@ -230,6 +230,7 @@ annotated Git tag:
 | `rdds-v0.13.1` | live-data priority, separate track sessions and 60-second trails |
 | `rdds-v0.14.0` | loading feedback and administrator database capacity monitoring |
 | `rdds-v0.15.0` | operator session control and centralized security-event log |
+| `rdds-v0.16.0` | zone incident snapshots, presence timeline and audible alerts |
 
 Start with:
 
@@ -241,6 +242,7 @@ Start with:
 - `docs/RDDS_STAGE13_1.md` for replay throttling and track-session behavior;
 - `docs/RDDS_STAGE14.md` for loading states and storage-budget monitoring;
 - `docs/RDDS_STAGE15.md` for operator sessions and security-event monitoring;
+- `docs/RDDS_STAGE16.md` for zone incident awareness and audible alerts;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
 
 ## Planned work
@@ -248,7 +250,7 @@ Start with:
 - validation with physical ESP32-S3 and ESP32-C5 receivers;
 - validation of backup restore drills on a separate host;
 - optional central identity integration;
-- notification outputs and controlled external integrations;
+- controlled external notification and integration outputs;
 - optional TAK Server integration as a separate future adapter.
 
 The project does not implement radio interference, takeover or countermeasure

@@ -42,6 +42,15 @@
           </div>
         </div>
         <div class="topbar-tools">
+          <button
+            id="alarm-audio-toggle"
+            type="button"
+            class="alarm-audio-toggle muted"
+            aria-pressed="true"
+            title="Włącz alarmy wykrycia i naruszenia stref"
+          >
+            Alarmy wyciszone
+          </button>
           <div class="topbar-status">
             <span id="connection-dot" class="connection-dot pending"></span>
             <span id="connection-label">Łączenie z API</span>
@@ -71,79 +80,165 @@
                 </span>
               </div>
 
-              <div id="operator-actions" class="operator-actions">
-                <button id="draw-zone" type="button">Narysuj nową strefę</button>
-                <button id="register-sensor" type="button">Dodaj sensor</button>
-                <button id="manage-operators" type="button">Konta operatorów</button>
-                <button id="manage-security" type="button">Bezpieczeństwo operatorów</button>
+              <label class="operator-quick-volume" for="alarm-audio-volume">
+                <span class="alarm-volume-label">
+                  <span>Głośność alarmów (0 = cisza)</span>
+                  <output id="alarm-audio-volume-value" for="alarm-audio-volume">80%</output>
+                </span>
+                <input id="alarm-audio-volume" type="range" min="0" max="1" step="0.05" value="0.8" />
+              </label>
+
+              <div class="operator-tabs" role="tablist" aria-label="Menu konta RDDS">
+                <button
+                  id="operator-tab-admin"
+                  type="button"
+                  class="operator-tab active hidden"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="operator-tab-panel-admin"
+                  data-operator-tab="admin"
+                >
+                  Administracja
+                </button>
+                <button
+                  id="operator-tab-account"
+                  type="button"
+                  class="operator-tab"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="operator-tab-panel-account"
+                  data-operator-tab="account"
+                  tabindex="-1"
+                >
+                  Konto
+                </button>
               </div>
 
               <section
-                id="storage-panel"
-                class="storage-panel hidden"
-                aria-labelledby="storage-title"
+                id="operator-tab-panel-admin"
+                class="operator-tab-panel hidden"
+                role="tabpanel"
+                aria-labelledby="operator-tab-admin"
+                data-operator-tab-panel="admin"
               >
-                <div class="storage-heading">
-                  <div>
-                    <span id="storage-title">Wykorzystanie bazy</span>
-                    <strong id="storage-usage">Wczytywanie…</strong>
-                  </div>
-                  <button
-                    id="storage-refresh"
-                    type="button"
-                    class="secondary-button compact-button"
-                  >
-                    Odśwież
-                  </button>
+                <div id="operator-actions" class="operator-actions">
+                  <button id="draw-zone" type="button">Narysuj nową strefę</button>
+                  <button id="register-sensor" type="button">Dodaj sensor</button>
+                  <button id="manage-operators" type="button">Konta RDDS</button>
+                  <button id="manage-security" type="button">Bezpieczeństwo kont</button>
                 </div>
-                <div
-                  id="storage-meter"
-                  class="storage-meter unconfigured"
-                  role="progressbar"
-                  aria-label="Wykorzystanie skonfigurowanego budżetu bazy"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
+
+                <section
+                  id="storage-panel"
+                  class="storage-panel hidden"
+                  aria-labelledby="storage-title"
                 >
-                  <span id="storage-bar"></span>
-                </div>
-                <div class="storage-meta">
-                  <span id="storage-percent">—</span>
-                  <span id="storage-largest-table">—</span>
-                </div>
-                <p id="storage-message" class="storage-message">
-                  Pobieranie informacji o bazie…
-                </p>
+                  <div class="storage-heading">
+                    <div>
+                      <span id="storage-title">Wykorzystanie bazy</span>
+                      <strong id="storage-usage">Wczytywanie…</strong>
+                    </div>
+                    <button
+                      id="storage-refresh"
+                      type="button"
+                      class="secondary-button compact-button"
+                    >
+                      Odśwież
+                    </button>
+                  </div>
+                  <div
+                    id="storage-meter"
+                    class="storage-meter unconfigured"
+                    role="progressbar"
+                    aria-label="Wykorzystanie skonfigurowanego budżetu bazy"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                  >
+                    <span id="storage-bar"></span>
+                  </div>
+                  <div class="storage-meta">
+                    <span id="storage-percent">—</span>
+                    <span id="storage-largest-table">—</span>
+                  </div>
+                  <p id="storage-message" class="storage-message">
+                    Pobieranie informacji o bazie…
+                  </p>
+                </section>
+
+                <details id="alarm-training-tools" class="alarm-training-tools">
+                  <summary>Narzędzia szkoleniowe dźwięków</summary>
+                  <section class="alarm-audio-settings" aria-labelledby="alarm-audio-title">
+                    <div class="alarm-audio-heading">
+                      <span id="alarm-audio-title">Testowanie sygnałów alarmowych</span>
+                    </div>
+                    <label>
+                      <span>Testowany sygnał</span>
+                      <select id="alarm-audio-test-profile" disabled>
+                        <option value="detected">Nowy dron wykryty przez sensory</option>
+                        <option value="low">Naruszenie strefy — niski</option>
+                        <option value="medium">Naruszenie strefy — średni</option>
+                        <option value="high">Naruszenie strefy — wysoki</option>
+                        <option value="critical">Naruszenie strefy — krytyczny</option>
+                      </select>
+                    </label>
+                    <button
+                      id="alarm-audio-test"
+                      type="button"
+                      class="secondary-button"
+                      disabled
+                    >
+                      Odtwórz wybrany sygnał
+                    </button>
+                    <label class="toggle-row">
+                      <input id="alarm-audio-repeat" type="checkbox" checked />
+                      <span>Powtarzaj krytyczny co 30 s do potwierdzenia</span>
+                    </label>
+                    <p>
+                      Sekcja służy do szkolenia operatorów i kontroli rozpoznawania
+                      sygnałów. Głośność oraz pełne wyciszenie są dostępne bez jej
+                      rozwijania.
+                    </p>
+                  </section>
+                </details>
               </section>
 
-              <form id="password-form" class="operator-login-form">
-                <label>
-                  Obecne hasło
-                  <input
-                    id="current-password"
-                    type="password"
-                    autocomplete="current-password"
-                    required
-                  />
-                </label>
-                <label>
-                  Nowe hasło (min. 12 znaków)
-                  <input
-                    id="new-password"
-                    type="password"
-                    minlength="12"
-                    maxlength="128"
-                    autocomplete="new-password"
-                    required
-                  />
-                </label>
-                <button id="password-submit" type="submit">Zmień hasło</button>
-                <p id="operator-message" class="operator-message">
-                  Sesja wygasa automatycznie po okresie bezczynności.
-                </p>
-              </form>
-              <button id="operator-lock" type="button" class="secondary-button">
-                Wyloguj
-              </button>
+              <section
+                id="operator-tab-panel-account"
+                class="operator-tab-panel hidden"
+                role="tabpanel"
+                aria-labelledby="operator-tab-account"
+                data-operator-tab-panel="account"
+              >
+                <form id="password-form" class="operator-login-form">
+                  <label>
+                    Obecne hasło
+                    <input
+                      id="current-password"
+                      type="password"
+                      autocomplete="current-password"
+                      required
+                    />
+                  </label>
+                  <label>
+                    Nowe hasło (min. 12 znaków)
+                    <input
+                      id="new-password"
+                      type="password"
+                      minlength="12"
+                      maxlength="128"
+                      autocomplete="new-password"
+                      required
+                    />
+                  </label>
+                  <button id="password-submit" type="submit">Zmień hasło</button>
+                  <p id="operator-message" class="operator-message">
+                    Sesja wygasa automatycznie po okresie bezczynności.
+                  </p>
+                </form>
+                <button id="operator-lock" type="button" class="secondary-button">
+                  Wyloguj
+                </button>
+              </section>
             </section>
           </div>
         </div>
@@ -207,10 +302,11 @@
                   <span>Zakres</span>
                   <select id="audit-category">
                     <option value="all">Wszystkie</option>
+                    <option value="detections">Wykrycia dronów</option>
                     <option value="alerts">Alarmy</option>
                     <option value="zones">Strefy</option>
                     <option value="sensors">Sensory</option>
-                    <option value="operators">Operatorzy</option>
+                    <option value="operators">Konta i sesje RDDS</option>
                   </select>
                 </label>
                 <div class="audit-export-actions">
@@ -282,7 +378,7 @@
             <div><span class="legend-symbol sensor"></span>Sensor</div>
             <div><span class="legend-symbol active"></span>Dron aktywny</div>
             <div><span class="legend-symbol stale"></span>Ślad nieaktualny</div>
-            <div><span class="legend-symbol pilot"></span>Operator</div>
+            <div><span class="legend-symbol pilot"></span>Operator drona</div>
             <div><span class="legend-symbol replay"></span>Dron odtwarzany</div>
             <div><span class="legend-symbol zone"></span>Strefa chroniona</div>
             <div><span class="legend-symbol alert"></span>Alarm aktywny</div>
@@ -293,6 +389,15 @@
             <p id="selection-eyebrow" class="eyebrow">Wybrany ślad</p>
             <h2 id="selection-title">—</h2>
             <div id="selection-details" class="selection-details"></div>
+            <div id="incident-controls" class="incident-controls hidden">
+              <button id="incident-show-entry" type="button">Punkt wejścia</button>
+              <button id="incident-show-live" type="button" class="secondary-button">
+                Dron teraz
+              </button>
+              <button id="incident-show-route" type="button" class="secondary-button">
+                Trasa incydentu
+              </button>
+            </div>
             <div id="track-controls" class="track-controls hidden">
               <div class="track-mode-actions">
                 <button id="track-follow-live" type="button">Śledź na żywo</button>
@@ -347,7 +452,7 @@
               </div>
             </div>
             <div id="selection-timeline" class="selection-timeline hidden">
-              <h3>Historia incydentu</h3>
+              <h3 id="selection-timeline-title">Powiązane zdarzenia</h3>
               <div id="selection-timeline-list" class="timeline-list"></div>
             </div>
           </section>

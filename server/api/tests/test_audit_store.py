@@ -51,6 +51,7 @@ class FakeConnection:
 class AuditFilterTests(unittest.TestCase):
     def test_category_percent_is_escaped_for_psycopg(self) -> None:
         for category, event_prefix in (
+            ("detections", "track"),
             ("alerts", "alert"),
             ("zones", "zone"),
             ("sensors", "sensor"),
@@ -75,6 +76,26 @@ class AuditFilterTests(unittest.TestCase):
                         for query in cursor.queries
                     )
                 )
+
+    def test_track_filter_is_parameterized(self) -> None:
+        cursor = FakeCursor()
+
+        @contextmanager
+        def fake_connection():
+            yield FakeConnection(cursor)
+
+        track_id = uuid4()
+        with patch.object(audit_store, "connection", fake_connection):
+            events, total = audit_store.list_audit_events(track_id=track_id)
+
+        self.assertEqual([], events)
+        self.assertEqual(0, total)
+        self.assertTrue(
+            all("event.track_id = %(track_id)s" in query for query in cursor.queries)
+        )
+        self.assertTrue(
+            all(parameters["track_id"] == track_id for parameters in cursor.parameters)
+        )
 
 
 class LiveObservationTests(unittest.TestCase):

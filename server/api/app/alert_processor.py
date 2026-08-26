@@ -21,12 +21,12 @@ def main() -> None:
 
     while True:
         try:
-            detected, closed = evaluate_intrusions()
-            if detected or closed:
+            detected, presence_changes = evaluate_intrusions()
+            if detected or presence_changes:
                 logger.info(
-                    "Alert cycle: detected_or_refreshed=%s closed=%s",
+                    "Alert cycle: detected_or_refreshed=%s presence_changes=%s",
                     detected,
-                    closed,
+                    presence_changes,
                 )
         except (psycopg.Error, RuntimeError):
             logger.exception("Alert processing cycle failed")

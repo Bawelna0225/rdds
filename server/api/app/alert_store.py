@@ -208,6 +208,18 @@ def delete_zone(zone_id: UUID, actor: str) -> dict[str, Any] | None:
             UPDATE intrusion_alerts
             SET
                 state = 'closed',
+                presence_state = CASE
+                    WHEN presence_state = 'inside' THEN 'left'
+                    ELSE presence_state
+                END,
+                presence_changed_at = CASE
+                    WHEN presence_state = 'inside' THEN NOW()
+                    ELSE presence_changed_at
+                END,
+                exited_at = CASE
+                    WHEN presence_state = 'inside' THEN COALESCE(exited_at, NOW())
+                    ELSE exited_at
+                END,
                 closed_at = NOW(),
                 closed_by = %s,
                 updated_at = NOW()
@@ -246,26 +258,67 @@ def list_alerts(
             SELECT
                 alert.id,
                 alert.state,
+                alert.presence_state,
                 alert.severity,
                 alert.first_detected_at,
                 alert.last_detected_at,
+                alert.presence_changed_at,
+                alert.exited_at,
                 alert.detection_count,
                 alert.acknowledged_at,
                 alert.acknowledged_by,
                 alert.closed_at,
                 alert.closed_by,
                 zone.id AS zone_id,
-                zone.name AS zone_name,
+                COALESCE(alert.entry_zone_name, zone.name) AS zone_name,
+                alert.entry_zone_description AS zone_description,
+                zone.name AS current_zone_name,
                 track.id AS track_id,
-                track.track_key,
-                track.last_basic_id AS basic_id,
-                track.identity_key,
+                COALESCE(alert.entry_track_key, track.track_key) AS track_key,
+                COALESCE(alert.entry_basic_id, track.last_basic_id) AS basic_id,
+                COALESCE(alert.entry_identity_key, track.identity_key) AS identity_key,
+                alert.entry_operator_id AS operator_id,
+                alert.entry_drone_mac AS drone_mac,
+                alert.entry_sensor_key AS sensor_key,
+                alert.entry_altitude_m AS altitude_m,
+                alert.entry_speed_mps AS speed_mps,
+                alert.entry_heading_deg AS heading_deg,
+                ST_Y(alert.entry_position::geometry) AS latitude,
+                ST_X(alert.entry_position::geometry) AS longitude,
+                ST_Y(alert.entry_pilot_position::geometry) AS pilot_latitude,
+                ST_X(alert.entry_pilot_position::geometry) AS pilot_longitude,
                 track.state AS track_state,
-                ST_Y(alert.last_position::geometry) AS latitude,
-                ST_X(alert.last_position::geometry) AS longitude
+                track.last_basic_id AS live_basic_id,
+                track.last_operator_id AS live_operator_id,
+                track.last_altitude_m AS live_altitude_m,
+                track.last_speed_mps AS live_speed_mps,
+                track.last_heading_deg AS live_heading_deg,
+                track.last_seen_at AS live_last_seen_at,
+                ST_Y(track.last_position::geometry) AS live_latitude,
+                ST_X(track.last_position::geometry) AS live_longitude,
+                ST_Y(track.last_pilot_position::geometry) AS live_pilot_latitude,
+                ST_X(track.last_pilot_position::geometry) AS live_pilot_longitude,
+                sensor_summary.contributing_sensors,
+                GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (
+                        CASE
+                            WHEN alert.presence_state = 'inside'
+                                THEN alert.last_detected_at
+                            ELSE COALESCE(alert.exited_at, alert.last_detected_at)
+                        END - alert.first_detected_at
+                    ))
+                )::double precision AS presence_duration_seconds
             FROM intrusion_alerts AS alert
             JOIN protected_zones AS zone ON zone.id = alert.zone_id
             JOIN tracks AS track ON track.id = alert.track_id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT observation.sensor_id) AS contributing_sensors
+                FROM track_observations AS link
+                JOIN observations AS observation
+                    ON observation.id = link.observation_id
+                WHERE link.track_id = track.id
+            ) AS sensor_summary ON TRUE
             WHERE (%s OR alert.state <> 'closed')
             ORDER BY
                 CASE alert.severity
@@ -328,16 +381,55 @@ def evaluate_intrusions() -> tuple[int, int]:
                 SELECT
                     zone.id AS zone_id,
                     zone.severity,
+                    zone.name AS zone_name,
+                    zone.description AS zone_description,
                     track.id AS track_id,
                     track.last_seen_at AS detected_at,
-                    track.last_position
+                    track.track_key,
+                    track.identity_key,
+                    track.last_basic_id,
+                    track.last_operator_id,
+                    track.last_drone_mac,
+                    sensor.sensor_key,
+                    track.last_position,
+                    track.last_pilot_position,
+                    track.last_altitude_m,
+                    track.last_speed_mps,
+                    track.last_heading_deg
                 FROM protected_zones AS zone
                 CROSS JOIN tracks AS track
+                LEFT JOIN observations AS observation
+                    ON observation.id = track.last_observation_id
+                LEFT JOIN sensors AS sensor ON sensor.id = observation.sensor_id
                 WHERE zone.active
                   AND zone.deleted_at IS NULL
                   AND track.state IN ('new', 'active', 'anomalous')
                   AND track.last_position IS NOT NULL
                   AND ST_Intersects(zone.area, track.last_position)
+                  AND (
+                      EXISTS (
+                          SELECT 1
+                          FROM intrusion_alerts AS open_alert
+                          WHERE open_alert.zone_id = zone.id
+                            AND open_alert.track_id = track.id
+                            AND open_alert.state IN ('active', 'acknowledged')
+                      )
+                      OR COALESCE(
+                          (
+                              SELECT previous.presence_state
+                              FROM intrusion_alerts AS previous
+                              WHERE previous.zone_id = zone.id
+                                AND previous.track_id = track.id
+                                AND previous.state = 'closed'
+                              ORDER BY
+                                  previous.closed_at DESC NULLS LAST,
+                                  previous.created_at DESC,
+                                  previous.id DESC
+                              LIMIT 1
+                          ),
+                          'left'
+                      ) <> 'inside'
+                  )
             )
             INSERT INTO intrusion_alerts (
                 zone_id,
@@ -347,7 +439,22 @@ def evaluate_intrusions() -> tuple[int, int]:
                 first_detected_at,
                 last_detected_at,
                 last_position,
-                detection_count
+                detection_count,
+                presence_state,
+                presence_changed_at,
+                entry_zone_name,
+                entry_zone_description,
+                entry_track_key,
+                entry_identity_key,
+                entry_basic_id,
+                entry_operator_id,
+                entry_drone_mac,
+                entry_sensor_key,
+                entry_position,
+                entry_pilot_position,
+                entry_altitude_m,
+                entry_speed_mps,
+                entry_heading_deg
             )
             SELECT
                 detected.zone_id,
@@ -357,12 +464,26 @@ def evaluate_intrusions() -> tuple[int, int]:
                 detected.detected_at,
                 detected.detected_at,
                 detected.last_position,
-                1
+                1,
+                'inside',
+                detected.detected_at,
+                detected.zone_name,
+                detected.zone_description,
+                detected.track_key,
+                detected.identity_key,
+                detected.last_basic_id,
+                detected.last_operator_id,
+                detected.last_drone_mac,
+                detected.sensor_key,
+                detected.last_position,
+                detected.last_pilot_position,
+                detected.last_altitude_m,
+                detected.last_speed_mps,
+                detected.last_heading_deg
             FROM detected
             ON CONFLICT (zone_id, track_id)
                 WHERE state IN ('active', 'acknowledged')
             DO UPDATE SET
-                severity = EXCLUDED.severity,
                 last_detected_at = GREATEST(
                     intrusion_alerts.last_detected_at,
                     EXCLUDED.last_detected_at
@@ -377,34 +498,97 @@ def evaluate_intrusions() -> tuple[int, int]:
                         THEN 1
                     ELSE 0
                 END,
+                presence_state = 'inside',
+                presence_changed_at = CASE
+                    WHEN intrusion_alerts.presence_state <> 'inside'
+                        THEN EXCLUDED.last_detected_at
+                    ELSE intrusion_alerts.presence_changed_at
+                END,
+                exited_at = NULL,
                 updated_at = NOW()
             WHERE EXCLUDED.last_detected_at > intrusion_alerts.last_detected_at
-               OR EXCLUDED.severity IS DISTINCT FROM intrusion_alerts.severity
+               OR intrusion_alerts.presence_state <> 'inside'
             """
         )
         detected = cursor.rowcount
 
         cursor.execute(
             """
+            WITH presence AS (
+                SELECT
+                    alert.id,
+                    CASE
+                        WHEN track.state IN ('stale', 'ended')
+                          OR track.last_position IS NULL
+                            THEN 'lost'
+                        WHEN NOT zone.active OR zone.deleted_at IS NOT NULL
+                            THEN 'left'
+                        WHEN ST_Intersects(zone.area, track.last_position)
+                            THEN 'inside'
+                        ELSE 'left'
+                    END AS next_presence
+                FROM intrusion_alerts AS alert
+                JOIN protected_zones AS zone ON zone.id = alert.zone_id
+                JOIN tracks AS track ON track.id = alert.track_id
+                WHERE alert.state IN ('active', 'acknowledged')
+            )
             UPDATE intrusion_alerts AS alert
             SET
-                state = 'closed',
-                closed_at = NOW(),
-                closed_by = 'system',
+                presence_state = presence.next_presence,
+                presence_changed_at = NOW(),
+                exited_at = CASE
+                    WHEN presence.next_presence = 'inside' THEN NULL
+                    ELSE COALESCE(alert.exited_at, NOW())
+                END,
                 updated_at = NOW()
-            WHERE alert.state IN ('active', 'acknowledged')
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM protected_zones AS zone
-                  JOIN tracks AS track ON track.id = alert.track_id
-                  WHERE zone.id = alert.zone_id
-                    AND zone.active
-                    AND zone.deleted_at IS NULL
-                    AND track.state <> 'ended'
-                    AND track.last_position IS NOT NULL
-                    AND ST_Intersects(zone.area, track.last_position)
-              )
+            FROM presence
+            WHERE alert.id = presence.id
+              AND alert.presence_state IS DISTINCT FROM presence.next_presence
             """
         )
-        closed = cursor.rowcount
-        return detected, closed
+        presence_changes = cursor.rowcount
+
+        cursor.execute(
+            """
+            WITH latest_closed AS (
+                SELECT DISTINCT ON (alert.zone_id, alert.track_id)
+                    alert.id,
+                    alert.zone_id,
+                    alert.track_id,
+                    alert.presence_state
+                FROM intrusion_alerts AS alert
+                WHERE alert.state = 'closed'
+                ORDER BY
+                    alert.zone_id,
+                    alert.track_id,
+                    alert.closed_at DESC NULLS LAST,
+                    alert.created_at DESC,
+                    alert.id DESC
+            ), departed AS (
+                SELECT latest.id
+                FROM latest_closed AS latest
+                JOIN protected_zones AS zone ON zone.id = latest.zone_id
+                JOIN tracks AS track ON track.id = latest.track_id
+                WHERE latest.presence_state = 'inside'
+                  AND (
+                      NOT zone.active
+                      OR zone.deleted_at IS NOT NULL
+                      OR (
+                          track.last_position IS NOT NULL
+                          AND NOT ST_Intersects(zone.area, track.last_position)
+                      )
+                  )
+            )
+            UPDATE intrusion_alerts AS alert
+            SET
+                presence_state = 'left',
+                presence_changed_at = NOW(),
+                exited_at = COALESCE(alert.exited_at, NOW()),
+                updated_at = NOW()
+            FROM departed
+            WHERE alert.id = departed.id
+              AND alert.presence_state = 'inside'
+            """
+        )
+        closed_departures = cursor.rowcount
+        return detected, presence_changes + closed_departures

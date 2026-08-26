@@ -130,7 +130,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.15.0",
+    version="0.16.0",
     lifespan=lifespan,
 )
 
@@ -1170,9 +1170,11 @@ def delete_operator_account(
 
 
 AuditEventType = Literal[
+    "track_detected",
     "alert_opened",
     "alert_acknowledged",
     "alert_closed",
+    "alert_presence_changed",
     "zone_created",
     "zone_enabled",
     "zone_disabled",
@@ -1209,6 +1211,7 @@ def get_audit_events(
     event_type: AuditEventType | None = Query(default=None),
     alert_id: UUID | None = Query(default=None),
     zone_id: UUID | None = Query(default=None),
+    track_id: UUID | None = Query(default=None),
     sensor_id: UUID | None = Query(default=None),
     operator_account_id: UUID | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
@@ -1220,6 +1223,7 @@ def get_audit_events(
             event_type=event_type,
             alert_id=alert_id,
             zone_id=zone_id,
+            track_id=track_id,
             sensor_id=sensor_id,
             operator_account_id=operator_account_id,
             limit=limit,
@@ -1249,6 +1253,7 @@ def export_audit_events(
     event_type: AuditEventType | None = Query(default=None),
     alert_id: UUID | None = Query(default=None),
     zone_id: UUID | None = Query(default=None),
+    track_id: UUID | None = Query(default=None),
     sensor_id: UUID | None = Query(default=None),
     operator_account_id: UUID | None = Query(default=None),
     limit: int = Query(default=5000, ge=1, le=5000),
@@ -1259,6 +1264,7 @@ def export_audit_events(
             event_type=event_type,
             alert_id=alert_id,
             zone_id=zone_id,
+            track_id=track_id,
             sensor_id=sensor_id,
             operator_account_id=operator_account_id,
             limit=limit,
@@ -1293,6 +1299,7 @@ def export_audit_events(
         "actor",
         "alert_id",
         "alert_state",
+        "alert_presence_state",
         "alert_severity",
         "zone_id",
         "zone_name",

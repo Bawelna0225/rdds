@@ -3,7 +3,14 @@ from uuid import UUID
 
 from app.database import connection
 
-AuditCategory = Literal["all", "alerts", "zones", "sensors", "operators"]
+AuditCategory = Literal[
+    "all",
+    "detections",
+    "alerts",
+    "zones",
+    "sensors",
+    "operators",
+]
 
 
 def list_audit_events(
@@ -11,6 +18,7 @@ def list_audit_events(
     event_type: str | None = None,
     alert_id: UUID | None = None,
     zone_id: UUID | None = None,
+    track_id: UUID | None = None,
     sensor_id: UUID | None = None,
     operator_account_id: UUID | None = None,
     limit: int = 200,
@@ -22,7 +30,9 @@ def list_audit_events(
         "offset": offset,
     }
 
-    if category == "alerts":
+    if category == "detections":
+        conditions.append("event.event_type LIKE 'track_%%'")
+    elif category == "alerts":
         conditions.append("event.event_type LIKE 'alert_%%'")
     elif category == "zones":
         conditions.append("event.event_type LIKE 'zone_%%'")
@@ -40,6 +50,9 @@ def list_audit_events(
     if zone_id is not None:
         conditions.append("event.zone_id = %(zone_id)s")
         parameters["zone_id"] = zone_id
+    if track_id is not None:
+        conditions.append("event.track_id = %(track_id)s")
+        parameters["track_id"] = track_id
     if sensor_id is not None:
         conditions.append("event.sensor_id = %(sensor_id)s")
         parameters["sensor_id"] = sensor_id
@@ -77,15 +90,16 @@ def list_audit_events(
                 event.sensor_id,
                 event.operator_account_id,
                 alert.state AS alert_state,
+                alert.presence_state AS alert_presence_state,
                 alert.severity AS alert_severity,
                 alert.first_detected_at,
                 alert.last_detected_at,
                 alert.detection_count,
-                zone.name AS zone_name,
-                track.track_key,
-                track.last_basic_id AS basic_id,
-                track.identity_key,
-                track.last_operator_id AS operator_id,
+                COALESCE(alert.entry_zone_name, zone.name) AS zone_name,
+                COALESCE(alert.entry_track_key, track.track_key) AS track_key,
+                COALESCE(alert.entry_basic_id, track.last_basic_id) AS basic_id,
+                COALESCE(alert.entry_identity_key, track.identity_key) AS identity_key,
+                COALESCE(alert.entry_operator_id, track.last_operator_id) AS operator_id,
                 sensor.sensor_key,
                 sensor.display_name AS sensor_name
                 , operator_account.username AS account_username
