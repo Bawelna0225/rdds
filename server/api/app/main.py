@@ -77,6 +77,16 @@ from app.security import (
     require_operator_write,
     require_viewer,
 )
+from app.security_store import (
+    SecurityEventType,
+    SecurityOutcome,
+    get_security_summary,
+    list_active_sessions,
+    list_security_events,
+    record_security_export,
+    revoke_managed_session,
+    revoke_operator_sessions,
+)
 from app.sensor_store import (
     delete_sensor,
     list_sensors,
@@ -120,13 +130,20 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.14.0",
+    version="0.15.0",
     lifespan=lifespan,
 )
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def request_remote_address(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()[:128] or None
+    return request.client.host[:128] if request.client else None
 
 
 @app.get("/", tags=["service"])
@@ -187,7 +204,7 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
             username=payload.username,
             password=payload.password,
             user_agent=request.headers.get("user-agent"),
-            remote_address=request.client.host if request.client else None,
+            remote_address=request_remote_address(request),
         )
     except (psycopg.Error, RuntimeError) as exc:
         logger.exception("Operator login failed because authentication is unavailable")
@@ -270,6 +287,197 @@ def post_password_change(
     if not changed:
         raise HTTPException(status_code=400, detail="current password is invalid")
     return {"time": utc_now(), "password_changed": True}
+
+
+@app.get("/api/v1/security/summary", tags=["operator security"])
+def get_operator_security_summary(
+    _: OperatorPrincipal = Depends(require_administrator),
+) -> dict[str, object]:
+    try:
+        summary = get_security_summary()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Operator security summary query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "summary": summary}
+
+
+@app.get("/api/v1/security/sessions", tags=["operator security"])
+def get_operator_sessions(
+    principal: OperatorPrincipal = Depends(require_administrator),
+) -> dict[str, object]:
+    try:
+        sessions = list_active_sessions(principal.session_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Active operator session query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "sessions": sessions}
+
+
+@app.delete(
+    "/api/v1/security/sessions/{session_id}",
+    tags=["operator security"],
+)
+def delete_operator_session(
+    session_id: UUID,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        result = revoke_managed_session(
+            session_id=session_id,
+            current_session_id=principal.session_id,
+            actor_id=principal.id,
+            actor=principal.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Operator session revocation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="operator session not found")
+    if result == "current":
+        raise HTTPException(status_code=409, detail="use logout for current session")
+    if result == "inactive":
+        raise HTTPException(status_code=409, detail="operator session is not active")
+    return {"time": utc_now(), "revoked": True, "session_id": session_id}
+
+
+@app.post(
+    "/api/v1/security/operators/{operator_id}/sessions/revoke",
+    tags=["operator security"],
+)
+def post_operator_sessions_revoke(
+    operator_id: UUID,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        revoked = revoke_operator_sessions(
+            operator_id=operator_id,
+            current_session_id=principal.session_id,
+            actor_id=principal.id,
+            actor=principal.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Operator bulk session revocation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if revoked is None:
+        raise HTTPException(status_code=404, detail="operator account not found")
+    return {"time": utc_now(), "revoked_sessions": revoked}
+
+
+@app.get("/api/v1/security/events", tags=["operator security"])
+def get_operator_security_events(
+    event_type: SecurityEventType | None = Query(default=None),
+    outcome: SecurityOutcome | None = Query(default=None),
+    username: str | None = Query(default=None, max_length=64),
+    occurred_after: datetime | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    _: OperatorPrincipal = Depends(require_administrator),
+) -> dict[str, object]:
+    try:
+        events, total = list_security_events(
+            event_type=event_type,
+            outcome=outcome,
+            username=username,
+            occurred_after=occurred_after,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Operator security event query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "time": utc_now(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "events": events,
+    }
+
+
+@app.get("/api/v1/security/export", tags=["operator security"])
+def export_operator_security_events(
+    format: Literal["csv", "json"] = Query(default="csv"),
+    event_type: SecurityEventType | None = Query(default=None),
+    outcome: SecurityOutcome | None = Query(default=None),
+    username: str | None = Query(default=None, max_length=64),
+    occurred_after: datetime | None = Query(default=None),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    principal: OperatorPrincipal = Depends(require_administrator),
+) -> Response:
+    try:
+        events, total = list_security_events(
+            event_type=event_type,
+            outcome=outcome,
+            username=username,
+            occurred_after=occurred_after,
+            limit=limit,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Operator security export failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="rdds-security-{timestamp}.{format}"'
+        ),
+    }
+    try:
+        record_security_export(
+            actor=principal.actor,
+            actor_id=principal.id,
+            export_format=format,
+            exported_rows=len(events),
+            filters={
+                "event_type": event_type,
+                "outcome": outcome,
+                "username": username,
+                "occurred_after": (
+                    None if occurred_after is None else occurred_after.isoformat()
+                ),
+            },
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Operator security export audit failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if format == "json":
+        payload = {
+            "exported_at": utc_now(),
+            "total": total,
+            "exported": len(events),
+            "events": events,
+        }
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, default=str, indent=2),
+            media_type="application/json",
+            headers=headers,
+        )
+
+    output = io.StringIO()
+    fieldnames = [
+        "id",
+        "occurred_at",
+        "event_type",
+        "outcome",
+        "severity",
+        "username",
+        "account_display_name",
+        "account_role",
+        "actor",
+        "remote_address",
+        "user_agent",
+        "session_id",
+        "details",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for event in events:
+        writer.writerow({**event, "details": json.dumps(event.get("details") or {})})
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
+    )
 
 
 @app.get(
@@ -985,6 +1193,9 @@ AuditEventType = Literal[
     "operator_password_changed",
     "operator_logged_in",
     "operator_logged_out",
+    "operator_session_revoked",
+    "operator_sessions_revoked",
+    "operator_security_exported",
 ]
 
 

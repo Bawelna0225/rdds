@@ -67,6 +67,14 @@ def _count_candidate_rows(cursor: psycopg.Cursor) -> dict[str, int]:
             """,
             (settings.retention_sessions_days,),
         ),
+        "operator_security_events": (
+            """
+            SELECT COUNT(*) AS count
+            FROM operator_security_events
+            WHERE occurred_at < NOW() - make_interval(days => %s)
+            """,
+            (settings.retention_security_events_days,),
+        ),
         "audit_events": (
             """
             SELECT COUNT(*) AS count
@@ -137,6 +145,13 @@ def _delete_expired_rows(cursor: psycopg.Cursor) -> dict[str, int]:
                 < NOW() - make_interval(days => %s)
         """,
         parameters=(settings.retention_sessions_days,),
+    )
+    counts["operator_security_events"] = _delete_in_batches(
+        cursor,
+        table="operator_security_events",
+        id_column="id",
+        predicate="occurred_at < NOW() - make_interval(days => %s)",
+        parameters=(settings.retention_security_events_days,),
     )
     counts["audit_events"] = _delete_in_batches(
         cursor,

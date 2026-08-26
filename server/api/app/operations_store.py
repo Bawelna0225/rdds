@@ -11,6 +11,7 @@ def retention_configuration() -> dict[str, Any]:
         "batch_size": settings.retention_batch_size,
         "periods_days": {
             "operator_sessions": settings.retention_sessions_days,
+            "operator_security_events": settings.retention_security_events_days,
             "sensor_heartbeats": settings.retention_heartbeats_days,
             "observations": settings.retention_observations_days,
             "audit_events": settings.retention_audit_days,

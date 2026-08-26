@@ -37,6 +37,8 @@ class Settings:
     session_idle_seconds: int
     login_max_failures: int
     login_lock_seconds: int
+    security_failure_window_minutes: int
+    security_failure_alert_count: int
     sensor_offline_after_seconds: int
     track_poll_seconds: float
     track_stale_after_seconds: int
@@ -47,6 +49,7 @@ class Settings:
     maintenance_interval_seconds: int
     retention_batch_size: int
     retention_sessions_days: int
+    retention_security_events_days: int
     retention_heartbeats_days: int
     retention_observations_days: int
     retention_audit_days: int
@@ -75,6 +78,12 @@ def load_settings() -> Settings:
         session_idle_seconds=int(os.getenv("RDDS_SESSION_IDLE_SECONDS", "1800")),
         login_max_failures=int(os.getenv("RDDS_LOGIN_MAX_FAILURES", "5")),
         login_lock_seconds=int(os.getenv("RDDS_LOGIN_LOCK_SECONDS", "900")),
+        security_failure_window_minutes=int(
+            os.getenv("RDDS_SECURITY_FAILURE_WINDOW_MINUTES", "15")
+        ),
+        security_failure_alert_count=int(
+            os.getenv("RDDS_SECURITY_FAILURE_ALERT_COUNT", "5")
+        ),
         sensor_offline_after_seconds=int(
             os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
         ),
@@ -96,6 +105,9 @@ def load_settings() -> Settings:
         ),
         retention_sessions_days=int(
             os.getenv("RDDS_RETENTION_SESSIONS_DAYS", "30")
+        ),
+        retention_security_events_days=int(
+            os.getenv("RDDS_RETENTION_SECURITY_EVENTS_DAYS", "180")
         ),
         retention_heartbeats_days=int(
             os.getenv("RDDS_RETENTION_HEARTBEATS_DAYS", "30")
@@ -146,6 +158,14 @@ def load_settings() -> Settings:
         raise RuntimeError("RDDS_LOGIN_MAX_FAILURES must be between 3 and 20")
     if settings.login_lock_seconds < 60:
         raise RuntimeError("RDDS_LOGIN_LOCK_SECONDS must be at least 60")
+    if not 1 <= settings.security_failure_window_minutes <= 1440:
+        raise RuntimeError(
+            "RDDS_SECURITY_FAILURE_WINDOW_MINUTES must be between 1 and 1440"
+        )
+    if not 1 <= settings.security_failure_alert_count <= 10000:
+        raise RuntimeError(
+            "RDDS_SECURITY_FAILURE_ALERT_COUNT must be between 1 and 10000"
+        )
     if settings.maintenance_interval_seconds < 300:
         raise RuntimeError(
             "RDDS_MAINTENANCE_INTERVAL_SECONDS must be at least 300"
@@ -154,6 +174,9 @@ def load_settings() -> Settings:
         raise RuntimeError("RDDS_RETENTION_BATCH_SIZE must be between 100 and 100000")
     retention_periods = {
         "RDDS_RETENTION_SESSIONS_DAYS": settings.retention_sessions_days,
+        "RDDS_RETENTION_SECURITY_EVENTS_DAYS": (
+            settings.retention_security_events_days
+        ),
         "RDDS_RETENTION_HEARTBEATS_DAYS": settings.retention_heartbeats_days,
         "RDDS_RETENTION_OBSERVATIONS_DAYS": settings.retention_observations_days,
         "RDDS_RETENTION_AUDIT_DAYS": settings.retention_audit_days,

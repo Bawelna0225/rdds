@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 from app.config import settings
 from app.database import connection
 from app.models import OperatorCreate, OperatorPasswordReset, OperatorUpdate
+from app.security_store import record_security_event
 
 PASSWORD_HASHER = PasswordHasher()
 DUMMY_PASSWORD_HASH = PASSWORD_HASHER.hash("RDDS-dummy-password-never-valid")
@@ -59,6 +60,45 @@ def _audit(
     )
 
 
+def _revoke_account_sessions(
+    cursor: Any,
+    *,
+    account_id: UUID,
+    username: str,
+    actor: str,
+    reason: str,
+    exclude_session_id: UUID | None = None,
+) -> int:
+    cursor.execute(
+        """
+        UPDATE operator_sessions
+        SET
+            revoked_at = NOW(),
+            revoked_by = %s,
+            revoke_reason = %s
+        WHERE operator_id = %s
+          AND (%s::uuid IS NULL OR id <> %s::uuid)
+          AND revoked_at IS NULL
+          AND expires_at > NOW()
+          AND idle_expires_at > NOW()
+        """,
+        (actor, reason, account_id, exclude_session_id, exclude_session_id),
+    )
+    revoked_count = cursor.rowcount
+    if revoked_count:
+        record_security_event(
+            cursor,
+            event_type="sessions_revoked",
+            outcome="success",
+            severity="warning",
+            operator_account_id=account_id,
+            username=username,
+            actor=actor,
+            details={"reason": reason, "revoked_sessions": revoked_count},
+        )
+    return revoked_count
+
+
 def authenticate_login(
     username: str,
     password: str,
@@ -92,16 +132,46 @@ def authenticate_login(
         row = cursor.fetchone()
         if row is None:
             verify_password(DUMMY_PASSWORD_HASH, password)
+            record_security_event(
+                cursor,
+                event_type="login_failed",
+                outcome="failure",
+                severity="warning",
+                username=normalized,
+                remote_address=remote_address,
+                user_agent=user_agent,
+                details={"reason": "unknown_account"},
+            )
             return None
 
         password_valid = verify_password(row["password_hash"], password)
-        if (
-            not row["enabled"]
-            or (row["locked_until"] is not None and row["locked_until"] > now)
-            or not password_valid
-        ):
-            if password_valid:
-                return None
+        if not row["enabled"]:
+            record_security_event(
+                cursor,
+                event_type="login_failed",
+                outcome="failure",
+                severity="warning",
+                operator_account_id=row["id"],
+                username=normalized,
+                remote_address=remote_address,
+                user_agent=user_agent,
+                details={"reason": "account_disabled"},
+            )
+            return None
+        if row["locked_until"] is not None and row["locked_until"] > now:
+            record_security_event(
+                cursor,
+                event_type="login_failed",
+                outcome="failure",
+                severity="high",
+                operator_account_id=row["id"],
+                username=normalized,
+                remote_address=remote_address,
+                user_agent=user_agent,
+                details={"reason": "account_locked"},
+            )
+            return None
+        if not password_valid:
             failed_count = int(row["failed_login_count"]) + 1
             locked_until = None
             if failed_count >= settings.login_max_failures:
@@ -115,6 +185,32 @@ def authenticate_login(
                 """,
                 (failed_count, locked_until, row["id"]),
             )
+            record_security_event(
+                cursor,
+                event_type="login_failed",
+                outcome="failure",
+                severity="warning" if locked_until is None else "high",
+                operator_account_id=row["id"],
+                username=normalized,
+                remote_address=remote_address,
+                user_agent=user_agent,
+                details={
+                    "reason": "invalid_credentials",
+                    "account_locked": locked_until is not None,
+                },
+            )
+            if locked_until is not None:
+                record_security_event(
+                    cursor,
+                    event_type="account_locked",
+                    outcome="failure",
+                    severity="high",
+                    operator_account_id=row["id"],
+                    username=normalized,
+                    remote_address=remote_address,
+                    user_agent=user_agent,
+                    details={"locked_until": locked_until.isoformat()},
+                )
             return None
 
         password_hash = row["password_hash"]
@@ -156,6 +252,7 @@ def authenticate_login(
                 remote_address
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 row["id"],
@@ -166,6 +263,21 @@ def authenticate_login(
                 (user_agent or "")[:512] or None,
                 (remote_address or "")[:128] or None,
             ),
+        )
+        session = cursor.fetchone()
+        if session is None:
+            raise RuntimeError("Authenticated session could not be read")
+        record_security_event(
+            cursor,
+            event_type="login_succeeded",
+            outcome="success",
+            severity="info",
+            operator_account_id=row["id"],
+            session_id=session["id"],
+            username=normalized,
+            actor=normalized,
+            remote_address=remote_address,
+            user_agent=user_agent,
         )
         _audit(cursor, "operator_logged_in", normalized, row["id"])
         if account is None:
@@ -227,10 +339,23 @@ def revoke_session(session_id: UUID, actor: str, account_id: UUID) -> None:
         cursor.execute(
             """
             UPDATE operator_sessions
-            SET revoked_at = COALESCE(revoked_at, NOW())
+            SET
+                revoked_at = COALESCE(revoked_at, NOW()),
+                revoked_by = COALESCE(revoked_by, %s),
+                revoke_reason = COALESCE(revoke_reason, 'logout')
             WHERE id = %s
             """,
-            (session_id,),
+            (actor, session_id),
+        )
+        record_security_event(
+            cursor,
+            event_type="session_logged_out",
+            outcome="success",
+            severity="info",
+            operator_account_id=account_id,
+            session_id=session_id,
+            username=actor,
+            actor=actor,
         )
         _audit(cursor, "operator_logged_out", actor, account_id)
 
@@ -268,13 +393,13 @@ def change_password(
             """,
             (hash_password(new_password), actor, account_id),
         )
-        cursor.execute(
-            """
-            UPDATE operator_sessions
-            SET revoked_at = NOW()
-            WHERE operator_id = %s AND id <> %s AND revoked_at IS NULL
-            """,
-            (account_id, session_id),
+        _revoke_account_sessions(
+            cursor,
+            account_id=account_id,
+            username=actor,
+            actor=actor,
+            reason="password_change",
+            exclude_session_id=session_id,
         )
         _audit(cursor, "operator_password_changed", actor, account_id)
         return True
@@ -376,12 +501,12 @@ def update_account(
         )
         row = cursor.fetchone()
         if payload.role != current["role"]:
-            cursor.execute(
-                """
-                UPDATE operator_sessions SET revoked_at = NOW()
-                WHERE operator_id = %s AND revoked_at IS NULL
-                """,
-                (account_id,),
+            _revoke_account_sessions(
+                cursor,
+                account_id=account_id,
+                username=current["username"],
+                actor=actor,
+                reason="role_changed",
             )
         _audit(
             cursor,
@@ -428,12 +553,12 @@ def set_account_enabled(
         )
         row = cursor.fetchone()
         if not enabled:
-            cursor.execute(
-                """
-                UPDATE operator_sessions SET revoked_at = NOW()
-                WHERE operator_id = %s AND revoked_at IS NULL
-                """,
-                (account_id,),
+            _revoke_account_sessions(
+                cursor,
+                account_id=account_id,
+                username=current["username"],
+                actor=actor,
+                reason="account_disabled",
             )
         _audit(
             cursor,
@@ -469,12 +594,12 @@ def reset_account_password(
         row = cursor.fetchone()
         if row is None:
             return None
-        cursor.execute(
-            """
-            UPDATE operator_sessions SET revoked_at = NOW()
-            WHERE operator_id = %s AND revoked_at IS NULL
-            """,
-            (account_id,),
+        _revoke_account_sessions(
+            cursor,
+            account_id=account_id,
+            username=row["username"],
+            actor=actor,
+            reason="password_reset",
         )
         _audit(cursor, "operator_password_changed", actor, account_id, {"reset": True})
         return _public_account(dict(row))
@@ -517,12 +642,12 @@ def delete_account(
             (actor, actor, account_id),
         )
         row = cursor.fetchone()
-        cursor.execute(
-            """
-            UPDATE operator_sessions SET revoked_at = NOW()
-            WHERE operator_id = %s AND revoked_at IS NULL
-            """,
-            (account_id,),
+        _revoke_account_sessions(
+            cursor,
+            account_id=account_id,
+            username=current["username"],
+            actor=actor,
+            reason="account_deleted",
         )
         _audit(
             cursor,

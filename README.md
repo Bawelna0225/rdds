@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.14.0**. The complete software path is tested
+> Current development version: **0.15.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -45,6 +45,8 @@ operator actions.
   heading, RSSI and Wi-Fi channel;
 - per-sensor credentials, token rotation and sensor disable/enable controls;
 - Argon2id operator accounts with server-side sessions, CSRF protection and roles;
+- administrator session inventory, forced logout and separate security-event log;
+- failed-login warnings with configurable observation window and threshold;
 - durable offline queue with retry, replay and dead-letter storage;
 - rate-limited offline replay with current observations processed first;
 - multi-sensor track correlation, separate detection sessions and track history;
@@ -227,6 +229,7 @@ annotated Git tag:
 | `rdds-v0.13.0` | backup, guarded restore, retention and optional TLS gateway |
 | `rdds-v0.13.1` | live-data priority, separate track sessions and 60-second trails |
 | `rdds-v0.14.0` | loading feedback and administrator database capacity monitoring |
+| `rdds-v0.15.0` | operator session control and centralized security-event log |
 
 Start with:
 
@@ -237,6 +240,7 @@ Start with:
 - `docs/RDDS_STAGE13.md` for backup, restore, retention and HTTPS;
 - `docs/RDDS_STAGE13_1.md` for replay throttling and track-session behavior;
 - `docs/RDDS_STAGE14.md` for loading states and storage-budget monitoring;
+- `docs/RDDS_STAGE15.md` for operator sessions and security-event monitoring;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
 
 ## Planned work

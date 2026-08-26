@@ -75,6 +75,7 @@
                 <button id="draw-zone" type="button">Narysuj nową strefę</button>
                 <button id="register-sensor" type="button">Dodaj sensor</button>
                 <button id="manage-operators" type="button">Konta operatorów</button>
+                <button id="manage-security" type="button">Bezpieczeństwo operatorów</button>
               </div>
 
               <section
@@ -504,6 +505,112 @@
               </form>
               <div id="operator-list" class="entity-list empty-state">
                 Ładowanie kont…
+              </div>
+            </div>
+          </section>
+
+          <section id="security-editor" class="sensor-editor security-editor hidden">
+            <div class="security-editor-content">
+              <div class="operator-editor-header">
+                <div>
+                  <p class="eyebrow">Administracja</p>
+                  <h2>Bezpieczeństwo operatorów</h2>
+                </div>
+                <button id="security-editor-close" type="button" class="secondary-button">
+                  Zamknij
+                </button>
+              </div>
+
+              <div class="security-summary-grid">
+                <div class="security-summary-card">
+                  <span>Aktywne sesje</span>
+                  <strong id="security-active-sessions">—</strong>
+                </div>
+                <div class="security-summary-card">
+                  <span>Nieudane logowania</span>
+                  <strong id="security-recent-failures">—</strong>
+                </div>
+                <div class="security-summary-card">
+                  <span>Zablokowane konta</span>
+                  <strong id="security-locked-accounts">—</strong>
+                </div>
+                <div class="security-summary-card">
+                  <span>Adresy źródłowe</span>
+                  <strong id="security-source-addresses">—</strong>
+                </div>
+              </div>
+
+              <p id="security-alert-message" class="security-alert-message">
+                Brak aktywnego ostrzeżenia.
+              </p>
+
+              <div class="security-section-heading">
+                <div>
+                  <h3>Aktywne sesje</h3>
+                  <span id="security-session-count">0</span>
+                </div>
+                <button id="security-refresh" type="button" class="secondary-button">
+                  Odśwież wszystko
+                </button>
+              </div>
+              <div id="security-session-list" class="entity-list empty-state">
+                Brak aktywnych sesji
+              </div>
+
+              <div class="security-section-heading security-events-heading">
+                <div>
+                  <h3>Dziennik bezpieczeństwa</h3>
+                  <span id="security-event-count">0</span>
+                </div>
+              </div>
+              <div class="security-filters">
+                <label>
+                  <span>Okres</span>
+                  <select id="security-window">
+                    <option value="15">15 minut</option>
+                    <option value="60">1 godzina</option>
+                    <option value="1440" selected>24 godziny</option>
+                    <option value="10080">7 dni</option>
+                    <option value="all">Wszystkie</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Wynik</span>
+                  <select id="security-outcome">
+                    <option value="">Wszystkie</option>
+                    <option value="failure">Niepowodzenie</option>
+                    <option value="success">Sukces</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Zdarzenie</span>
+                  <select id="security-event-type">
+                    <option value="">Wszystkie</option>
+                    <option value="login_failed">Nieudane logowanie</option>
+                    <option value="login_succeeded">Udane logowanie</option>
+                    <option value="account_locked">Blokada konta</option>
+                    <option value="session_logged_out">Wylogowanie</option>
+                    <option value="session_revoked">Zakończenie sesji</option>
+                    <option value="sessions_revoked">Zakończenie wielu sesji</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Login</span>
+                  <input id="security-username" type="search" maxlength="64"
+                    placeholder="np. operator01" />
+                </label>
+              </div>
+              <div class="security-export-actions">
+                <button id="security-apply-filters" type="button">Zastosuj filtry</button>
+                <button id="security-export-csv" type="button" class="secondary-button">
+                  Eksport CSV
+                </button>
+                <button id="security-export-json" type="button" class="secondary-button">
+                  JSON
+                </button>
+              </div>
+              <div id="security-event-list" class="entity-list empty-state">
+                Brak zdarzeń bezpieczeństwa
               </div>
             </div>
           </section>

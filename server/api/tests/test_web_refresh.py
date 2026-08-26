@@ -34,6 +34,8 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         stored_paths = (
             '/api/v1/zones',
             '/api/v1/audit/events',
+            '/api/v1/security/events',
+            '/api/v1/security/sessions',
             'include_ended=true',
             'include_closed=true',
         )
@@ -54,6 +56,12 @@ class WebRefreshBoundaryTests(unittest.TestCase):
     def test_global_telemetry_loader_is_not_present(self) -> None:
         self.assertNotIn("global-loading", self.source)
         self.assertNotIn("setDashboardLoading", self.source)
+
+    def test_security_event_log_is_loaded_only_on_demand(self) -> None:
+        self.assertIn("async function loadSecurityCenter", self.source)
+        self.assertIn('fetchJson("/api/v1/security/sessions")', self.source)
+        self.assertIn("/api/v1/security/events?", self.source)
+        self.assertNotIn("/api/v1/security/events?", self.live_refresh)
 
 
 if __name__ == "__main__":

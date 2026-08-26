@@ -6,6 +6,7 @@ import "./styles.css";
 
 const REFRESH_INTERVAL_MS = 2000;
 const STORAGE_REFRESH_INTERVAL_MS = 60000;
+const SECURITY_SUMMARY_INTERVAL_MS = 60000;
 const DEFAULT_CENTER = [52.2297, 21.0122];
 const SIDEBAR_STATE_KEY = "rdds.sidebar.sections.v1";
 
@@ -63,6 +64,18 @@ const auditEventLabels = {
   operator_password_changed: "Zmieniono hasło konta",
   operator_logged_in: "Logowanie operatora",
   operator_logged_out: "Wylogowanie operatora",
+  operator_session_revoked: "Zakończono sesję operatora",
+  operator_sessions_revoked: "Zakończono sesje operatora",
+  operator_security_exported: "Wyeksportowano dziennik bezpieczeństwa",
+};
+
+const securityEventLabels = {
+  login_succeeded: "Udane logowanie",
+  login_failed: "Nieudane logowanie",
+  account_locked: "Konto zablokowane",
+  session_logged_out: "Wylogowanie",
+  session_revoked: "Sesja zakończona przez administratora",
+  sessions_revoked: "Zakończono wiele sesji",
 };
 
 const stateColors = {
@@ -105,6 +118,7 @@ const elements = {
   drawZone: document.querySelector("#draw-zone"),
   registerSensor: document.querySelector("#register-sensor"),
   manageOperators: document.querySelector("#manage-operators"),
+  manageSecurity: document.querySelector("#manage-security"),
   storagePanel: document.querySelector("#storage-panel"),
   storageRefresh: document.querySelector("#storage-refresh"),
   storageUsage: document.querySelector("#storage-usage"),
@@ -122,6 +136,25 @@ const elements = {
   accountPassword: document.querySelector("#account-password"),
   accountCreate: document.querySelector("#account-create"),
   operatorList: document.querySelector("#operator-list"),
+  securityEditor: document.querySelector("#security-editor"),
+  securityEditorClose: document.querySelector("#security-editor-close"),
+  securityRefresh: document.querySelector("#security-refresh"),
+  securityActiveSessions: document.querySelector("#security-active-sessions"),
+  securityRecentFailures: document.querySelector("#security-recent-failures"),
+  securityLockedAccounts: document.querySelector("#security-locked-accounts"),
+  securitySourceAddresses: document.querySelector("#security-source-addresses"),
+  securityAlertMessage: document.querySelector("#security-alert-message"),
+  securitySessionCount: document.querySelector("#security-session-count"),
+  securitySessionList: document.querySelector("#security-session-list"),
+  securityEventCount: document.querySelector("#security-event-count"),
+  securityEventList: document.querySelector("#security-event-list"),
+  securityWindow: document.querySelector("#security-window"),
+  securityOutcome: document.querySelector("#security-outcome"),
+  securityEventType: document.querySelector("#security-event-type"),
+  securityUsername: document.querySelector("#security-username"),
+  securityApplyFilters: document.querySelector("#security-apply-filters"),
+  securityExportCsv: document.querySelector("#security-export-csv"),
+  securityExportJson: document.querySelector("#security-export-json"),
   trackCount: document.querySelector("#track-count"),
   trackSectionTitle: document.querySelector("#track-section-title"),
   sensorCount: document.querySelector("#sensor-count"),
@@ -261,6 +294,9 @@ let auditLoadInProgress = false;
 let zonesLoaded = false;
 let storageRefreshInProgress = false;
 let lastStorageRefreshAt = 0;
+let lastSecuritySummaryAt = 0;
+let securitySummaryInProgress = false;
+let securityCenterLoadInProgress = false;
 let currentUser = null;
 let csrfToken = null;
 let operatorMenuOpen = false;
@@ -583,6 +619,261 @@ async function loadStorageUsage(force = false) {
     elements.storageRefresh.removeAttribute("aria-busy");
     elements.storagePanel.removeAttribute("aria-busy");
   }
+}
+
+function renderSecuritySummary(summary) {
+  elements.securityActiveSessions.textContent = formatInteger(summary.active_sessions);
+  elements.securityRecentFailures.textContent = formatInteger(summary.recent_failures);
+  elements.securityLockedAccounts.textContent = formatInteger(summary.locked_accounts);
+  elements.securitySourceAddresses.textContent = formatInteger(summary.source_addresses);
+  const alertActive = Boolean(summary.alert_active);
+  elements.operatorMenuToggle.classList.toggle("security-alert", alertActive);
+  elements.securityAlertMessage.classList.toggle("active", alertActive);
+  elements.securityAlertMessage.textContent = alertActive
+    ? `${summary.recent_failures} nieudanych logowań w ciągu ${summary.failure_window_minutes} min — przekroczono próg ${summary.failure_alert_count}.`
+    : `Brak ostrzeżenia: ${summary.recent_failures} nieudanych logowań w ciągu ${summary.failure_window_minutes} min.`;
+}
+
+async function loadSecurityIndicator(force = false) {
+  if (!canAdminister() || securitySummaryInProgress) {
+    return;
+  }
+  if (
+    !force &&
+    lastSecuritySummaryAt > 0 &&
+    Date.now() - lastSecuritySummaryAt < SECURITY_SUMMARY_INTERVAL_MS
+  ) {
+    return;
+  }
+  securitySummaryInProgress = true;
+  try {
+    const payload = await fetchJson("/api/v1/security/summary");
+    renderSecuritySummary(payload.summary ?? {});
+    lastSecuritySummaryAt = Date.now();
+  } catch (error) {
+    console.error("Nie udało się pobrać podsumowania bezpieczeństwa", error);
+  } finally {
+    securitySummaryInProgress = false;
+  }
+}
+
+function securityQueryString() {
+  const parameters = new URLSearchParams();
+  const outcome = elements.securityOutcome.value;
+  const eventType = elements.securityEventType.value;
+  const username = elements.securityUsername.value.trim();
+  const windowMinutes = elements.securityWindow.value;
+  if (outcome) parameters.set("outcome", outcome);
+  if (eventType) parameters.set("event_type", eventType);
+  if (username) parameters.set("username", username);
+  if (windowMinutes !== "all") {
+    const occurredAfter = new Date(
+      Date.now() - Number(windowMinutes) * 60 * 1000,
+    );
+    parameters.set("occurred_after", occurredAfter.toISOString());
+  }
+  return parameters;
+}
+
+function securityReasonLabel(reason) {
+  const labels = {
+    unknown_account: "nieznane konto",
+    invalid_credentials: "nieprawidłowe dane logowania",
+    account_disabled: "konto wyłączone",
+    account_locked: "konto czasowo zablokowane",
+    password_change: "zmiana hasła",
+    password_reset: "reset hasła",
+    role_changed: "zmiana roli",
+    account_deleted: "usunięcie konta",
+  };
+  return labels[reason] ?? reason ?? "—";
+}
+
+function renderSecuritySessions(sessions) {
+  elements.securitySessionList.replaceChildren();
+  elements.securitySessionList.classList.toggle("empty-state", sessions.length === 0);
+  elements.securitySessionCount.textContent = String(sessions.length);
+  if (sessions.length === 0) {
+    elements.securitySessionList.textContent = "Brak aktywnych sesji";
+    return;
+  }
+
+  const accountActions = new Set();
+  const accountSessionCounts = sessions.reduce((counts, session) => {
+    counts.set(session.operator_id, (counts.get(session.operator_id) ?? 0) + 1);
+    return counts;
+  }, new Map());
+  for (const session of sessions) {
+    const card = document.createElement("div");
+    card.className = `entity-card managed-card security-session${session.is_current ? " current" : ""}`;
+    const main = document.createElement("div");
+    main.className = "managed-card-main";
+    const titleRow = document.createElement("div");
+    titleRow.className = "entity-title-row";
+    const title = document.createElement("strong");
+    title.textContent = `${session.display_name} (${session.username})`;
+    const badge = document.createElement("span");
+    badge.className = "state-badge state-active";
+    badge.textContent = session.is_current ? "bieżąca" : "aktywna";
+    titleRow.append(title, badge);
+    const meta = document.createElement("div");
+    meta.className = "entity-meta security-session-meta";
+    const address = document.createElement("span");
+    address.textContent = `IP: ${session.remote_address || "—"}`;
+    const lastSeen = document.createElement("span");
+    lastSeen.textContent = `Aktywność: ${formatDateTime(session.last_seen_at)}`;
+    const expires = document.createElement("span");
+    expires.textContent = `Wygaśnie: ${formatDateTime(session.idle_expires_at)}`;
+    const agent = document.createElement("span");
+    agent.className = "security-user-agent";
+    agent.textContent = session.user_agent || "Nieznana przeglądarka";
+    meta.append(address, lastSeen, expires, agent);
+    main.append(titleRow, meta);
+    card.append(main);
+
+    const actions = document.createElement("div");
+    actions.className = "managed-actions";
+    if (!session.is_current) {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "danger-button";
+      revoke.textContent = "Zakończ sesję";
+      revoke.addEventListener("click", async () => {
+        if (!window.confirm(`Zakończyć tę sesję konta ${session.username}?`)) return;
+        revoke.disabled = true;
+        try {
+          await adminRequest(`/api/v1/security/sessions/${session.id}`, "DELETE", {});
+          showToast("Sesja została zakończona.");
+          await loadSecurityCenter();
+        } catch (error) {
+          showToast(`Zakończenie sesji nie powiodło się: ${error.message}`, true);
+        } finally {
+          revoke.disabled = false;
+        }
+      });
+      actions.append(revoke);
+    }
+    if (
+      accountSessionCounts.get(session.operator_id) > 1 &&
+      !accountActions.has(session.operator_id)
+    ) {
+      accountActions.add(session.operator_id);
+      const revokeAll = document.createElement("button");
+      revokeAll.type = "button";
+      revokeAll.className = "secondary-button";
+      revokeAll.textContent = session.operator_id === currentUser.id
+        ? "Zakończ pozostałe"
+        : "Zakończ wszystkie";
+      revokeAll.addEventListener("click", async () => {
+        if (!window.confirm(`Zakończyć aktywne sesje konta ${session.username}?`)) return;
+        revokeAll.disabled = true;
+        try {
+          const payload = await adminRequest(
+            `/api/v1/security/operators/${session.operator_id}/sessions/revoke`,
+            "POST",
+            {},
+          );
+          showToast(`Zakończone sesje: ${payload.revoked_sessions}.`);
+          await loadSecurityCenter();
+        } catch (error) {
+          showToast(`Zakończenie sesji nie powiodło się: ${error.message}`, true);
+        } finally {
+          revokeAll.disabled = false;
+        }
+      });
+      actions.append(revokeAll);
+    }
+    if (actions.childElementCount) card.append(actions);
+    elements.securitySessionList.append(card);
+  }
+}
+
+function renderSecurityEvents(events, total) {
+  elements.securityEventList.replaceChildren();
+  elements.securityEventList.classList.toggle("empty-state", events.length === 0);
+  elements.securityEventCount.textContent = String(total);
+  if (events.length === 0) {
+    elements.securityEventList.textContent = "Brak zdarzeń bezpieczeństwa";
+    return;
+  }
+  for (const event of events) {
+    const card = document.createElement("div");
+    card.className = `entity-card security-event security-${event.severity}`;
+    const titleRow = document.createElement("div");
+    titleRow.className = "entity-title-row";
+    const title = document.createElement("strong");
+    title.textContent = securityEventLabels[event.event_type] ?? event.event_type;
+    const outcome = document.createElement("span");
+    outcome.className = `state-badge security-outcome-${event.outcome}`;
+    outcome.textContent = event.outcome === "success" ? "sukces" : "niepowodzenie";
+    titleRow.append(title, outcome);
+    const meta = document.createElement("div");
+    meta.className = "entity-meta security-event-meta";
+    const subject = document.createElement("span");
+    subject.textContent = `Konto: ${event.username || "—"}`;
+    const source = document.createElement("span");
+    source.textContent = `IP: ${event.remote_address || "—"}`;
+    const actor = document.createElement("span");
+    actor.textContent = `Wykonał: ${event.actor || "system"}`;
+    const reason = document.createElement("span");
+    reason.textContent = `Powód: ${securityReasonLabel(event.details?.reason)}`;
+    const time = document.createElement("span");
+    time.textContent = formatDateTime(event.occurred_at);
+    meta.append(subject, source, actor, reason, time);
+    card.append(titleRow, meta);
+    elements.securityEventList.append(card);
+  }
+}
+
+async function loadSecurityCenter() {
+  if (!canAdminister() || securityCenterLoadInProgress) return;
+  securityCenterLoadInProgress = true;
+  elements.securityRefresh.disabled = true;
+  elements.securityRefresh.setAttribute("aria-busy", "true");
+  renderLoadingCards(elements.securitySessionList, 3);
+  renderLoadingCards(elements.securityEventList, 5);
+  try {
+    const query = securityQueryString();
+    query.set("limit", "500");
+    const [summaryPayload, sessionPayload, eventPayload] = await Promise.all([
+      fetchJson("/api/v1/security/summary"),
+      fetchJson("/api/v1/security/sessions"),
+      fetchJson(`/api/v1/security/events?${query.toString()}`),
+    ]);
+    renderSecuritySummary(summaryPayload.summary ?? {});
+    renderSecuritySessions(sessionPayload.sessions ?? []);
+    renderSecurityEvents(eventPayload.events ?? [], eventPayload.total ?? 0);
+    lastSecuritySummaryAt = Date.now();
+  } catch (error) {
+    renderListFailure(elements.securitySessionList, "Nie udało się wczytać sesji");
+    renderListFailure(elements.securityEventList, "Nie udało się wczytać dziennika");
+    showToast(`Pobranie danych bezpieczeństwa nie powiodło się: ${error.message}`, true);
+  } finally {
+    finishListLoading(elements.securitySessionList);
+    finishListLoading(elements.securityEventList);
+    elements.securityRefresh.disabled = false;
+    elements.securityRefresh.removeAttribute("aria-busy");
+    securityCenterLoadInProgress = false;
+  }
+}
+
+async function openSecurityCenter() {
+  if (!canAdminister()) return;
+  setOperatorMenuOpen(false);
+  elements.operatorEditor.classList.add("hidden");
+  elements.securityEditor.classList.remove("hidden");
+  await loadSecurityCenter();
+}
+
+function downloadSecurityEvents(format) {
+  const query = securityQueryString();
+  query.set("format", format);
+  const link = document.createElement("a");
+  link.href = `/api/v1/security/export?${query.toString()}`;
+  link.download = "";
+  document.body.append(link);
+  link.click();
+  link.remove();
 }
 
 function showToast(message, error = false) {
@@ -975,6 +1266,7 @@ function updateOperatorUi(message = null, error = false) {
   elements.drawZone.classList.toggle("hidden", !canOperate());
   elements.registerSensor.classList.toggle("hidden", !canAdminister());
   elements.manageOperators.classList.toggle("hidden", !canAdminister());
+  elements.manageSecurity.classList.toggle("hidden", !canAdminister());
   elements.storagePanel.classList.toggle("hidden", !canAdminister());
   elements.loginScreen.classList.toggle("hidden", authenticated);
   elements.operatorMessage.classList.toggle("error", error);
@@ -997,6 +1289,7 @@ function acceptSession(payload) {
     elements.currentPassword.focus();
   } else if (canAdminister()) {
     void loadStorageUsage();
+    void loadSecurityIndicator();
   }
 }
 
@@ -1038,6 +1331,7 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   cancelSensorRegistration();
   closeSensorToken();
   elements.operatorEditor.classList.add("hidden");
+  elements.securityEditor.classList.add("hidden");
   currentUser = null;
   csrfToken = null;
   initialLiveDataLoaded = false;
@@ -1059,6 +1353,8 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   updateLiveTrailLayers([], []);
   updateZoneLayers([], []);
   lastStorageRefreshAt = 0;
+  lastSecuritySummaryAt = 0;
+  elements.operatorMenuToggle.classList.remove("security-alert");
   setOperatorMenuOpen(false);
   updateOperatorUi();
   elements.loginMessage.textContent = message;
@@ -1239,6 +1535,7 @@ async function loadOperatorAccounts() {
 async function openOperatorEditor() {
   if (!canAdminister()) return;
   setOperatorMenuOpen(false);
+  elements.securityEditor.classList.add("hidden");
   elements.operatorEditor.classList.remove("hidden");
   try {
     await loadOperatorAccounts();
@@ -3206,6 +3503,7 @@ async function refresh({ initial = false } = {}) {
     elements.lastUpdate.textContent = `Aktualizacja ${new Date().toLocaleTimeString("pl-PL")}`;
     if (canAdminister()) {
       void loadStorageUsage();
+      void loadSecurityIndicator();
     }
   } catch (error) {
     console.error("Odświeżenie mapy nie powiodło się", error);
@@ -3285,12 +3583,20 @@ elements.operatorLock.addEventListener("click", logout);
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.manageOperators.addEventListener("click", openOperatorEditor);
+elements.manageSecurity.addEventListener("click", () => void openSecurityCenter());
 elements.storageRefresh.addEventListener("click", () => {
   void loadStorageUsage(true);
 });
 elements.operatorEditorClose.addEventListener("click", () => {
   elements.operatorEditor.classList.add("hidden");
 });
+elements.securityEditorClose.addEventListener("click", () => {
+  elements.securityEditor.classList.add("hidden");
+});
+elements.securityRefresh.addEventListener("click", () => void loadSecurityCenter());
+elements.securityApplyFilters.addEventListener("click", () => void loadSecurityCenter());
+elements.securityExportCsv.addEventListener("click", () => downloadSecurityEvents("csv"));
+elements.securityExportJson.addEventListener("click", () => downloadSecurityEvents("json"));
 elements.operatorCreateForm.addEventListener("submit", createOperatorAccount);
 elements.zoneUndoPoint.addEventListener("click", undoZonePoint);
 elements.zoneClearPoints.addEventListener("click", clearZonePoints);
@@ -3322,6 +3628,16 @@ document.addEventListener("keydown", (event) => {
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     closeSensorToken();
+  } else if (
+    event.key === "Escape" &&
+    !elements.securityEditor.classList.contains("hidden")
+  ) {
+    elements.securityEditor.classList.add("hidden");
+  } else if (
+    event.key === "Escape" &&
+    !elements.operatorEditor.classList.contains("hidden")
+  ) {
+    elements.operatorEditor.classList.add("hidden");
   } else if (event.key === "Escape" && operatorMenuOpen) {
     setOperatorMenuOpen(false);
   }
