@@ -9,7 +9,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rdds_agent import Config, Outbox, SensorAgent, parse_skyspy_line
+from rdds_agent import (
+    AGENT_VERSION,
+    HEARTBEAT_PATH,
+    Config,
+    Outbox,
+    SensorAgent,
+    parse_skyspy_line,
+)
 
 
 class SkySpyParserTests(unittest.TestCase):
@@ -119,8 +126,108 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(selected.message_id, second)
         self.assertEqual(self.outbox.oldest_due(now=10**12).message_id, first)
 
+    def test_replacing_state_snapshot_keeps_only_newest_heartbeat(self) -> None:
+        self.outbox.enqueue("/observation", {"value": "event"})
+        self.outbox.replace_pending(HEARTBEAT_PATH, {"value": "old"})
+        newest = self.outbox.replace_pending(HEARTBEAT_PATH, {"value": "new"})
+
+        rows = self.outbox.connection.execute(
+            "SELECT id, payload_json FROM outbox WHERE path = ?",
+            (HEARTBEAT_PATH,),
+        ).fetchall()
+        self.assertEqual(1, len(rows))
+        self.assertEqual(newest, rows[0]["id"])
+        self.assertEqual("new", json.loads(rows[0]["payload_json"])["value"])
+        self.assertEqual(2, self.outbox.depth())
+
+
+class HeartbeatTelemetryTests(unittest.TestCase):
+    def test_heartbeat_reports_source_and_delivery_health(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                api_url="http://127.0.0.1:1",
+                ingest_token="individual-test-token",
+                sensor_id="skyspy-test-01",
+                display_name="Test receiver",
+                source="loop://",
+                baud_rate=115200,
+                sensor_position=None,
+                transport="unknown",
+                heartbeat_seconds=10,
+                reconnect_seconds=1,
+                request_timeout_seconds=2,
+                replay_messages_per_second=2,
+                spool_path=Path(directory) / "outbox.sqlite3",
+                max_queue_messages=100,
+            )
+            agent = SensorAgent(config)
+            try:
+                agent.source_connection = object()
+                agent.last_source_message_at = "2026-08-26T12:00:00+00:00"
+                message_id = agent.enqueue_heartbeat()
+                message = agent.outbox.get(message_id)
+                self.assertIsNotNone(message)
+                payload = json.loads(message.payload_json)
+                self.assertEqual(AGENT_VERSION, payload["status"]["agent_version"])
+                self.assertTrue(payload["status"]["source_connected"])
+                self.assertEqual(0, payload["status"]["dead_letter_depth"])
+                self.assertEqual(
+                    "2026-08-26T12:00:00+00:00",
+                    payload["status"]["source_last_message_at"],
+                )
+            finally:
+                agent.source_connection = None
+                agent.outbox.close()
+
 
 class DeliveryTests(unittest.TestCase):
+    def test_disabled_sensor_payload_is_discarded_without_queue_failure(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"detail":"sensor is disabled"}')
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                api_url=f"http://127.0.0.1:{server.server_port}",
+                ingest_token="individual-test-token",
+                sensor_id="skyspy-test-01",
+                display_name="Test receiver",
+                source="loop://",
+                baud_rate=115200,
+                sensor_position=None,
+                transport="unknown",
+                heartbeat_seconds=10,
+                reconnect_seconds=1,
+                request_timeout_seconds=2,
+                replay_messages_per_second=2,
+                spool_path=Path(directory) / "outbox.sqlite3",
+                max_queue_messages=100,
+            )
+            agent = SensorAgent(config)
+            try:
+                agent.outbox.enqueue("/api/test", {"value": "disabled-period"})
+
+                self.assertEqual(agent.flush_outbox(), 0)
+                self.assertEqual(agent.outbox.depth(), 0)
+                self.assertEqual(agent.outbox.dead_letter_depth(), 0)
+            finally:
+                agent.outbox.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_current_message_bypasses_historical_fifo(self) -> None:
         received: list[dict[str, object]] = []
 

@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.config import settings
 from app.models import HeartbeatEnvelope, ObservationEnvelope, SensorContext
+from app.sensor_health import assess_heartbeat
 
 
 @contextmanager
@@ -54,7 +55,7 @@ def _upsert_sensor(cursor: psycopg.Cursor, sensor: SensorContext) -> UUID:
         VALUES (
             %(sensor_key)s,
             %(display_name)s,
-            'online',
+            'provisioning',
             CASE
                 WHEN CAST(%(longitude)s AS DOUBLE PRECISION) IS NULL
                   OR CAST(%(latitude)s AS DOUBLE PRECISION) IS NULL
@@ -81,10 +82,6 @@ def _upsert_sensor(cursor: psycopg.Cursor, sensor: SensorContext) -> UUID:
                     %(provided_display_name)s,
                     sensors.display_name
                 )
-            END,
-            status = CASE
-                WHEN sensors.status = 'disabled' THEN 'disabled'
-                ELSE 'online'
             END,
             fixed_position = COALESCE(sensors.fixed_position, EXCLUDED.fixed_position),
             last_seen_at = NOW(),
@@ -121,7 +118,11 @@ def insert_heartbeat(
                 uptime_seconds,
                 free_heap_bytes,
                 queue_depth,
+                dead_letter_depth,
                 cellular_rssi,
+                agent_version,
+                source_connected,
+                source_last_message_at,
                 raw_message
             )
             VALUES (
@@ -132,7 +133,11 @@ def insert_heartbeat(
                 %(uptime_seconds)s,
                 %(free_heap_bytes)s,
                 %(queue_depth)s,
+                %(dead_letter_depth)s,
                 %(cellular_rssi)s,
+                %(agent_version)s,
+                %(source_connected)s,
+                %(source_last_message_at)s,
                 %(raw_message)s
             )
             ON CONFLICT (sensor_id, sensor_boot_id, sequence) DO NOTHING
@@ -146,11 +151,71 @@ def insert_heartbeat(
                 "uptime_seconds": payload.status.uptime_seconds,
                 "free_heap_bytes": payload.status.free_heap_bytes,
                 "queue_depth": payload.status.queue_depth,
+                "dead_letter_depth": payload.status.dead_letter_depth,
                 "cellular_rssi": payload.status.cellular_rssi,
+                "agent_version": payload.status.agent_version,
+                "source_connected": payload.status.source_connected,
+                "source_last_message_at": payload.status.source_last_message_at,
                 "raw_message": Jsonb(raw_message),
             },
         )
         row = cursor.fetchone()
+        assessment = assess_heartbeat(
+            payload.status,
+            settings.sensor_queue_warning_messages,
+            settings.sensor_source_silent_after_seconds,
+            payload.sensor.timestamp,
+        )
+        cursor.execute(
+            """
+            UPDATE sensors
+            SET
+                status = CASE
+                    WHEN status IN ('disabled', 'maintenance') THEN status
+                    ELSE %(health_state)s
+                END,
+                health_reason = CASE
+                    WHEN status = 'disabled' THEN 'disabled'
+                    WHEN status = 'maintenance' THEN 'maintenance'
+                    ELSE %(health_reason)s
+                END,
+                health_changed_at = CASE
+                    WHEN status NOT IN ('disabled', 'maintenance')
+                     AND status IS DISTINCT FROM %(health_state)s
+                    THEN NOW()
+                    ELSE health_changed_at
+                END,
+                health_issue_started_at = CASE
+                    WHEN status IN ('disabled', 'maintenance') THEN NULL
+                    WHEN %(health_state)s = 'online' THEN NULL
+                    ELSE COALESCE(health_issue_started_at, NOW())
+                END,
+                last_heartbeat_received_at = NOW(),
+                last_heartbeat_reported_at = %(reported_at)s,
+                agent_version = %(agent_version)s,
+                source_connected = %(source_connected)s,
+                source_last_message_at = %(source_last_message_at)s,
+                reported_queue_depth = %(queue_depth)s,
+                reported_dead_letter_depth = %(dead_letter_depth)s,
+                updated_at = NOW()
+            WHERE id = %(sensor_id)s
+              AND (
+                  last_heartbeat_reported_at IS NULL
+                  OR last_heartbeat_reported_at < %(reported_at)s
+              )
+            """,
+            {
+                "sensor_id": sensor_uuid,
+                "reported_at": payload.sensor.timestamp,
+                "health_state": assessment.state,
+                "health_reason": assessment.reason,
+                "agent_version": payload.status.agent_version,
+                "source_connected": payload.status.source_connected,
+                "source_last_message_at": payload.status.source_last_message_at,
+                "queue_depth": payload.status.queue_depth,
+                "dead_letter_depth": payload.status.dead_letter_depth,
+            },
+        )
     return sensor_uuid, None if row is None else int(row["id"])
 
 
@@ -267,14 +332,99 @@ def mark_stale_sensors() -> int:
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
             """
+            WITH expired AS (
+                SELECT
+                    id,
+                    CASE
+                        WHEN last_heartbeat_received_at IS NULL
+                          OR last_heartbeat_received_at <
+                             NOW() - (%(offline_after)s * INTERVAL '1 second')
+                        THEN 'offline'
+                        WHEN source_connected IS FALSE THEN 'degraded'
+                        WHEN source_connected IS TRUE
+                         AND source_last_message_at IS NOT NULL
+                         AND last_heartbeat_reported_at - source_last_message_at >=
+                             (%(source_silent_after)s * INTERVAL '1 second')
+                        THEN 'degraded'
+                        WHEN COALESCE(reported_dead_letter_depth, 0) > 0
+                        THEN 'degraded'
+                        WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
+                        THEN 'degraded'
+                        ELSE 'online'
+                    END AS next_status,
+                    CASE
+                        WHEN last_heartbeat_received_at IS NULL
+                          OR last_heartbeat_received_at <
+                             NOW() - (%(offline_after)s * INTERVAL '1 second')
+                        THEN 'heartbeat_timeout'
+                        WHEN source_connected IS FALSE THEN 'source_unavailable'
+                        WHEN source_connected IS TRUE
+                         AND source_last_message_at IS NOT NULL
+                         AND last_heartbeat_reported_at - source_last_message_at >=
+                             (%(source_silent_after)s * INTERVAL '1 second')
+                        THEN 'source_silent'
+                        WHEN COALESCE(reported_dead_letter_depth, 0) > 0
+                        THEN 'dead_letter'
+                        WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
+                        THEN 'queue_backlog'
+                        ELSE 'healthy'
+                    END AS next_reason
+                FROM sensors
+                WHERE status = 'maintenance'
+                  AND maintenance_until IS NOT NULL
+                  AND maintenance_until <= NOW()
+                  AND deleted_at IS NULL
+            )
+            UPDATE sensors AS sensor
+            SET
+                status = expired.next_status,
+                health_reason = expired.next_reason,
+                health_changed_at = NOW(),
+                health_issue_started_at = CASE
+                    WHEN expired.next_status IN ('degraded', 'offline') THEN NOW()
+                    ELSE NULL
+                END,
+                maintenance_reason = NULL,
+                maintenance_started_at = NULL,
+                maintenance_started_by = NULL,
+                maintenance_until = NULL,
+                updated_by = 'system',
+                updated_at = NOW()
+            FROM expired
+            WHERE sensor.id = expired.id
+            """,
+            {
+                "offline_after": settings.sensor_offline_after_seconds,
+                "queue_warning": settings.sensor_queue_warning_messages,
+                "source_silent_after": (
+                    settings.sensor_source_silent_after_seconds
+                ),
+            },
+        )
+        changed = cursor.rowcount
+        cursor.execute(
+            """
             UPDATE sensors
-            SET status = 'offline', updated_at = NOW()
-            WHERE status = 'online'
-              AND last_seen_at < NOW() - (%s * INTERVAL '1 second')
+            SET
+                status = 'offline',
+                health_reason = 'heartbeat_timeout',
+                health_changed_at = NOW(),
+                health_issue_started_at = COALESCE(
+                    health_issue_started_at,
+                    NOW()
+                ),
+                updated_by = 'system',
+                updated_at = NOW()
+            WHERE status IN ('online', 'degraded')
+              AND (
+                  last_heartbeat_received_at IS NULL
+                  OR last_heartbeat_received_at <
+                     NOW() - (%s * INTERVAL '1 second')
+              )
             """,
             (settings.sensor_offline_after_seconds,),
         )
-        return cursor.rowcount
+        return changed + cursor.rowcount
 
 
 def readiness() -> dict[str, str]:

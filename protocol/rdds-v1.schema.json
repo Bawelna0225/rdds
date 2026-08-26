@@ -58,6 +58,17 @@
             "uptime_seconds": { "type": ["integer", "null"], "minimum": 0 },
             "free_heap_bytes": { "type": ["integer", "null"], "minimum": 0 },
             "queue_depth": { "type": ["integer", "null"], "minimum": 0 },
+            "dead_letter_depth": { "type": ["integer", "null"], "minimum": 0 },
+            "agent_version": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "source_connected": { "type": ["boolean", "null"] },
+            "source_last_message_at": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
             "cellular_rssi": {
               "type": ["integer", "null"],
               "minimum": -150,

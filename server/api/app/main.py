@@ -59,6 +59,7 @@ from app.models import (
     ProtectedZoneState,
     ProtectedZoneUpdate,
     SensorRegistration,
+    SensorMaintenance,
     SensorState,
     SensorTokenRotation,
     SensorUpdate,
@@ -93,6 +94,7 @@ from app.sensor_store import (
     register_sensor,
     rotate_sensor_token,
     set_sensor_enabled,
+    set_sensor_maintenance,
     update_sensor,
 )
 from app.track_store import get_live_track_trails, get_track_history, list_tracks
@@ -111,7 +113,7 @@ async def sensor_status_monitor() -> None:
         try:
             changed = await asyncio.to_thread(mark_stale_sensors)
             if changed:
-                logger.info("Marked %s sensor(s) offline", changed)
+                logger.info("Updated %s sensor health state(s)", changed)
         except psycopg.Error:
             logger.exception("Sensor status monitor could not reach the database")
 
@@ -130,7 +132,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.16.0",
+    version="0.17.0",
     lifespan=lifespan,
 )
 
@@ -713,6 +715,37 @@ def put_sensor(
     }
 
 
+@app.put(
+    "/api/v1/sensors/{sensor_id}/maintenance",
+    tags=["sensors"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def put_sensor_maintenance(
+    sensor_id: UUID,
+    payload: SensorMaintenance,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        sensor = set_sensor_maintenance(
+            sensor_id=sensor_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor maintenance update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if sensor is None:
+        raise HTTPException(
+            status_code=404,
+            detail="sensor not found, disabled or not in maintenance",
+        )
+
+    return {
+        "time": utc_now(),
+        "sensor": sensor,
+    }
+
+
 @app.delete(
     "/api/v1/sensors/{sensor_id}",
     tags=["sensors"],
@@ -992,10 +1025,42 @@ def delete_protected_zone(
 )
 def get_alerts(
     include_closed: bool = Query(default=False),
+    closed_only: bool = Query(default=False),
+    closed_from: datetime | None = Query(default=None),
+    closed_before: datetime | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict[str, object]:
+    if (closed_from is not None or closed_before is not None) and not closed_only:
+        raise HTTPException(
+            status_code=422,
+            detail="closed date filters require closed_only=true",
+        )
+    for field_name, value in (
+        ("closed_from", closed_from),
+        ("closed_before", closed_before),
+    ):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field_name} must include a UTC offset",
+            )
+    if (
+        closed_from is not None
+        and closed_before is not None
+        and closed_from >= closed_before
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="closed_from must be earlier than closed_before",
+        )
     try:
-        alerts = list_alerts(include_closed=include_closed, limit=limit)
+        alerts = list_alerts(
+            include_closed=include_closed,
+            closed_only=closed_only,
+            closed_from=closed_from,
+            closed_before=closed_before,
+            limit=limit,
+        )
     except (psycopg.Error, RuntimeError) as exc:
         logger.exception("Alert list query failed")
         raise HTTPException(status_code=503, detail="database unavailable") from exc

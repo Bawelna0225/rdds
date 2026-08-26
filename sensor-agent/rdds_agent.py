@@ -24,6 +24,7 @@ except ImportError:  # Allows parser/outbox unit tests without pyserial on the h
 
 LOG = logging.getLogger("rdds-sensor-agent")
 PROTOCOL_VERSION = "rdds/1.0"
+AGENT_VERSION = "0.17.0"
 OBSERVATION_PATH = "/api/v1/ingest/observation"
 HEARTBEAT_PATH = "/api/v1/ingest/heartbeat"
 RETRYABLE_HTTP_CODES = {401, 403, 408, 425, 429}
@@ -205,6 +206,35 @@ class Outbox:
     def enqueue(self, path: str, payload: dict[str, Any]) -> int:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            row = self.connection.execute(
+                "SELECT count(*) AS count FROM outbox"
+            ).fetchone()
+            if int(row["count"]) >= self.max_messages:
+                raise OutboxFull(
+                    f"outbox limit of {self.max_messages} messages was reached"
+                )
+            cursor = self.connection.execute(
+                """
+                INSERT INTO outbox (path, payload_json, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    path,
+                    json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
+                    time.time(),
+                ),
+            )
+            self.connection.execute("COMMIT")
+            return int(cursor.lastrowid)
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def replace_pending(self, path: str, payload: dict[str, Any]) -> int:
+        """Keep only the newest state snapshot for a coalescible endpoint."""
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.connection.execute("DELETE FROM outbox WHERE path = ?", (path,))
             row = self.connection.execute(
                 "SELECT count(*) AS count FROM outbox"
             ).fetchone()
@@ -439,6 +469,7 @@ class SensorAgent:
         self.next_replay_monotonic = 0.0
         self.source_connection: Any = None
         self.next_source_connect_monotonic = 0.0
+        self.last_source_message_at: str | None = None
         self.running = True
         self.received_lines = 0
         self.accepted_detections = 0
@@ -473,9 +504,13 @@ class SensorAgent:
             "status": {
                 "uptime_seconds": round(time.monotonic() - self.started_monotonic),
                 "queue_depth": self.outbox.depth(),
+                "dead_letter_depth": self.outbox.dead_letter_depth(),
+                "agent_version": AGENT_VERSION,
+                "source_connected": self.source_connection is not None,
+                "source_last_message_at": self.last_source_message_at,
             },
         }
-        return self.outbox.enqueue(HEARTBEAT_PATH, payload)
+        return self.outbox.replace_pending(HEARTBEAT_PATH, payload)
 
     def enqueue_detection(self, detection: dict[str, Any]) -> int:
         payload = {
@@ -498,7 +533,7 @@ class SensorAgent:
                 baudrate=self.config.baud_rate,
                 timeout=1,
             )
-            LOG.info(
+            LOG.debug(
                 "connected to Sky-Spy source %s at %d baud",
                 self.config.source,
                 self.config.baud_rate,
@@ -534,6 +569,7 @@ class SensorAgent:
         if not line:
             return
         self.received_lines += 1
+        self.last_source_message_at = datetime.now(timezone.utc).isoformat()
         detection = parse_skyspy_line(line, self.config.transport)
         if detection is None:
             self.ignored_lines += 1
@@ -562,6 +598,16 @@ class SensorAgent:
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:800]
             error = f"HTTP {exc.code}: {detail}"
+            if exc.code == 403:
+                try:
+                    response_payload = json.loads(detail)
+                except (json.JSONDecodeError, TypeError):
+                    response_payload = None
+                if (
+                    isinstance(response_payload, dict)
+                    and response_payload.get("detail") == "sensor is disabled"
+                ):
+                    return "discard", error
             if exc.code in RETRYABLE_HTTP_CODES or exc.code >= 500:
                 return "retry", error
             return "dead_letter", error
@@ -584,6 +630,13 @@ class SensorAgent:
         if outcome == "accepted":
             self.outbox.acknowledge(message.message_id)
             return 1
+        if outcome == "discard":
+            LOG.debug(
+                "message %d discarded because sensor is administratively disabled",
+                message.message_id,
+            )
+            self.outbox.acknowledge(message.message_id)
+            return 0
         if outcome == "dead_letter":
             LOG.error(
                 "message %d moved to dead letter: %s",
@@ -617,6 +670,13 @@ class SensorAgent:
         if outcome == "accepted":
             self.outbox.acknowledge(message.message_id)
             return True
+        if outcome == "discard":
+            LOG.info(
+                "current message %d discarded because sensor is administratively disabled",
+                message.message_id,
+            )
+            self.outbox.acknowledge(message.message_id)
+            return False
         if outcome == "dead_letter":
             LOG.error(
                 "message %d moved to dead letter: %s",
@@ -654,6 +714,7 @@ class SensorAgent:
         try:
             while self.running:
                 now = time.monotonic()
+                self.read_source_once()
                 if (
                     self.last_heartbeat_monotonic == 0.0
                     or now - self.last_heartbeat_monotonic
@@ -666,7 +727,6 @@ class SensorAgent:
                     except OutboxFull as exc:
                         LOG.error("heartbeat rejected because %s", exc)
 
-                self.read_source_once()
                 self.flush_outbox()
         finally:
             self.disconnect_source()

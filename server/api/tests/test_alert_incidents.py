@@ -1,6 +1,7 @@
 import os
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 REQUIRED_ENVIRONMENT = {
@@ -135,6 +136,35 @@ class IncidentPersistenceTests(unittest.TestCase):
         self.assertIn("last_altitude_m AS live_altitude_m", query)
         self.assertIn("entry_position::geometry", query)
         self.assertIn("track.last_position::geometry", query)
+
+    def test_closed_alert_archive_filters_by_closure_time(self) -> None:
+        cursor = FakeCursor(rows=[])
+        closed_from = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        closed_before = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        with patch.object(
+            alert_store,
+            "connection",
+            fake_connection_for(cursor),
+        ):
+            self.assertEqual(
+                [],
+                alert_store.list_alerts(
+                    closed_only=True,
+                    closed_from=closed_from,
+                    closed_before=closed_before,
+                    limit=1000,
+                ),
+            )
+
+        query = cursor.queries[0]
+        parameters = cursor.parameters[0]
+        self.assertIn("WHEN %(closed_only)s THEN alert.state = 'closed'", query)
+        self.assertIn("alert.closed_at >= %(closed_from)s", query)
+        self.assertIn("alert.closed_at < %(closed_before)s", query)
+        self.assertIn("alert.closed_at END DESC NULLS LAST", query)
+        self.assertTrue(parameters["closed_only"])
+        self.assertEqual(closed_from, parameters["closed_from"])
+        self.assertEqual(closed_before, parameters["closed_before"])
 
 
 if __name__ == "__main__":

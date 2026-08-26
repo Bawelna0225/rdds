@@ -10,6 +10,9 @@ WEB_STYLES = PROJECT_ROOT / "web" / "src" / "styles.css"
 TRACK_DETECTION_MIGRATION = (
     PROJECT_ROOT / "database" / "migrations" / "014_track_detection_audit.sql"
 )
+SENSOR_SUPERVISION_MIGRATION = (
+    PROJECT_ROOT / "database" / "migrations" / "015_sensor_supervision.sql"
+)
 
 
 class WebRefreshBoundaryTests(unittest.TestCase):
@@ -21,8 +24,11 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         cls.track_detection_migration = TRACK_DETECTION_MIGRATION.read_text(
             encoding="utf-8"
         )
+        cls.sensor_supervision_migration = SENSOR_SUPERVISION_MIGRATION.read_text(
+            encoding="utf-8"
+        )
         match = re.search(
-            r"async function refresh\(.*?\n}\n\nelements\.showEnded",
+            r"async function refresh\(.*?\n}\n\nelements\.closedAlertApply",
             cls.source,
             flags=re.DOTALL,
         )
@@ -47,7 +53,7 @@ class WebRefreshBoundaryTests(unittest.TestCase):
             '/api/v1/security/events',
             '/api/v1/security/sessions',
             'include_ended=true',
-            'include_closed=true',
+            'closed_only',
         )
         for path in stored_paths:
             with self.subTest(path=path):
@@ -62,6 +68,90 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         ):
             with self.subTest(function=function_name):
                 self.assertIn(f"async function {function_name}", self.source)
+
+    def test_track_archive_is_a_separate_on_demand_section(self) -> None:
+        self.assertNotIn('id="show-ended"', self.index)
+        self.assertIn('data-section-key="archived-tracks"', self.index)
+        self.assertIn('id="archived-track-count"', self.index)
+        self.assertIn('id="archived-track-list"', self.index)
+        self.assertIn("currentArchivedTracks", self.source)
+        self.assertIn("section === elements.archivedTracksSection", self.source)
+        self.assertIn("!archivedTracksLoaded", self.source)
+        self.assertNotIn("showEnded", self.source)
+        self.assertNotIn("include_ended=true", self.live_refresh)
+
+    def test_map_fit_action_and_zone_severity_colors_are_explicit(self) -> None:
+        self.assertIn("Dopasuj mapę", self.index)
+        self.assertNotIn(">Pokaż wszystkie</button>", self.index)
+        for severity in ("low", "medium", "high", "critical"):
+            with self.subTest(severity=severity):
+                self.assertIn(f"legend-symbol zone-{severity}", self.index)
+                self.assertIn(f".zone-card.zone-severity-{severity}", self.styles)
+        self.assertIn("const severityColor = severityColors[zone.severity]", self.source)
+        self.assertIn("const color = zone.active ? severityColor", self.source)
+        self.assertIn("zone-card zone-severity-${zone.severity}", self.source)
+
+    def test_zone_popup_is_readable_and_map_click_focuses_sidebar_card(self) -> None:
+        self.assertIn("zone-popup-grid", self.source)
+        self.assertIn("minWidth: 260", self.source)
+        self.assertIn(".zone-popup-grid {", self.styles)
+        self.assertIn(
+            "grid-template-columns: max-content minmax(150px, 1fr)",
+            self.styles,
+        )
+        self.assertIn(
+            'layer.on("click", () => focusZoneInSidebar(zone.id))',
+            self.source,
+        )
+        self.assertIn("function focusZoneInSidebar", self.source)
+        self.assertIn(
+            "setSectionCollapsed(elements.zonesSection, false)",
+            self.source,
+        )
+        self.assertIn("card.dataset.zoneId = String(zone.id)", self.source)
+
+    def test_sidebar_uses_operational_priority_order(self) -> None:
+        order_source = self.source.split(
+            "function applyOperationalSidebarOrder()", 1
+        )[1].split("function revealAlertsSectionForNewAlarm()", 1)[0]
+        expected_order = (
+            '"alerts"',
+            '"tracks"',
+            '"zones"',
+            '"sensors"',
+            '"archived-tracks"',
+            '"closed-alerts"',
+            '"audit"',
+        )
+        positions = [order_source.index(section) for section in expected_order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(
+            self.source.index("applyOperationalSidebarOrder();"),
+            self.source.index("initializeCollapsibleSections();"),
+        )
+
+    def test_theme_switch_covers_interface_map_and_persists_choice(self) -> None:
+        self.assertIn('id="theme-toggle"', self.index)
+        self.assertIn('meta name="color-scheme" content="dark light"', self.index)
+        self.assertIn('const DISPLAY_SETTINGS_KEY = "rdds.display.v1"', self.source)
+        self.assertIn("function setTheme(theme", self.source)
+        self.assertIn("document.documentElement.dataset.theme = currentTheme", self.source)
+        self.assertIn("writeDisplaySettings({ theme: currentTheme })", self.source)
+        self.assertIn('html[data-theme="light"] {', self.styles)
+        self.assertIn('html[data-theme="light"] .leaflet-tile-pane', self.styles)
+        self.assertIn("filter: none", self.styles)
+
+    def test_sidebar_can_be_hidden_restored_and_reopened_from_zone(self) -> None:
+        self.assertIn('id="sidebar-toggle"', self.index)
+        self.assertIn('aria-controls="sidebar"', self.index)
+        self.assertIn("function setSidebarHidden(hidden", self.source)
+        self.assertIn('writeDisplaySettings({ sidebarHidden: hidden })', self.source)
+        self.assertIn('elements.sidebar.inert = hidden', self.source)
+        self.assertIn("scheduleMapResize()", self.source)
+        self.assertIn("map.invalidateSize", self.source)
+        self.assertIn("setSidebarHidden(false);", self.source)
+        self.assertIn(".workspace.sidebar-hidden {", self.styles)
+        self.assertIn("grid-template-columns: 0 minmax(0, 1fr)", self.styles)
 
     def test_global_telemetry_loader_is_not_present(self) -> None:
         self.assertNotIn("global-loading", self.source)
@@ -163,8 +253,21 @@ class WebRefreshBoundaryTests(unittest.TestCase):
             raise AssertionError("Could not isolate alert action reload")
         action_reload = match.group(0)
         self.assertIn('/api/v1/alerts?include_closed=false', action_reload)
-        self.assertIn('/api/v1/alerts?include_closed=true&limit=1000', action_reload)
+        self.assertIn("if (closedAlertsLoaded)", action_reload)
+        self.assertIn("await loadClosedAlerts({ showLoader: false })", action_reload)
         self.assertNotIn("await refresh()", action_reload)
+
+    def test_closed_alert_archive_is_collapsible_filtered_and_not_live(self) -> None:
+        self.assertNotIn('id="show-closed-alerts"', self.index)
+        self.assertIn('data-section-key="closed-alerts"', self.index)
+        self.assertIn('id="closed-alert-from"', self.index)
+        self.assertIn('id="closed-alert-to"', self.index)
+        self.assertIn('id="closed-alert-list"', self.index)
+        self.assertIn('closed_only: "true"', self.source)
+        self.assertIn('parameters.set("closed_from"', self.source)
+        self.assertIn('parameters.set("closed_before"', self.source)
+        self.assertNotIn("closed_only", self.live_refresh)
+        self.assertIn(".closed-alert-list .alert-card + .alert-card", self.styles)
 
     def test_stale_live_alert_payload_cannot_restore_a_closed_card(self) -> None:
         self.assertIn("let alertDataRevision = 0", self.source)
@@ -253,6 +356,40 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         self.assertIn("uq_audit_events_track_detected", self.track_detection_migration)
         self.assertIn("WHERE event_type = 'track_detected'", self.track_detection_migration)
         self.assertIn("ON CONFLICT DO NOTHING", self.track_detection_migration)
+
+    def test_sensor_supervision_separates_agent_source_and_queue_health(self) -> None:
+        for field in (
+            "source_connected",
+            "source_last_message_at",
+            "reported_queue_depth",
+            "reported_dead_letter_depth",
+            "last_heartbeat_received_at",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, self.sensor_supervision_migration)
+        self.assertIn("health_issue_started_at IS NOT NULL", self.sensor_supervision_migration)
+        self.assertIn("sensor_health_changed", self.sensor_supervision_migration)
+
+    def test_sensor_health_is_live_and_maintenance_is_administrative(self) -> None:
+        self.assertIn("function processSensorHealth", self.source)
+        self.assertIn("function renderSensorHealthSummary", self.source)
+        self.assertIn('id="sensor-health-banner"', self.index)
+        self.assertIn("/maintenance`,", self.source)
+        self.assertIn("runSensorMaintenance", self.source)
+        self.assertIn("sensor.status === \"degraded\"", self.source)
+
+    def test_sensor_card_gives_health_diagnostics_a_separate_wrapping_row(self) -> None:
+        self.assertIn('meta.className = "entity-meta sensor-meta"', self.source)
+        self.assertIn('health.textContent = `Tor detekcji:', self.source)
+        self.assertIn(".sensor-meta {", self.styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto", self.styles)
+        self.assertIn("overflow-wrap: anywhere", self.styles)
+
+    def test_sidebar_lists_scroll_without_squashing_cards_and_sections_are_divided(self) -> None:
+        self.assertIn(".entity-list > .entity-card", self.styles)
+        self.assertIn("flex: 0 0 auto", self.styles)
+        self.assertIn(".sidebar-section + .sidebar-section", self.styles)
+        self.assertIn("border-top: 1px solid rgba(67, 213, 255, 0.34)", self.styles)
 
     def test_account_menu_keeps_audio_training_out_of_primary_tabs(self) -> None:
         for tab_name in ("admin", "account"):

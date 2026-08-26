@@ -3,8 +3,9 @@ import secrets
 from typing import Any, Literal
 from uuid import UUID
 
+from app.config import settings
 from app.database import connection
-from app.models import SensorRegistration, SensorUpdate
+from app.models import SensorMaintenance, SensorRegistration, SensorUpdate
 
 LegacySensorAccess = Literal["allowed", "disabled", "individual_required"]
 
@@ -17,6 +18,21 @@ SENSOR_COLUMNS = """
     ST_X(sensor.fixed_position::geometry) AS longitude,
     sensor.firmware_version,
     sensor.last_seen_at,
+    sensor.health_reason,
+    sensor.health_changed_at,
+    sensor.health_issue_started_at,
+    sensor.last_heartbeat_received_at AS last_heartbeat_at,
+    sensor.last_heartbeat_reported_at,
+    sensor.last_observation_received_at,
+    sensor.agent_version,
+    sensor.source_connected,
+    sensor.source_last_message_at,
+    sensor.reported_queue_depth AS queue_depth,
+    sensor.reported_dead_letter_depth AS dead_letter_depth,
+    sensor.maintenance_reason,
+    sensor.maintenance_started_at,
+    sensor.maintenance_started_by,
+    sensor.maintenance_until,
     sensor.heartbeat_count,
     sensor.observation_count,
     sensor.created_by,
@@ -30,10 +46,8 @@ SENSOR_COLUMNS = """
     credential.token_prefix,
     credential.created_at AS token_created_at,
     credential.last_used_at AS token_last_used_at,
-    heartbeat.received_at AS last_heartbeat_at,
     heartbeat.uptime_seconds,
     heartbeat.free_heap_bytes,
-    heartbeat.queue_depth,
     heartbeat.cellular_rssi
 """
 
@@ -52,14 +66,12 @@ SENSOR_JOINS = """
     ) AS credential ON TRUE
     LEFT JOIN LATERAL (
         SELECT
-            latest_heartbeat.received_at,
             latest_heartbeat.uptime_seconds,
             latest_heartbeat.free_heap_bytes,
-            latest_heartbeat.queue_depth,
             latest_heartbeat.cellular_rssi
         FROM sensor_heartbeats AS latest_heartbeat
         WHERE latest_heartbeat.sensor_id = sensor.id
-        ORDER BY latest_heartbeat.received_at DESC
+        ORDER BY latest_heartbeat.measured_at DESC, latest_heartbeat.received_at DESC
         LIMIT 1
     ) AS heartbeat ON TRUE
 """
@@ -183,11 +195,30 @@ def set_sensor_enabled(
                 status = CASE
                     WHEN %(enabled)s THEN
                         CASE
-                            WHEN last_seen_at IS NULL THEN 'provisioning'
+                            WHEN last_heartbeat_received_at IS NULL THEN 'provisioning'
                             ELSE 'offline'
                         END
                     ELSE 'disabled'
                 END,
+                health_reason = CASE
+                    WHEN %(enabled)s THEN
+                        CASE
+                            WHEN last_heartbeat_received_at IS NULL
+                            THEN 'awaiting_heartbeat'
+                            ELSE 'heartbeat_timeout'
+                        END
+                    ELSE 'disabled'
+                END,
+                health_changed_at = NOW(),
+                health_issue_started_at = CASE
+                    WHEN %(enabled)s AND last_heartbeat_received_at IS NOT NULL
+                    THEN NOW()
+                    ELSE NULL
+                END,
+                maintenance_reason = NULL,
+                maintenance_started_at = NULL,
+                maintenance_started_by = NULL,
+                maintenance_until = NULL,
                 updated_by = %(actor)s,
                 updated_at = NOW()
             WHERE id = %(sensor_id)s
@@ -198,6 +229,111 @@ def set_sensor_enabled(
                 "enabled": enabled,
                 "actor": actor,
                 "sensor_id": sensor_id,
+            },
+        )
+        updated = cursor.fetchone()
+        if updated is None:
+            return None
+        return _read_sensor(cursor, updated["id"])
+
+
+def set_sensor_maintenance(
+    sensor_id: UUID,
+    payload: SensorMaintenance,
+    actor: str,
+) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE sensors
+            SET
+                status = CASE
+                    WHEN %(enabled)s THEN 'maintenance'
+                    WHEN last_heartbeat_received_at IS NULL
+                      OR last_heartbeat_received_at <
+                         NOW() - (%(offline_after)s * INTERVAL '1 second')
+                    THEN 'offline'
+                    WHEN source_connected IS FALSE THEN 'degraded'
+                    WHEN source_connected IS TRUE
+                     AND source_last_message_at IS NOT NULL
+                     AND last_heartbeat_reported_at - source_last_message_at >=
+                         (%(source_silent_after)s * INTERVAL '1 second')
+                    THEN 'degraded'
+                    WHEN COALESCE(reported_dead_letter_depth, 0) > 0
+                    THEN 'degraded'
+                    WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
+                    THEN 'degraded'
+                    ELSE 'online'
+                END,
+                health_reason = CASE
+                    WHEN %(enabled)s THEN 'maintenance'
+                    WHEN last_heartbeat_received_at IS NULL
+                      OR last_heartbeat_received_at <
+                         NOW() - (%(offline_after)s * INTERVAL '1 second')
+                    THEN 'heartbeat_timeout'
+                    WHEN source_connected IS FALSE THEN 'source_unavailable'
+                    WHEN source_connected IS TRUE
+                     AND source_last_message_at IS NOT NULL
+                     AND last_heartbeat_reported_at - source_last_message_at >=
+                         (%(source_silent_after)s * INTERVAL '1 second')
+                    THEN 'source_silent'
+                    WHEN COALESCE(reported_dead_letter_depth, 0) > 0
+                    THEN 'dead_letter'
+                    WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
+                    THEN 'queue_backlog'
+                    ELSE 'healthy'
+                END,
+                health_changed_at = NOW(),
+                health_issue_started_at = CASE
+                    WHEN %(enabled)s THEN NULL
+                    WHEN last_heartbeat_received_at IS NULL
+                      OR last_heartbeat_received_at <
+                         NOW() - (%(offline_after)s * INTERVAL '1 second')
+                      OR source_connected IS FALSE
+                      OR (
+                          source_connected IS TRUE
+                          AND source_last_message_at IS NOT NULL
+                          AND last_heartbeat_reported_at - source_last_message_at >=
+                              (%(source_silent_after)s * INTERVAL '1 second')
+                      )
+                      OR COALESCE(reported_dead_letter_depth, 0) > 0
+                      OR COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
+                    THEN NOW()
+                    ELSE NULL
+                END,
+                maintenance_reason = CASE
+                    WHEN %(enabled)s THEN %(reason)s
+                    ELSE NULL
+                END,
+                maintenance_started_at = CASE
+                    WHEN %(enabled)s THEN NOW()
+                    ELSE NULL
+                END,
+                maintenance_started_by = CASE
+                    WHEN %(enabled)s THEN %(actor)s
+                    ELSE NULL
+                END,
+                maintenance_until = CASE
+                    WHEN %(enabled)s THEN %(until)s
+                    ELSE NULL
+                END,
+                updated_by = %(actor)s,
+                updated_at = NOW()
+            WHERE id = %(sensor_id)s
+              AND deleted_at IS NULL
+              AND status <> 'disabled'
+              AND (%(enabled)s OR status = 'maintenance')
+            RETURNING id
+            """,
+            {
+                "sensor_id": sensor_id,
+                "enabled": payload.enabled,
+                "reason": None if payload.reason is None else payload.reason.strip(),
+                "until": payload.until,
+                "actor": actor,
+                "offline_after": settings.sensor_offline_after_seconds,
+                "queue_warning": settings.sensor_queue_warning_messages,
+                "source_silent_after": settings.sensor_source_silent_after_seconds,
             },
         )
         updated = cursor.fetchone()
@@ -326,6 +462,13 @@ def delete_sensor(sensor_id: UUID, actor: str) -> dict[str, Any] | None:
             UPDATE sensors
             SET
                 status = 'disabled',
+                health_reason = 'disabled',
+                health_changed_at = NOW(),
+                health_issue_started_at = NULL,
+                maintenance_reason = NULL,
+                maintenance_started_at = NULL,
+                maintenance_started_by = NULL,
+                maintenance_until = NULL,
                 deleted_at = NOW(),
                 deleted_by = %s,
                 updated_by = %s,

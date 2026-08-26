@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -251,6 +252,9 @@ def delete_zone(zone_id: UUID, actor: str) -> dict[str, Any] | None:
 def list_alerts(
     include_closed: bool = False,
     limit: int = 200,
+    closed_only: bool = False,
+    closed_from: datetime | None = None,
+    closed_before: datetime | None = None,
 ) -> list[dict[str, Any]]:
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
@@ -319,18 +323,40 @@ def list_alerts(
                     ON observation.id = link.observation_id
                 WHERE link.track_id = track.id
             ) AS sensor_summary ON TRUE
-            WHERE (%s OR alert.state <> 'closed')
+            WHERE (
+                CASE
+                    WHEN %(closed_only)s THEN alert.state = 'closed'
+                    ELSE %(include_closed)s OR alert.state <> 'closed'
+                END
+            )
+              AND (
+                  %(closed_from)s::timestamptz IS NULL
+                  OR alert.closed_at >= %(closed_from)s
+              )
+              AND (
+                  %(closed_before)s::timestamptz IS NULL
+                  OR alert.closed_at < %(closed_before)s
+              )
             ORDER BY
-                CASE alert.severity
-                    WHEN 'critical' THEN 4
-                    WHEN 'high' THEN 3
-                    WHEN 'medium' THEN 2
-                    ELSE 1
+                CASE WHEN %(closed_only)s THEN alert.closed_at END DESC NULLS LAST,
+                CASE WHEN NOT %(closed_only)s THEN
+                    CASE alert.severity
+                        WHEN 'critical' THEN 4
+                        WHEN 'high' THEN 3
+                        WHEN 'medium' THEN 2
+                        ELSE 1
+                    END
                 END DESC,
                 alert.last_detected_at DESC
-            LIMIT %s
+            LIMIT %(limit)s
             """,
-            (include_closed, limit),
+            {
+                "include_closed": include_closed,
+                "closed_only": closed_only,
+                "closed_from": closed_from,
+                "closed_before": closed_before,
+                "limit": limit,
+            },
         )
         return [dict(row) for row in cursor.fetchall()]
 

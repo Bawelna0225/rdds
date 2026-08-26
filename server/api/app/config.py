@@ -40,6 +40,8 @@ class Settings:
     security_failure_window_minutes: int
     security_failure_alert_count: int
     sensor_offline_after_seconds: int
+    sensor_queue_warning_messages: int
+    sensor_source_silent_after_seconds: int
     track_poll_seconds: float
     track_stale_after_seconds: int
     track_ended_after_seconds: int
@@ -86,6 +88,12 @@ def load_settings() -> Settings:
         ),
         sensor_offline_after_seconds=int(
             os.getenv("RDDS_SENSOR_OFFLINE_AFTER_SECONDS", "30")
+        ),
+        sensor_queue_warning_messages=int(
+            os.getenv("RDDS_SENSOR_QUEUE_WARNING_MESSAGES", "100")
+        ),
+        sensor_source_silent_after_seconds=int(
+            os.getenv("RDDS_SENSOR_SOURCE_SILENT_AFTER_SECONDS", "90")
         ),
         track_poll_seconds=float(os.getenv("RDDS_TRACK_POLL_SECONDS", "1")),
         track_stale_after_seconds=int(
@@ -165,6 +173,18 @@ def load_settings() -> Settings:
     if not 1 <= settings.security_failure_alert_count <= 10000:
         raise RuntimeError(
             "RDDS_SECURITY_FAILURE_ALERT_COUNT must be between 1 and 10000"
+        )
+    if settings.sensor_offline_after_seconds < 10:
+        raise RuntimeError(
+            "RDDS_SENSOR_OFFLINE_AFTER_SECONDS must be at least 10"
+        )
+    if not 1 <= settings.sensor_queue_warning_messages <= 1000000:
+        raise RuntimeError(
+            "RDDS_SENSOR_QUEUE_WARNING_MESSAGES must be between 1 and 1000000"
+        )
+    if not 30 <= settings.sensor_source_silent_after_seconds <= 3600:
+        raise RuntimeError(
+            "RDDS_SENSOR_SOURCE_SILENT_AFTER_SECONDS must be between 30 and 3600"
         )
     if settings.maintenance_interval_seconds < 300:
         raise RuntimeError(

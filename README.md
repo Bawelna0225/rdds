@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.16.0**. The complete software path is tested
+> Current development version: **0.17.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -49,6 +49,8 @@ operator actions.
 - failed-login warnings with configurable observation window and threshold;
 - durable offline queue with retry, replay and dead-letter storage;
 - rate-limited offline replay with current observations processed first;
+- sensor supervision that separates API, Sky-Spy source and queue health;
+- online, degraded, offline and maintenance states with audited recovery;
 - multi-sensor track correlation, separate detection sessions and track history;
 - deduplicated 60-second live trails;
 - protected zones with persistent incident snapshots and live presence status;
@@ -186,7 +188,7 @@ python3 -m py_compile sensor-agent/rdds_agent.py skyspy-emulator/main.py
 git diff --check
 ```
 
-The expected result is eleven passing sensor-agent unit tests.
+The expected result is thirteen passing sensor-agent unit tests.
 
 ## Firmware builds
 
@@ -231,6 +233,7 @@ annotated Git tag:
 | `rdds-v0.14.0` | loading feedback and administrator database capacity monitoring |
 | `rdds-v0.15.0` | operator session control and centralized security-event log |
 | `rdds-v0.16.0` | zone incident snapshots, presence timeline and audible alerts |
+| `rdds-v0.17.0` | sensor health supervision and maintenance mode |
 
 Start with:
 

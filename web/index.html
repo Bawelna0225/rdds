@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#0a0d12" />
     <title>RDDS — mapa operacyjna</title>
   </head>
@@ -42,6 +42,16 @@
           </div>
         </div>
         <div class="topbar-tools">
+          <button
+            id="theme-toggle"
+            type="button"
+            class="display-toggle"
+            aria-pressed="false"
+            title="Włącz jasny motyw"
+          >
+            <span id="theme-toggle-icon" class="display-toggle-icon" aria-hidden="true">☀</span>
+            <span id="theme-toggle-label">Jasny</span>
+          </button>
           <button
             id="alarm-audio-toggle"
             type="button"
@@ -248,7 +258,7 @@
         <aside id="sidebar" class="sidebar">
           <div class="summary-grid">
             <div class="summary-card">
-              <span>Sensory online</span>
+              <span>Sensory sprawne</span>
               <strong id="online-sensors">0</strong>
             </div>
             <div class="summary-card">
@@ -262,15 +272,13 @@
           </div>
 
           <div class="toolbar">
-            <label class="toggle-row">
-              <input id="show-ended" type="checkbox" />
-              <span>Archiwum tras</span>
-            </label>
-            <label class="toggle-row">
-              <input id="show-closed-alerts" type="checkbox" />
-              <span>Zamknięte alarmy</span>
-            </label>
-            <button id="fit-map" type="button">Pokaż wszystkie</button>
+            <button
+              id="fit-map"
+              type="button"
+              title="Dopasuj widok mapy do sensorów, dronów i stref"
+            >
+              Dopasuj mapę
+            </button>
           </div>
 
           <section class="sidebar-section alerts-section" data-section-key="alerts">
@@ -284,6 +292,44 @@
             <div class="section-body">
               <div id="alert-list" class="entity-list empty-state">
                 Brak otwartych alarmów
+              </div>
+            </div>
+          </section>
+
+          <section
+            class="sidebar-section closed-alerts-section collapsed"
+            data-section-key="closed-alerts"
+          >
+            <button class="section-heading section-toggle" type="button" aria-expanded="false">
+              <h2>Zamknięte alarmy</h2>
+              <span class="section-heading-meta">
+                <span id="closed-alert-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div class="closed-alert-filters">
+                <label>
+                  <span>Zamknięte od</span>
+                  <input id="closed-alert-from" type="date" />
+                </label>
+                <label>
+                  <span>Zamknięte do</span>
+                  <input id="closed-alert-to" type="date" />
+                </label>
+                <div class="closed-alert-filter-actions">
+                  <button id="closed-alert-apply" type="button">Filtruj</button>
+                  <button
+                    id="closed-alert-reset"
+                    type="button"
+                    class="secondary-button"
+                  >
+                    Wyczyść
+                  </button>
+                </div>
+              </div>
+              <div id="closed-alert-list" class="entity-list closed-alert-list empty-state">
+                Rozwiń sekcję, aby wczytać archiwum
               </div>
             </div>
           </section>
@@ -340,6 +386,24 @@
             </div>
           </section>
 
+          <section
+            class="sidebar-section archived-tracks-section collapsed"
+            data-section-key="archived-tracks"
+          >
+            <button class="section-heading section-toggle" type="button" aria-expanded="false">
+              <h2>Archiwum tras</h2>
+              <span class="section-heading-meta">
+                <span id="archived-track-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="archived-track-list" class="entity-list archived-track-list empty-state">
+                Rozwiń sekcję, aby wczytać zakończone trasy
+              </div>
+            </div>
+          </section>
+
           <section class="sidebar-section sensors-section" data-section-key="sensors">
             <button class="section-heading section-toggle" type="button" aria-expanded="true">
               <h2>Sensory</h2>
@@ -349,6 +413,12 @@
               </span>
             </button>
             <div class="section-body">
+              <div
+                id="sensor-health-banner"
+                class="sensor-health-banner hidden"
+                role="status"
+                aria-live="polite"
+              ></div>
               <div id="sensor-list" class="entity-list empty-state">
                 Oczekiwanie na sensory…
               </div>
@@ -372,6 +442,17 @@
         </aside>
 
         <main class="map-shell">
+          <button
+            id="sidebar-toggle"
+            type="button"
+            class="sidebar-toggle"
+            aria-controls="sidebar"
+            aria-expanded="true"
+            title="Ukryj panel boczny"
+          >
+            <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+            <span id="sidebar-toggle-label">Ukryj panel</span>
+          </button>
           <div id="map" aria-label="Mapa wykrytych dronów i sensorów"></div>
 
           <div class="legend" aria-label="Legenda mapy">
@@ -380,7 +461,10 @@
             <div><span class="legend-symbol stale"></span>Ślad nieaktualny</div>
             <div><span class="legend-symbol pilot"></span>Operator drona</div>
             <div><span class="legend-symbol replay"></span>Dron odtwarzany</div>
-            <div><span class="legend-symbol zone"></span>Strefa chroniona</div>
+            <div><span class="legend-symbol zone-low"></span>Strefa niska</div>
+            <div><span class="legend-symbol zone-medium"></span>Strefa średnia</div>
+            <div><span class="legend-symbol zone-high"></span>Strefa wysoka</div>
+            <div><span class="legend-symbol zone-critical"></span>Strefa krytyczna</div>
             <div><span class="legend-symbol alert"></span>Alarm aktywny</div>
           </div>
 

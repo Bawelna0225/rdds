@@ -71,6 +71,13 @@ expansion is independent of audio and does not rewrite the operator's stored
 sidebar preference. Track position updates and already-known alarms do not
 expand the section.
 
+Closed incidents are displayed in a separate, collapsible **Zamknięte alarmy**
+archive. They are loaded on demand rather than by the live refresh and can be
+filtered by the inclusive local closure-date range shown in the interface.
+The API applies the range to `closed_at`; the client sends the start of the
+selected first day and the exclusive start of the day following the selected
+last day. A coloured divider separates consecutive archived incident cards.
+
 ## Compact account menu
 
 The account popover keeps the alarm volume immediately available and separates

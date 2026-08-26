@@ -70,10 +70,20 @@ Example:
     "uptime_seconds": 3600,
     "free_heap_bytes": 196000,
     "queue_depth": 0,
+    "dead_letter_depth": 0,
+    "agent_version": "0.17.0",
+    "source_connected": true,
+    "source_last_message_at": "2026-08-19T08:44:58Z",
     "cellular_rssi": -67
   }
 }
 ```
+
+The Stage 17 fields separate API connectivity from the local Sky-Spy source.
+`source_connected=false`, a non-empty dead-letter queue or a configured delivery
+backlog marks the sensor as degraded. Heartbeats are state snapshots: the agent
+coalesces queued heartbeat messages so delayed replay cannot overwrite newer
+health data.
 
 ## Observation
 

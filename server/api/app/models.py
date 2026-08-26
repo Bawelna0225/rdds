@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
 
@@ -34,7 +34,21 @@ class HeartbeatStatus(StrictModel):
     uptime_seconds: int | None = Field(default=None, ge=0)
     free_heap_bytes: int | None = Field(default=None, ge=0)
     queue_depth: int | None = Field(default=None, ge=0)
+    dead_letter_depth: int | None = Field(default=None, ge=0)
     cellular_rssi: int | None = Field(default=None, ge=-150, le=0)
+    agent_version: str | None = Field(default=None, min_length=1, max_length=64)
+    source_connected: bool | None = None
+    source_last_message_at: datetime | None = None
+
+    @field_validator("source_last_message_at")
+    @classmethod
+    def source_timestamp_must_include_timezone(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("source_last_message_at must include a UTC offset")
+        return value
 
 
 class HeartbeatEnvelope(StrictModel):
@@ -114,6 +128,25 @@ class SensorState(StrictModel):
 class SensorUpdate(StrictModel):
     display_name: str = Field(min_length=1, max_length=160)
     position: Position | None = None
+
+
+class SensorMaintenance(StrictModel):
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=500)
+    until: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_maintenance(self) -> "SensorMaintenance":
+        if self.enabled and not (self.reason or "").strip():
+            raise ValueError("reason is required when maintenance is enabled")
+        if self.until is not None:
+            if self.until.tzinfo is None or self.until.utcoffset() is None:
+                raise ValueError("until must include a UTC offset")
+            if not self.enabled:
+                raise ValueError("until is only valid when maintenance is enabled")
+            if self.until <= datetime.now(timezone.utc):
+                raise ValueError("until must be in the future")
+        return self
 
 
 class SensorTokenRotation(StrictModel):
