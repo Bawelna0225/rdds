@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.18.1**. The complete software path is tested
+> Current development version: **0.19.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -51,6 +51,7 @@ operator actions.
 - rate-limited offline replay with current observations processed first;
 - sensor supervision that separates API, Sky-Spy source and queue health;
 - per-boot source, parsing, outbox and API-delivery diagnostics with safe JSON export;
+- rolling stream-quality checks for malformed input and frequent source reconnects;
 - online, degraded, offline and maintenance states with audited recovery;
 - multi-sensor track correlation, separate detection sessions and track history;
 - deduplicated 60-second live trails;
@@ -238,6 +239,7 @@ annotated Git tag:
 | `rdds-v0.17.0` | sensor health supervision and maintenance mode |
 | `rdds-v0.18.0` | sensor-path diagnostics, safe telemetry export and emulator fault modes |
 | `rdds-v0.18.1` | higher-contrast light theme and map-to-sensor sidebar navigation |
+| `rdds-v0.19.0` | automatic Sky-Spy stream-quality supervision and history |
 
 Start with:
 
@@ -248,6 +250,7 @@ Start with:
 - `docs/RDDS_STAGE13.md` for backup, restore, retention and HTTPS;
 - `docs/RDDS_STAGE13_1.md` for replay throttling and track-session behavior;
 - `docs/RDDS_STAGE18.md` for sensor diagnostics and controlled fault tests;
+- `docs/RDDS_STAGE19.md` for automatic stream-quality supervision;
 - `docs/RDDS_STAGE14.md` for loading states and storage-budget monitoring;
 - `docs/RDDS_STAGE15.md` for operator sessions and security-event monitoring;
 - `docs/RDDS_STAGE16.md` for zone incident awareness and audible alerts;

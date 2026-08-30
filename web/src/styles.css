@@ -2203,15 +2203,45 @@ button.entity-card.selected {
   display: none;
 }
 
-.selection-panel > button {
-  position: absolute;
-  right: 9px;
-  top: 7px;
-  border: 0;
-  background: transparent;
+.selection-header {
+  position: sticky;
+  z-index: 4;
+  top: -16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  margin: -16px -16px 14px;
+  padding: 14px 12px 11px 16px;
+  border-bottom: 1px solid rgba(67, 213, 255, 0.3);
+  background: #0a0d12;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+.selection-heading {
+  min-width: 0;
+}
+
+.selection-header > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(149, 166, 185, 0.38);
+  border-radius: 4px;
+  background: #151c25;
   color: var(--muted);
   font-size: 22px;
+  line-height: 1;
   cursor: pointer;
+}
+
+.selection-header > button:hover,
+.selection-header > button:focus-visible {
+  border-color: var(--cyan);
+  background: #202b37;
+  color: var(--text);
 }
 
 .eyebrow {
@@ -2224,7 +2254,7 @@ button.entity-card.selected {
 
 .selection-panel h2 {
   font-size: 17px;
-  margin: 0 28px 13px 0;
+  margin: 0;
   overflow-wrap: anywhere;
 }
 
@@ -2500,6 +2530,26 @@ button.entity-card.selected {
   border-color: var(--cyan);
 }
 
+.timeline-event.sensor.quality-ok .timeline-marker {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 22%, var(--panel));
+}
+
+.timeline-event.sensor.quality-warning .timeline-marker {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 22%, var(--panel));
+}
+
+.timeline-event.sensor.quality-error .timeline-marker {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 22%, var(--panel));
+}
+
+.timeline-event.sensor.quality-warming .timeline-marker {
+  border-color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 18%, var(--panel));
+}
+
 .timeline-event.account .timeline-marker {
   border-color: var(--account-blue);
 }
@@ -2573,6 +2623,25 @@ html[data-theme="light"] .sensor-editor,
 html[data-theme="light"] .sensor-token-panel {
   background: rgba(250, 252, 254, 0.97);
   box-shadow: 0 14px 38px rgba(41, 55, 72, 0.18);
+}
+
+html[data-theme="light"] .selection-header {
+  border-bottom-color: rgba(0, 105, 142, 0.3);
+  background: #f8fbfd;
+  box-shadow: 0 8px 16px rgba(41, 55, 72, 0.16);
+}
+
+html[data-theme="light"] .selection-header > button {
+  border-color: rgba(39, 55, 75, 0.34);
+  background: #e4ebf2;
+  color: #405066;
+}
+
+html[data-theme="light"] .selection-header > button:hover,
+html[data-theme="light"] .selection-header > button:focus-visible {
+  border-color: var(--cyan);
+  background: #d7e3ed;
+  color: #152233;
 }
 
 html[data-theme="light"] .topbar {

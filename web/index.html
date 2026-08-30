@@ -469,9 +469,13 @@
           </div>
 
           <section id="selection-panel" class="selection-panel hidden">
-            <button id="close-selection" type="button" aria-label="Zamknij">×</button>
-            <p id="selection-eyebrow" class="eyebrow">Wybrany ślad</p>
-            <h2 id="selection-title">—</h2>
+            <div class="selection-header">
+              <div class="selection-heading">
+                <p id="selection-eyebrow" class="eyebrow">Wybrany ślad</p>
+                <h2 id="selection-title">—</h2>
+              </div>
+              <button id="close-selection" type="button" aria-label="Zamknij">×</button>
+            </div>
             <div id="selection-details" class="selection-details"></div>
             <div id="sensor-controls" class="sensor-controls hidden">
               <button id="sensor-diagnostics-export" type="button" class="secondary-button">

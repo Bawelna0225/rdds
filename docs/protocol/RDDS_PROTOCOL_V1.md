@@ -73,7 +73,7 @@ Example:
     "queue_capacity": 250000,
     "queue_oldest_age_seconds": null,
     "dead_letter_depth": 0,
-    "agent_version": "0.18.1",
+    "agent_version": "0.19.0",
     "source_kind": "serial",
     "source_connected": true,
     "source_connected_at": "2026-08-19T08:00:02Z",
@@ -108,6 +108,13 @@ are monotonic only within the `sensor.boot_id` process lifetime. Error fields do
 not contain exception text, credentials or response bodies. The API calculates
 clock offset from heartbeat `measured_at` and server `received_at`; the agent
 does not claim direct clock synchronization.
+
+Stage 19 derives stream quality from differences between consecutive stored
+counter snapshots within one `sensor.boot_id`. No new wire fields are required.
+The server waits for a configurable observation period and minimum input count
+before it can report `source_data_invalid` or `source_unstable`. Counter resets,
+out-of-order timestamps and the first heartbeat after an agent restart do not
+produce a quality alarm.
 
 ## Observation
 

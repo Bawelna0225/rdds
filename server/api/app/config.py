@@ -42,6 +42,11 @@ class Settings:
     sensor_offline_after_seconds: int
     sensor_queue_warning_messages: int
     sensor_source_silent_after_seconds: int
+    sensor_quality_window_seconds: int
+    sensor_quality_min_window_seconds: int
+    sensor_quality_min_input_lines: int
+    sensor_quality_max_ignored_percent: float
+    sensor_reconnect_warning_count: int
     track_poll_seconds: float
     track_stale_after_seconds: int
     track_ended_after_seconds: int
@@ -94,6 +99,21 @@ def load_settings() -> Settings:
         ),
         sensor_source_silent_after_seconds=int(
             os.getenv("RDDS_SENSOR_SOURCE_SILENT_AFTER_SECONDS", "90")
+        ),
+        sensor_quality_window_seconds=int(
+            os.getenv("RDDS_SENSOR_QUALITY_WINDOW_SECONDS", "60")
+        ),
+        sensor_quality_min_window_seconds=int(
+            os.getenv("RDDS_SENSOR_QUALITY_MIN_WINDOW_SECONDS", "30")
+        ),
+        sensor_quality_min_input_lines=int(
+            os.getenv("RDDS_SENSOR_QUALITY_MIN_INPUT_LINES", "20")
+        ),
+        sensor_quality_max_ignored_percent=float(
+            os.getenv("RDDS_SENSOR_QUALITY_MAX_IGNORED_PERCENT", "80")
+        ),
+        sensor_reconnect_warning_count=int(
+            os.getenv("RDDS_SENSOR_RECONNECT_WARNING_COUNT", "3")
         ),
         track_poll_seconds=float(os.getenv("RDDS_TRACK_POLL_SECONDS", "1")),
         track_stale_after_seconds=int(
@@ -185,6 +205,32 @@ def load_settings() -> Settings:
     if not 30 <= settings.sensor_source_silent_after_seconds <= 3600:
         raise RuntimeError(
             "RDDS_SENSOR_SOURCE_SILENT_AFTER_SECONDS must be between 30 and 3600"
+        )
+    if not 30 <= settings.sensor_quality_window_seconds <= 3600:
+        raise RuntimeError(
+            "RDDS_SENSOR_QUALITY_WINDOW_SECONDS must be between 30 and 3600"
+        )
+    if not (
+        10
+        <= settings.sensor_quality_min_window_seconds
+        <= settings.sensor_quality_window_seconds
+    ):
+        raise RuntimeError(
+            "RDDS_SENSOR_QUALITY_MIN_WINDOW_SECONDS must be between 10 and "
+            "RDDS_SENSOR_QUALITY_WINDOW_SECONDS"
+        )
+    if not 1 <= settings.sensor_quality_min_input_lines <= 1000000:
+        raise RuntimeError(
+            "RDDS_SENSOR_QUALITY_MIN_INPUT_LINES must be between 1 and 1000000"
+        )
+    if not 0 < settings.sensor_quality_max_ignored_percent <= 100:
+        raise RuntimeError(
+            "RDDS_SENSOR_QUALITY_MAX_IGNORED_PERCENT must be greater than 0 "
+            "and at most 100"
+        )
+    if not 1 <= settings.sensor_reconnect_warning_count <= 10000:
+        raise RuntimeError(
+            "RDDS_SENSOR_RECONNECT_WARNING_COUNT must be between 1 and 10000"
         )
     if settings.maintenance_interval_seconds < 300:
         raise RuntimeError(

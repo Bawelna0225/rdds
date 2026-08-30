@@ -90,6 +90,7 @@ from app.security_store import (
 )
 from app.sensor_store import (
     delete_sensor,
+    get_sensor_quality_history,
     list_sensors,
     register_sensor,
     rotate_sensor_token,
@@ -132,7 +133,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.18.1",
+    version="0.19.0",
     lifespan=lifespan,
 )
 
@@ -624,6 +625,30 @@ def get_sensors() -> dict[str, object]:
     return {
         "time": utc_now(),
         "sensors": sensors,
+    }
+
+
+@app.get(
+    "/api/v1/sensors/{sensor_id}/quality-history",
+    tags=["sensors"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_stream_quality_history(
+    sensor_id: UUID,
+    limit: int = Query(default=18, ge=1, le=120),
+) -> dict[str, object]:
+    try:
+        samples = get_sensor_quality_history(sensor_id, limit)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor quality history query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if samples is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+
+    return {
+        "time": utc_now(),
+        "sensor_id": sensor_id,
+        "samples": samples,
     }
 
 

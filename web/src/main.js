@@ -108,6 +108,9 @@ const sensorHealthReasonLabels = {
   awaiting_heartbeat: "oczekiwanie na pierwszy heartbeat",
   source_unavailable: "brak połączenia ze źródłem Sky-Spy",
   source_silent: "Sky-Spy nie przesyła komunikatów kontrolnych",
+  source_data_invalid: "Sky-Spy przesyła nierozpoznawalne dane",
+  source_unstable: "częste rozłączenia źródła Sky-Spy",
+  warming_up: "zbieranie próbki jakości",
   queue_backlog: "zaległa kolejka wysyłkowa",
   dead_letter: "wiadomości w kolejce błędów",
   api_delivery_failed: "agent nie może dostarczyć danych do RDDS",
@@ -435,6 +438,9 @@ let currentAuditTotal = 0;
 let selectedTrackId = null;
 let selectedTrackSnapshot = null;
 let selectedSensorId = null;
+let sensorQualityHistorySensorId = null;
+let sensorQualityHistory = [];
+let sensorQualityHistoryLoadingId = null;
 let selectedZoneId = null;
 let selectedAuditEvent = null;
 let selectedAlertId = null;
@@ -531,6 +537,13 @@ function formatInteger(value) {
     return "—";
   }
   return new Intl.NumberFormat("pl-PL").format(value);
+}
+
+function formatPercent(value, digits = 0) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  return `${(value * 100).toFixed(digits)}%`;
 }
 
 function formatBytes(value) {
@@ -680,8 +693,19 @@ function sensorDiagnosticSummary(sensor) {
     sourceState = "error";
     sourceValue = "rozłączone";
   } else if (sensor.source_connected === true) {
-    sourceState = sensor.health_reason === "source_silent" ? "warning" : "ok";
-    sourceValue = sensor.health_reason === "source_silent" ? "połączone, brak danych" : "połączone";
+    if (sensor.health_reason === "source_data_invalid") {
+      sourceState = "error";
+      sourceValue = `nierozpoznawalne dane (${formatPercent(sensor.quality_ignored_ratio)})`;
+    } else if (sensor.health_reason === "source_unstable") {
+      sourceState = "warning";
+      sourceValue = `${formatInteger(sensor.quality_reconnects)} ponowne połączenia`;
+    } else if (sensor.health_reason === "source_silent") {
+      sourceState = "warning";
+      sourceValue = "połączone, brak danych";
+    } else {
+      sourceState = "ok";
+      sourceValue = "połączone";
+    }
   }
 
   const lastSuccess = Date.parse(sensor.last_delivery_success_at ?? "");
@@ -2639,7 +2663,9 @@ function renderAuditList(events) {
       "system";
     const context = document.createElement("span");
     context.textContent =
-      event.zone_name || event.sensor_key || event.account_role || "—";
+      (category === "sensor" && event.details?.reason
+        ? sensorHealthReasonLabel(event.details.reason)
+        : event.zone_name || event.sensor_key || event.account_role || "—");
     const time = document.createElement("span");
     time.textContent = formatDateTime(event.occurred_at);
     meta.append(subject, context, time);
@@ -3364,8 +3390,8 @@ function renderSensorSelection(sensor) {
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.add("hidden");
   elements.sensorControls.classList.remove("hidden");
-  elements.selectionTimeline.classList.add("hidden");
-  elements.selectionTimelineList.replaceChildren();
+  elements.selectionTimelineTitle.textContent = "Historia jakości strumienia";
+  elements.selectionTimeline.classList.remove("hidden");
   elements.selectionDetails.replaceChildren(
     sensorDiagnosticSummary(sensor),
     detailSection("Stan operacyjny"),
@@ -3408,6 +3434,16 @@ function renderSensorSelection(sensor) {
     detailItem("Rozpoznane detekcje", formatInteger(sensor.parsed_detections_total)),
     detailItem("Dodane do kolejki", formatInteger(sensor.enqueued_observations_total)),
     detailItem("Pominięte linie", formatInteger(sensor.ignored_lines_total)),
+    detailSection("Bieżące okno jakości"),
+    detailItem("Długość okna", formatDuration(sensor.quality_window_seconds)),
+    detailItem("Linie w oknie", formatInteger(sensor.quality_input_lines)),
+    detailItem(
+      "Rozpoznane w oknie",
+      formatInteger(sensor.quality_parsed_detections),
+    ),
+    detailItem("Pominięte w oknie", formatInteger(sensor.quality_ignored_lines)),
+    detailItem("Udział pominiętych", formatPercent(sensor.quality_ignored_ratio, 1)),
+    detailItem("Ponowne połączenia", formatInteger(sensor.quality_reconnects)),
     detailSection("Agent → RDDS"),
     detailItem("Ostatnia obserwacja", formatDateTime(sensor.last_observation_received_at)),
     detailItem("Obserwacje", formatInteger(sensor.observation_count)),
@@ -3428,6 +3464,62 @@ function renderSensorSelection(sensor) {
     detailItem("Wolna pamięć", formatBytes(sensor.free_heap_bytes)),
     detailItem("MGRS", formatMgrs(sensor.latitude, sensor.longitude)),
   );
+  if (sensorQualityHistorySensorId === sensor.id) {
+    renderSensorQualityHistory(sensorQualityHistory);
+  } else if (sensorQualityHistoryLoadingId === sensor.id) {
+    elements.selectionTimelineList.classList.add("inline-loading");
+    elements.selectionTimelineList.textContent = "Ładowanie historii jakości…";
+  } else {
+    elements.selectionTimelineList.classList.remove("inline-loading");
+    elements.selectionTimelineList.textContent = "Brak historii jakości dla tego sensora.";
+  }
+}
+
+function renderSensorQualityHistory(samples) {
+  elements.selectionTimelineList.replaceChildren();
+  elements.selectionTimelineList.classList.remove("inline-loading");
+  if (samples.length === 0) {
+    elements.selectionTimelineList.textContent = "Próbki pojawią się po okresie rozgrzewki.";
+    return;
+  }
+
+  for (const sample of samples) {
+    const item = document.createElement("div");
+    const qualityClass = sample.reason === "source_data_invalid"
+      ? "quality-error"
+      : sample.reason === "source_unstable" ? "quality-warning"
+        : sample.reason === "warming_up" ? "quality-warming" : "quality-ok";
+    item.className = `timeline-event sensor ${qualityClass}`;
+    const marker = document.createElement("span");
+    marker.className = "timeline-marker";
+    const content = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = sensorHealthReasonLabel(sample.reason);
+    const meta = document.createElement("span");
+    meta.textContent = [
+      formatDateTime(sample.measured_at),
+      `okno ${formatDuration(sample.window_seconds)}`,
+      `${formatInteger(sample.parsed_detections)}/${formatInteger(sample.input_lines)} rozpoznanych`,
+      `${formatPercent(sample.ignored_ratio, 1)} pominiętych`,
+      `połączenia +${formatInteger(sample.reconnects)}`,
+    ].join(" · ");
+    content.append(title, meta);
+    item.append(marker, content);
+    elements.selectionTimelineList.append(item);
+  }
+}
+
+async function refreshSelectedSensorQualityHistory(sensorId) {
+  const requestedSensorId = String(sensorId);
+  sensorQualityHistoryLoadingId = sensorId;
+  const payload = await fetchJson(
+    `/api/v1/sensors/${encodeURIComponent(requestedSensorId)}/quality-history?limit=18`,
+  );
+  if (String(selectedSensorId) !== requestedSensorId) return;
+  sensorQualityHistorySensorId = sensorId;
+  sensorQualityHistoryLoadingId = null;
+  sensorQualityHistory = payload.samples ?? [];
+  renderSensorQualityHistory(sensorQualityHistory);
 }
 
 function renderIncidentSelection(alert) {
@@ -3515,7 +3607,10 @@ function renderAuditTimeline(events) {
     const presenceChange = event.event_type === "alert_presence_changed"
       ? ` · ${presenceLabel(event.details?.from_presence)} → ${presenceLabel(event.details?.to_presence)}`
       : "";
-    meta.textContent = `${formatDateTime(event.occurred_at)} · ${event.actor || "system"}${presenceChange}`;
+    const sensorReason = category === "sensor" && event.details?.reason
+      ? ` · ${sensorHealthReasonLabel(event.details.reason)}`
+      : "";
+    meta.textContent = `${formatDateTime(event.occurred_at)} · ${event.actor || "system"}${presenceChange}${sensorReason}`;
     content.append(title, meta);
     item.append(marker, content);
     elements.selectionTimelineList.append(item);
@@ -3537,6 +3632,22 @@ function renderAuditSelection(event) {
     detailItem("Operator drona (Remote ID)", event.operator_id),
     detailItem("Strefa", event.zone_name),
     detailItem("Sensor", event.sensor_name || event.sensor_key),
+    ...(auditEventCategory(event) === "sensor"
+      ? [
+          detailItem(
+            "Powód stanu sensora",
+            event.details?.reason
+              ? sensorHealthReasonLabel(event.details.reason)
+              : null,
+          ),
+          detailItem(
+            "Poprzedni powód",
+            event.details?.from_reason
+              ? sensorHealthReasonLabel(event.details.from_reason)
+              : null,
+          ),
+        ]
+      : []),
     detailItem("Konto RDDS", event.account_display_name || event.account_username),
     detailItem("Rola konta", event.account_role),
     detailItem("Poziom", severityLabel(event.alert_severity || event.details?.severity)),
@@ -4274,6 +4385,11 @@ function selectSensor(sensorId) {
   selectedAlertId = null;
   selectedAlertSnapshot = null;
   selectedSensorId = sensorId;
+  if (sensorQualityHistorySensorId !== sensorId) {
+    sensorQualityHistory = [];
+    sensorQualityHistorySensorId = null;
+    sensorQualityHistoryLoadingId = sensorId;
+  }
   liveFollowTrackId = null;
   stopTrackReplay();
   removeArchivePreviewLayers();
@@ -4289,6 +4405,13 @@ function selectSensor(sensorId) {
       map.setView([sensor.latitude, sensor.longitude], Math.max(map.getZoom(), 14));
       sensorMarkers.get(sensor.id)?.openPopup();
     }
+    refreshSelectedSensorQualityHistory(sensorId).catch((error) => {
+      if (String(selectedSensorId) !== String(sensorId)) return;
+      sensorQualityHistoryLoadingId = null;
+      elements.selectionTimelineList.classList.remove("inline-loading");
+      elements.selectionTimelineList.textContent = "Nie udało się pobrać historii jakości.";
+      console.error("Nie udało się pobrać historii jakości sensora", error);
+    });
   }
 }
 
@@ -4307,6 +4430,8 @@ function downloadSelectedSensorDiagnostics() {
     "source_last_message_at", "source_last_error_at", "source_last_error_reason",
     "input_lines_total", "parsed_detections_total", "enqueued_observations_total",
     "ignored_lines_total", "source_connections_total", "queue_depth",
+    "quality_window_seconds", "quality_input_lines", "quality_parsed_detections",
+    "quality_ignored_lines", "quality_ignored_ratio", "quality_reconnects",
     "queue_capacity", "queue_oldest_age_seconds", "dead_letter_depth",
     "delivery_success_total", "delivery_retry_total", "delivery_discard_total",
     "delivery_dead_letter_total", "last_delivery_success_at",
@@ -4378,6 +4503,9 @@ function clearSelection() {
   selectedTrackId = null;
   selectedTrackSnapshot = null;
   selectedSensorId = null;
+  sensorQualityHistorySensorId = null;
+  sensorQualityHistory = [];
+  sensorQualityHistoryLoadingId = null;
   selectedZoneId = null;
   selectedAuditEvent = null;
   selectedAlertId = null;

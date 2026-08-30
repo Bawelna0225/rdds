@@ -68,6 +68,12 @@ SENSOR_COLUMNS = """
     heartbeat.last_delivery_success_at,
     heartbeat.last_delivery_error_at,
     heartbeat.last_delivery_error_reason,
+    heartbeat.quality_window_seconds,
+    heartbeat.quality_input_lines,
+    heartbeat.quality_parsed_detections,
+    heartbeat.quality_ignored_lines,
+    heartbeat.quality_reconnects,
+    heartbeat.quality_ignored_ratio,
     heartbeat.clock_offset_seconds
 """
 
@@ -108,6 +114,12 @@ SENSOR_JOINS = """
             latest_heartbeat.last_delivery_success_at,
             latest_heartbeat.last_delivery_error_at,
             latest_heartbeat.last_delivery_error_reason,
+            latest_heartbeat.quality_window_seconds,
+            latest_heartbeat.quality_input_lines,
+            latest_heartbeat.quality_parsed_detections,
+            latest_heartbeat.quality_ignored_lines,
+            latest_heartbeat.quality_reconnects,
+            latest_heartbeat.quality_ignored_ratio,
             EXTRACT(
                 EPOCH FROM (
                     latest_heartbeat.received_at - latest_heartbeat.measured_at
@@ -151,6 +163,66 @@ def list_sensors() -> list[dict[str, Any]]:
             WHERE sensor.deleted_at IS NULL
             ORDER BY sensor.sensor_key
             """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_sensor_quality_history(
+    sensor_id: UUID,
+    limit: int,
+) -> list[dict[str, Any]] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM sensors
+            WHERE id = %s AND deleted_at IS NULL
+            """,
+            (sensor_id,),
+        )
+        if cursor.fetchone() is None:
+            return None
+        cursor.execute(
+            """
+            SELECT
+                measured_at,
+                quality_window_seconds AS window_seconds,
+                quality_input_lines AS input_lines,
+                quality_parsed_detections AS parsed_detections,
+                quality_ignored_lines AS ignored_lines,
+                quality_reconnects AS reconnects,
+                quality_ignored_ratio AS ignored_ratio,
+                CASE
+                    WHEN quality_window_seconds >= %(quality_min_window)s
+                     AND quality_input_lines >= %(quality_min_input)s
+                     AND quality_ignored_ratio >= %(max_ignored_ratio)s
+                    THEN 'source_data_invalid'
+                    WHEN quality_window_seconds >= %(quality_min_window)s
+                     AND quality_reconnects >= %(reconnect_warning)s
+                    THEN 'source_unstable'
+                    WHEN quality_window_seconds < %(quality_min_window)s
+                      OR quality_input_lines < %(quality_min_input)s
+                    THEN 'warming_up'
+                    ELSE 'healthy'
+                END AS reason
+            FROM sensor_heartbeats
+            WHERE sensor_id = %(sensor_id)s
+              AND quality_window_seconds IS NOT NULL
+            ORDER BY measured_at DESC, received_at DESC
+            LIMIT %(limit)s
+            """,
+            {
+                "sensor_id": sensor_id,
+                "limit": limit,
+                "quality_min_window": (
+                    settings.sensor_quality_min_window_seconds
+                ),
+                "quality_min_input": settings.sensor_quality_min_input_lines,
+                "max_ignored_ratio": (
+                    settings.sensor_quality_max_ignored_percent / 100
+                ),
+                "reconnect_warning": settings.sensor_reconnect_warning_count,
+            },
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -303,6 +375,13 @@ def set_sensor_maintenance(
                      AND last_heartbeat_reported_at - source_last_message_at >=
                          (%(source_silent_after)s * INTERVAL '1 second')
                     THEN 'degraded'
+                    WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                     AND reported_quality_input_lines >= %(quality_min_input)s
+                     AND reported_quality_ignored_ratio >= %(max_ignored_ratio)s
+                    THEN 'degraded'
+                    WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                     AND reported_quality_reconnects >= %(reconnect_warning)s
+                    THEN 'degraded'
                     WHEN COALESCE(reported_dead_letter_depth, 0) > 0
                     THEN 'degraded'
                     WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
@@ -321,6 +400,13 @@ def set_sensor_maintenance(
                      AND last_heartbeat_reported_at - source_last_message_at >=
                          (%(source_silent_after)s * INTERVAL '1 second')
                     THEN 'source_silent'
+                    WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                     AND reported_quality_input_lines >= %(quality_min_input)s
+                     AND reported_quality_ignored_ratio >= %(max_ignored_ratio)s
+                    THEN 'source_data_invalid'
+                    WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                     AND reported_quality_reconnects >= %(reconnect_warning)s
+                    THEN 'source_unstable'
                     WHEN COALESCE(reported_dead_letter_depth, 0) > 0
                     THEN 'dead_letter'
                     WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
@@ -339,6 +425,15 @@ def set_sensor_maintenance(
                           AND source_last_message_at IS NOT NULL
                           AND last_heartbeat_reported_at - source_last_message_at >=
                               (%(source_silent_after)s * INTERVAL '1 second')
+                      )
+                      OR (
+                          reported_quality_window_seconds >= %(quality_min_window)s
+                          AND reported_quality_input_lines >= %(quality_min_input)s
+                          AND reported_quality_ignored_ratio >= %(max_ignored_ratio)s
+                      )
+                      OR (
+                          reported_quality_window_seconds >= %(quality_min_window)s
+                          AND reported_quality_reconnects >= %(reconnect_warning)s
                       )
                       OR COALESCE(reported_dead_letter_depth, 0) > 0
                       OR COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
@@ -378,6 +473,14 @@ def set_sensor_maintenance(
                 "offline_after": settings.sensor_offline_after_seconds,
                 "queue_warning": settings.sensor_queue_warning_messages,
                 "source_silent_after": settings.sensor_source_silent_after_seconds,
+                "quality_min_window": (
+                    settings.sensor_quality_min_window_seconds
+                ),
+                "quality_min_input": settings.sensor_quality_min_input_lines,
+                "max_ignored_ratio": (
+                    settings.sensor_quality_max_ignored_percent / 100
+                ),
+                "reconnect_warning": settings.sensor_reconnect_warning_count,
             },
         )
         updated = cursor.fetchone()

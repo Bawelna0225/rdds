@@ -17,9 +17,9 @@ REQUIRED_ENVIRONMENT = {
 }
 
 with patch.dict(os.environ, REQUIRED_ENVIRONMENT, clear=False):
-    from app import database, sensor_store
+    from app import config, database, sensor_store
     from app.models import HeartbeatEnvelope, HeartbeatStatus, SensorMaintenance
-    from app.sensor_health import assess_heartbeat
+    from app.sensor_health import SourceQuality, assess_heartbeat, measure_source_quality
 
 
 class FakeCursor:
@@ -54,6 +54,9 @@ class FakeCursor:
             return next(self._rows)
         except StopIteration:
             return None
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return list(self._rows)
 
 
 class FakeConnection:
@@ -160,8 +163,117 @@ class HealthAssessmentTests(unittest.TestCase):
         )
         self.assertEqual("source_silent", result.reason)
 
+    def test_malformed_stream_is_degraded_after_quality_grace(self) -> None:
+        result = assess_heartbeat(
+            HeartbeatStatus(source_connected=True),
+            queue_warning_messages=100,
+            source_silent_after_seconds=90,
+            reported_at=self.reported_at,
+            source_quality=SourceQuality(40, 42, 0, 42, 0, 1.0),
+            quality_min_window_seconds=30,
+            quality_min_input_lines=20,
+            quality_max_ignored_ratio=0.8,
+            reconnect_warning_count=3,
+        )
+        self.assertEqual("source_data_invalid", result.reason)
+
+    def test_quality_sample_does_not_degrade_during_warmup(self) -> None:
+        result = assess_heartbeat(
+            HeartbeatStatus(source_connected=True),
+            queue_warning_messages=100,
+            source_silent_after_seconds=90,
+            reported_at=self.reported_at,
+            source_quality=SourceQuality(20, 30, 0, 30, 4, 1.0),
+            quality_min_window_seconds=30,
+            quality_min_input_lines=20,
+            quality_max_ignored_ratio=0.8,
+            reconnect_warning_count=3,
+        )
+        self.assertEqual(("online", "healthy"), (result.state, result.reason))
+
+    def test_frequent_reconnects_are_degraded(self) -> None:
+        result = assess_heartbeat(
+            HeartbeatStatus(source_connected=True),
+            queue_warning_messages=100,
+            source_silent_after_seconds=90,
+            reported_at=self.reported_at,
+            source_quality=SourceQuality(45, 45, 40, 5, 3, 5 / 45),
+            quality_min_window_seconds=30,
+            quality_min_input_lines=20,
+            quality_max_ignored_ratio=0.8,
+            reconnect_warning_count=3,
+        )
+        self.assertEqual("source_unstable", result.reason)
+
+    def test_counter_deltas_form_quality_sample(self) -> None:
+        sample = measure_source_quality(
+            reported_at=self.reported_at,
+            baseline_at=self.reported_at - timedelta(seconds=40),
+            input_lines_total=150,
+            parsed_detections_total=110,
+            ignored_lines_total=40,
+            source_connections_total=7,
+            baseline_input_lines_total=100,
+            baseline_parsed_detections_total=80,
+            baseline_ignored_lines_total=20,
+            baseline_source_connections_total=4,
+        )
+        self.assertIsNotNone(sample)
+        assert sample is not None
+        self.assertEqual((40, 50, 30, 20, 3), (
+            sample.window_seconds,
+            sample.input_lines,
+            sample.parsed_detections,
+            sample.ignored_lines,
+            sample.reconnects,
+        ))
+        self.assertAlmostEqual(0.4, sample.ignored_ratio)
+
+    def test_counter_reset_discards_quality_sample(self) -> None:
+        sample = measure_source_quality(
+            reported_at=self.reported_at,
+            baseline_at=self.reported_at - timedelta(seconds=40),
+            input_lines_total=2,
+            parsed_detections_total=1,
+            ignored_lines_total=1,
+            source_connections_total=1,
+            baseline_input_lines_total=100,
+            baseline_parsed_detections_total=80,
+            baseline_ignored_lines_total=20,
+            baseline_source_connections_total=4,
+        )
+        self.assertIsNone(sample)
+
+    def test_inconsistent_counter_deltas_discard_quality_sample(self) -> None:
+        sample = measure_source_quality(
+            reported_at=self.reported_at,
+            baseline_at=self.reported_at - timedelta(seconds=40),
+            input_lines_total=110,
+            parsed_detections_total=120,
+            ignored_lines_total=30,
+            source_connections_total=2,
+            baseline_input_lines_total=100,
+            baseline_parsed_detections_total=80,
+            baseline_ignored_lines_total=20,
+            baseline_source_connections_total=1,
+        )
+        self.assertIsNone(sample)
+
 
 class HealthModelTests(unittest.TestCase):
+    def test_quality_warmup_cannot_exceed_rolling_window(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                **REQUIRED_ENVIRONMENT,
+                "RDDS_SENSOR_QUALITY_WINDOW_SECONDS": "60",
+                "RDDS_SENSOR_QUALITY_MIN_WINDOW_SECONDS": "61",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(RuntimeError):
+                config.load_settings()
+
     def test_maintenance_requires_reason(self) -> None:
         with self.assertRaises(ValidationError):
             SensorMaintenance(enabled=True, reason="  ")
@@ -182,9 +294,60 @@ class HealthModelTests(unittest.TestCase):
 
 
 class HealthPersistenceTests(unittest.TestCase):
+    def test_quality_history_is_scoped_and_classified_by_server_thresholds(self) -> None:
+        sensor_id = uuid4()
+        cursor = FakeCursor(
+            rows=[
+                {"id": sensor_id},
+                {
+                    "measured_at": datetime(
+                        2026, 8, 26, 12, 0, tzinfo=timezone.utc
+                    ),
+                    "window_seconds": 40,
+                    "input_lines": 40,
+                    "parsed_detections": 0,
+                    "ignored_lines": 40,
+                    "reconnects": 0,
+                    "ignored_ratio": 1.0,
+                    "reason": "source_data_invalid",
+                },
+            ]
+        )
+        fake_settings = SimpleNamespace(
+            sensor_quality_min_window_seconds=30,
+            sensor_quality_min_input_lines=20,
+            sensor_quality_max_ignored_percent=80,
+            sensor_reconnect_warning_count=3,
+        )
+        with (
+            patch.object(sensor_store, "connection", fake_connection_for(cursor)),
+            patch.object(sensor_store, "settings", fake_settings),
+        ):
+            history = sensor_store.get_sensor_quality_history(sensor_id, 18)
+
+        self.assertIsNotNone(history)
+        assert history is not None
+        self.assertEqual("source_data_invalid", history[0]["reason"])
+        self.assertIn("quality_ignored_ratio", cursor.queries[1])
+        self.assertEqual(18, cursor.parameters[1]["limit"])
+
     def test_newest_heartbeat_controls_current_health_snapshot(self) -> None:
         sensor_id = uuid4()
-        cursor = FakeCursor(rows=[{"id": sensor_id}, {"id": 17}])
+        cursor = FakeCursor(
+            rows=[
+                {"id": sensor_id},
+                {
+                    "measured_at": datetime(
+                        2026, 8, 26, 11, 59, 20, tzinfo=timezone.utc
+                    ),
+                    "input_lines_total": 60,
+                    "parsed_detections_total": 50,
+                    "ignored_lines_total": 10,
+                    "source_connections_total": 1,
+                },
+                {"id": 17},
+            ]
+        )
         payload = HeartbeatEnvelope.model_validate(
             {
                 "protocol_version": "rdds/1.0",
@@ -220,6 +383,11 @@ class HealthPersistenceTests(unittest.TestCase):
         fake_settings = SimpleNamespace(
             sensor_queue_warning_messages=100,
             sensor_source_silent_after_seconds=90,
+            sensor_quality_window_seconds=60,
+            sensor_quality_min_window_seconds=30,
+            sensor_quality_min_input_lines=20,
+            sensor_quality_max_ignored_percent=80,
+            sensor_reconnect_warning_count=3,
         )
 
         with (
@@ -230,8 +398,10 @@ class HealthPersistenceTests(unittest.TestCase):
 
         self.assertEqual(sensor_id, stored_sensor)
         self.assertEqual(17, record_id)
-        heartbeat_insert = cursor.queries[1]
-        health_update = cursor.queries[2]
+        quality_query = cursor.queries[1]
+        heartbeat_insert = cursor.queries[2]
+        health_update = cursor.queries[3]
+        self.assertIn("sensor_boot_id = %(boot_id)s", quality_query)
         self.assertIn("dead_letter_depth", heartbeat_insert)
         self.assertIn("source_connected", heartbeat_insert)
         self.assertIn("parsed_detections_total", heartbeat_insert)
@@ -239,7 +409,8 @@ class HealthPersistenceTests(unittest.TestCase):
         self.assertIn("queue_oldest_age_seconds", heartbeat_insert)
         self.assertIn("last_heartbeat_reported_at < %(reported_at)s", health_update)
         self.assertIn("status IN ('disabled', 'maintenance')", health_update)
-        self.assertEqual("degraded", cursor.parameters[2]["health_state"])
+        self.assertIn("quality_ignored_ratio", heartbeat_insert)
+        self.assertEqual("degraded", cursor.parameters[3]["health_state"])
 
     def test_monitor_expires_maintenance_and_marks_stale_once(self) -> None:
         cursor = FakeCursor(rowcounts=[1, 2])
@@ -247,6 +418,10 @@ class HealthPersistenceTests(unittest.TestCase):
             sensor_offline_after_seconds=30,
             sensor_queue_warning_messages=100,
             sensor_source_silent_after_seconds=90,
+            sensor_quality_min_window_seconds=30,
+            sensor_quality_min_input_lines=20,
+            sensor_quality_max_ignored_percent=80,
+            sensor_reconnect_warning_count=3,
         )
         with (
             patch.object(database, "connection", fake_connection_for(cursor)),

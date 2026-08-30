@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.config import settings
 from app.models import HeartbeatEnvelope, ObservationEnvelope, SensorContext
-from app.sensor_health import assess_heartbeat
+from app.sensor_health import SourceQuality, assess_heartbeat, measure_source_quality
 
 
 @contextmanager
@@ -102,12 +102,75 @@ def _upsert_sensor(cursor: psycopg.Cursor, sensor: SensorContext) -> UUID:
     return row["id"]
 
 
+def _heartbeat_source_quality(
+    cursor: psycopg.Cursor,
+    sensor_id: UUID,
+    payload: HeartbeatEnvelope,
+) -> SourceQuality | None:
+    status = payload.status
+    counters = (
+        status.input_lines_total,
+        status.parsed_detections_total,
+        status.ignored_lines_total,
+        status.source_connections_total,
+    )
+    if any(value is None for value in counters):
+        return None
+
+    cursor.execute(
+        """
+        SELECT
+            measured_at,
+            input_lines_total,
+            parsed_detections_total,
+            ignored_lines_total,
+            source_connections_total
+        FROM sensor_heartbeats
+        WHERE sensor_id = %(sensor_id)s
+          AND sensor_boot_id = %(boot_id)s
+          AND measured_at < %(reported_at)s
+          AND measured_at >= (
+              %(reported_at)s
+              - (%(window_seconds)s * INTERVAL '1 second')
+          )
+          AND input_lines_total IS NOT NULL
+          AND parsed_detections_total IS NOT NULL
+          AND ignored_lines_total IS NOT NULL
+          AND source_connections_total IS NOT NULL
+        ORDER BY measured_at ASC, received_at ASC
+        LIMIT 1
+        """,
+        {
+            "sensor_id": sensor_id,
+            "boot_id": payload.sensor.boot_id,
+            "reported_at": payload.sensor.timestamp,
+            "window_seconds": settings.sensor_quality_window_seconds,
+        },
+    )
+    baseline = cursor.fetchone()
+    if baseline is None:
+        return None
+    return measure_source_quality(
+        reported_at=payload.sensor.timestamp,
+        baseline_at=baseline["measured_at"],
+        input_lines_total=status.input_lines_total,
+        parsed_detections_total=status.parsed_detections_total,
+        ignored_lines_total=status.ignored_lines_total,
+        source_connections_total=status.source_connections_total,
+        baseline_input_lines_total=baseline["input_lines_total"],
+        baseline_parsed_detections_total=baseline["parsed_detections_total"],
+        baseline_ignored_lines_total=baseline["ignored_lines_total"],
+        baseline_source_connections_total=baseline["source_connections_total"],
+    )
+
+
 def insert_heartbeat(
     payload: HeartbeatEnvelope,
     raw_message: dict[str, Any],
 ) -> tuple[UUID, int | None]:
     with connection() as conn, conn.cursor() as cursor:
         sensor_uuid = _upsert_sensor(cursor, payload.sensor)
+        source_quality = _heartbeat_source_quality(cursor, sensor_uuid, payload)
         cursor.execute(
             """
             INSERT INTO sensor_heartbeats (
@@ -141,6 +204,12 @@ def insert_heartbeat(
                 last_delivery_success_at,
                 last_delivery_error_at,
                 last_delivery_error_reason,
+                quality_window_seconds,
+                quality_input_lines,
+                quality_parsed_detections,
+                quality_ignored_lines,
+                quality_reconnects,
+                quality_ignored_ratio,
                 raw_message
             )
             VALUES (
@@ -174,6 +243,12 @@ def insert_heartbeat(
                 %(last_delivery_success_at)s,
                 %(last_delivery_error_at)s,
                 %(last_delivery_error_reason)s,
+                %(quality_window_seconds)s,
+                %(quality_input_lines)s,
+                %(quality_parsed_detections)s,
+                %(quality_ignored_lines)s,
+                %(quality_reconnects)s,
+                %(quality_ignored_ratio)s,
                 %(raw_message)s
             )
             ON CONFLICT (sensor_id, sensor_boot_id, sequence) DO NOTHING
@@ -210,6 +285,26 @@ def insert_heartbeat(
                 "last_delivery_success_at": payload.status.last_delivery_success_at,
                 "last_delivery_error_at": payload.status.last_delivery_error_at,
                 "last_delivery_error_reason": payload.status.last_delivery_error_reason,
+                "quality_window_seconds": (
+                    None if source_quality is None else source_quality.window_seconds
+                ),
+                "quality_input_lines": (
+                    None if source_quality is None else source_quality.input_lines
+                ),
+                "quality_parsed_detections": (
+                    None
+                    if source_quality is None
+                    else source_quality.parsed_detections
+                ),
+                "quality_ignored_lines": (
+                    None if source_quality is None else source_quality.ignored_lines
+                ),
+                "quality_reconnects": (
+                    None if source_quality is None else source_quality.reconnects
+                ),
+                "quality_ignored_ratio": (
+                    None if source_quality is None else source_quality.ignored_ratio
+                ),
                 "raw_message": Jsonb(raw_message),
             },
         )
@@ -219,6 +314,15 @@ def insert_heartbeat(
             settings.sensor_queue_warning_messages,
             settings.sensor_source_silent_after_seconds,
             payload.sensor.timestamp,
+            source_quality=source_quality,
+            quality_min_window_seconds=(
+                settings.sensor_quality_min_window_seconds
+            ),
+            quality_min_input_lines=settings.sensor_quality_min_input_lines,
+            quality_max_ignored_ratio=(
+                settings.sensor_quality_max_ignored_percent / 100
+            ),
+            reconnect_warning_count=settings.sensor_reconnect_warning_count,
         )
         cursor.execute(
             """
@@ -235,7 +339,10 @@ def insert_heartbeat(
                 END,
                 health_changed_at = CASE
                     WHEN status NOT IN ('disabled', 'maintenance')
-                     AND status IS DISTINCT FROM %(health_state)s
+                     AND (
+                         status IS DISTINCT FROM %(health_state)s
+                         OR health_reason IS DISTINCT FROM %(health_reason)s
+                     )
                     THEN NOW()
                     ELSE health_changed_at
                 END,
@@ -251,6 +358,12 @@ def insert_heartbeat(
                 source_last_message_at = %(source_last_message_at)s,
                 reported_queue_depth = %(queue_depth)s,
                 reported_dead_letter_depth = %(dead_letter_depth)s,
+                reported_quality_window_seconds = %(quality_window_seconds)s,
+                reported_quality_input_lines = %(quality_input_lines)s,
+                reported_quality_parsed_detections = %(quality_parsed_detections)s,
+                reported_quality_ignored_lines = %(quality_ignored_lines)s,
+                reported_quality_reconnects = %(quality_reconnects)s,
+                reported_quality_ignored_ratio = %(quality_ignored_ratio)s,
                 updated_at = NOW()
             WHERE id = %(sensor_id)s
               AND (
@@ -268,6 +381,26 @@ def insert_heartbeat(
                 "source_last_message_at": payload.status.source_last_message_at,
                 "queue_depth": payload.status.queue_depth,
                 "dead_letter_depth": payload.status.dead_letter_depth,
+                "quality_window_seconds": (
+                    None if source_quality is None else source_quality.window_seconds
+                ),
+                "quality_input_lines": (
+                    None if source_quality is None else source_quality.input_lines
+                ),
+                "quality_parsed_detections": (
+                    None
+                    if source_quality is None
+                    else source_quality.parsed_detections
+                ),
+                "quality_ignored_lines": (
+                    None if source_quality is None else source_quality.ignored_lines
+                ),
+                "quality_reconnects": (
+                    None if source_quality is None else source_quality.reconnects
+                ),
+                "quality_ignored_ratio": (
+                    None if source_quality is None else source_quality.ignored_ratio
+                ),
             },
         )
     return sensor_uuid, None if row is None else int(row["id"])
@@ -400,6 +533,13 @@ def mark_stale_sensors() -> int:
                          AND last_heartbeat_reported_at - source_last_message_at >=
                              (%(source_silent_after)s * INTERVAL '1 second')
                         THEN 'degraded'
+                        WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                         AND reported_quality_input_lines >= %(quality_min_input)s
+                         AND reported_quality_ignored_ratio >= %(max_ignored_ratio)s
+                        THEN 'degraded'
+                        WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                         AND reported_quality_reconnects >= %(reconnect_warning)s
+                        THEN 'degraded'
                         WHEN COALESCE(reported_dead_letter_depth, 0) > 0
                         THEN 'degraded'
                         WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
@@ -417,6 +557,13 @@ def mark_stale_sensors() -> int:
                          AND last_heartbeat_reported_at - source_last_message_at >=
                              (%(source_silent_after)s * INTERVAL '1 second')
                         THEN 'source_silent'
+                        WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                         AND reported_quality_input_lines >= %(quality_min_input)s
+                         AND reported_quality_ignored_ratio >= %(max_ignored_ratio)s
+                        THEN 'source_data_invalid'
+                        WHEN reported_quality_window_seconds >= %(quality_min_window)s
+                         AND reported_quality_reconnects >= %(reconnect_warning)s
+                        THEN 'source_unstable'
                         WHEN COALESCE(reported_dead_letter_depth, 0) > 0
                         THEN 'dead_letter'
                         WHEN COALESCE(reported_queue_depth, 0) >= %(queue_warning)s
@@ -453,6 +600,14 @@ def mark_stale_sensors() -> int:
                 "source_silent_after": (
                     settings.sensor_source_silent_after_seconds
                 ),
+                "quality_min_window": (
+                    settings.sensor_quality_min_window_seconds
+                ),
+                "quality_min_input": settings.sensor_quality_min_input_lines,
+                "max_ignored_ratio": (
+                    settings.sensor_quality_max_ignored_percent / 100
+                ),
+                "reconnect_warning": settings.sensor_reconnect_warning_count,
             },
         )
         changed = cursor.rowcount

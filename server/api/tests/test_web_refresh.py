@@ -16,6 +16,9 @@ SENSOR_SUPERVISION_MIGRATION = (
 SENSOR_DIAGNOSTICS_MIGRATION = (
     PROJECT_ROOT / "database" / "migrations" / "016_sensor_diagnostics.sql"
 )
+SENSOR_STREAM_QUALITY_MIGRATION = (
+    PROJECT_ROOT / "database" / "migrations" / "017_sensor_stream_quality.sql"
+)
 SKYSPY_EMULATOR = PROJECT_ROOT / "skyspy-emulator" / "main.py"
 COMPOSE_SOURCE = PROJECT_ROOT / "compose.yaml"
 
@@ -34,6 +37,9 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         )
         cls.sensor_diagnostics_migration = SENSOR_DIAGNOSTICS_MIGRATION.read_text(
             encoding="utf-8"
+        )
+        cls.sensor_stream_quality_migration = (
+            SENSOR_STREAM_QUALITY_MIGRATION.read_text(encoding="utf-8")
         )
         cls.skyspy_emulator = SKYSPY_EMULATOR.read_text(encoding="utf-8")
         cls.compose_source = COMPOSE_SOURCE.read_text(encoding="utf-8")
@@ -137,6 +143,34 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         )[1].split("function renderZoneList", 1)[0]
         self.assertIn("setSidebarHidden(false)", sensor_focus)
         self.assertIn("scrollIntoView", sensor_focus)
+
+    def test_sensor_quality_history_is_on_demand_and_explains_failures(self) -> None:
+        self.assertIn("function renderSensorQualityHistory", self.source)
+        self.assertIn("async function refreshSelectedSensorQualityHistory", self.source)
+        self.assertIn("/quality-history?limit=18", self.source)
+        self.assertNotIn("/quality-history", self.live_refresh)
+        self.assertIn("source_data_invalid", self.source)
+        self.assertIn("source_unstable", self.source)
+        self.assertIn("quality_ignored_ratio", self.source)
+        self.assertIn("quality_reconnects", self.source)
+        self.assertIn("quality_window_seconds", self.sensor_stream_quality_migration)
+        self.assertIn("reported_quality_ignored_ratio", self.sensor_stream_quality_migration)
+        self.assertIn("OLD.health_reason IS DISTINCT FROM NEW.health_reason", self.sensor_stream_quality_migration)
+
+    def test_selection_close_action_stays_visible_while_details_scroll(self) -> None:
+        self.assertIn('class="selection-header"', self.index)
+        self.assertIn('id="close-selection"', self.index)
+        selection_header = self.styles.split(".selection-header {", 1)[1].split(
+            "}", 1
+        )[0]
+        self.assertIn("position: sticky", selection_header)
+        self.assertIn("top: -16px", selection_header)
+        self.assertIn("background:", selection_header)
+        self.assertIn("box-shadow:", selection_header)
+        self.assertIn(
+            'html[data-theme="light"] .selection-header {',
+            self.styles,
+        )
 
     def test_light_theme_uses_distinct_map_and_status_palette(self) -> None:
         light_theme = self.styles.split('html[data-theme="light"] {', 1)[1]
