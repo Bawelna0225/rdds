@@ -97,8 +97,8 @@ class WebRefreshBoundaryTests(unittest.TestCase):
             with self.subTest(severity=severity):
                 self.assertIn(f"legend-symbol zone-{severity}", self.index)
                 self.assertIn(f".zone-card.zone-severity-{severity}", self.styles)
-        self.assertIn("const severityColor = severityColors[zone.severity]", self.source)
-        self.assertIn("const color = zone.active ? severityColor", self.source)
+        self.assertIn("? severityColor(zone.severity)", self.source)
+        self.assertIn('themeColor("--zone-inactive"', self.source)
         self.assertIn("zone-card zone-severity-${zone.severity}", self.source)
 
     def test_zone_popup_is_readable_and_map_click_focuses_sidebar_card(self) -> None:
@@ -119,6 +119,62 @@ class WebRefreshBoundaryTests(unittest.TestCase):
             self.source,
         )
         self.assertIn("card.dataset.zoneId = String(zone.id)", self.source)
+
+    def test_sensor_map_click_reveals_matching_sidebar_card(self) -> None:
+        self.assertIn(
+            'marker.on("click", () => focusSensorInSidebar(sensor.id))',
+            self.source,
+        )
+        self.assertIn("function focusSensorInSidebar", self.source)
+        self.assertIn(
+            "setSectionCollapsed(elements.sensorsSection, false)",
+            self.source,
+        )
+        self.assertIn("selectSensor(sensorId)", self.source)
+        self.assertIn("card.dataset.sensorId = String(sensor.id)", self.source)
+        sensor_focus = self.source.split(
+            "function focusSensorInSidebar", 1,
+        )[1].split("function renderZoneList", 1)[0]
+        self.assertIn("setSidebarHidden(false)", sensor_focus)
+        self.assertIn("scrollIntoView", sensor_focus)
+
+    def test_light_theme_uses_distinct_map_and_status_palette(self) -> None:
+        light_theme = self.styles.split('html[data-theme="light"] {', 1)[1]
+        for variable in (
+            "--zone-low",
+            "--zone-medium",
+            "--zone-high",
+            "--zone-critical",
+            "--zone-inactive",
+        ):
+            with self.subTest(variable=variable):
+                self.assertIn(variable, light_theme)
+        self.assertIn("function severityColor(severity)", self.source)
+        self.assertIn("function refreshMapThemeColors()", self.source)
+        self.assertIn("refreshMapThemeColors();", self.source)
+        self.assertIn(
+            'html[data-theme="light"] .sensor-card.selected',
+            self.styles,
+        )
+        self.assertIn(
+            'html[data-theme="light"] .sensor-diagnostic-check.diagnostic-error',
+            self.styles,
+        )
+        for category in ("alert", "track", "sensor", "account", "zone", "system"):
+            with self.subTest(audit_category=category):
+                self.assertIn(
+                    f'html[data-theme="light"] .audit-card.audit-{category}',
+                    self.styles,
+                )
+        diagnostic_ok = self.styles.split(
+            'html[data-theme="light"] .sensor-diagnostic-check.diagnostic-ok {',
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("border-left-color: var(--green)", diagnostic_ok)
+        self.assertIn(
+            'html[data-theme="light"] .sensor-diagnostic-check.diagnostic-ok strong',
+            self.styles,
+        )
 
     def test_sidebar_uses_operational_priority_order(self) -> None:
         order_source = self.source.split(

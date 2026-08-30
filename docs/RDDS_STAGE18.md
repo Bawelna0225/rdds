@@ -112,7 +112,14 @@ node --check web/src/main.js
 git diff --check
 ```
 
-Expected API version: `0.18.0`.
+Expected API version: `0.18.1`.
+
+## Patch release 0.18.1
+
+The light theme uses a dedicated high-contrast operational palette for map
+layers, state badges, cards and diagnostic summaries. Clicking a sensor marker
+now opens the sensor section, selects the matching card and displays its
+diagnostic controls without requiring an operator to search by name.
 
 ## Hardware boundary
 

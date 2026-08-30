@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.18.0**. The complete software path is tested
+> Current development version: **0.18.1**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -237,6 +237,7 @@ annotated Git tag:
 | `rdds-v0.16.0` | zone incident snapshots, presence timeline and audible alerts |
 | `rdds-v0.17.0` | sensor health supervision and maintenance mode |
 | `rdds-v0.18.0` | sensor-path diagnostics, safe telemetry export and emulator fault modes |
+| `rdds-v0.18.1` | higher-contrast light theme and map-to-sensor sidebar navigation |
 
 Start with:
 

@@ -149,11 +149,11 @@ const alertStateLabels = {
   closed: "zamknięty",
 };
 
-const severityColors = {
-  low: "#43d5ff",
-  medium: "#ffb84d",
-  high: "#ff7547",
-  critical: "#ff2841",
+const severityColorVariables = {
+  low: "--zone-low",
+  medium: "--zone-medium",
+  high: "--zone-high",
+  critical: "--zone-critical",
 };
 
 const presenceLabels = {
@@ -209,13 +209,13 @@ const securityEventLabels = {
   sessions_revoked: "Zakończono wiele sesji",
 };
 
-const stateColors = {
-  new: "#43d5ff",
-  active: "#35e69a",
-  stale: "#ffb84d",
-  ended: "#778292",
-  anomalous: "#ff4d5e",
-  no_gps: "#b48cff",
+const stateColorVariables = {
+  new: "--cyan",
+  active: "--green",
+  stale: "--amber",
+  ended: "--zone-inactive",
+  anomalous: "--red",
+  no_gps: "--purple",
 };
 const LIVE_TRAIL_SECONDS = 60;
 const LIVE_TRAIL_POINT_LIMIT = 100;
@@ -730,6 +730,24 @@ function alertStateLabel(state) {
 
 function severityLabel(severity) {
   return severityLabels[severity] ?? severity ?? "—";
+}
+
+function themeColor(variableName, fallback) {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(variableName)
+    .trim();
+  return value || fallback;
+}
+
+function severityColor(severity) {
+  const variableName = severityColorVariables[severity]
+    ?? severityColorVariables.high;
+  return themeColor(variableName, "#ff7547");
+}
+
+function stateColor(state) {
+  const variableName = stateColorVariables[state] ?? stateColorVariables.ended;
+  return themeColor(variableName, "#778292");
 }
 
 function presenceLabel(presence) {
@@ -1552,14 +1570,19 @@ function updateZoneLayers(zones, alerts) {
 
     visibleIds.add(zone.id);
     const hasOpenAlert = alertingZoneIds.has(zone.id);
-    const severityColor = severityColors[zone.severity] ?? severityColors.high;
-    const color = zone.active ? severityColor : "#778292";
+    const color = zone.active
+      ? severityColor(zone.severity)
+      : themeColor("--zone-inactive", "#778292");
+    const lightTheme = currentTheme === "light";
     const style = {
       color,
       fillColor: color,
-      fillOpacity: hasOpenAlert ? 0.24 : zone.active ? 0.11 : 0.03,
-      opacity: zone.active ? 0.9 : 0.45,
-      weight: hasOpenAlert ? 3 : 2,
+      fillOpacity: hasOpenAlert
+        ? lightTheme ? 0.3 : 0.24
+        : zone.active ? lightTheme ? 0.17 : 0.11
+          : lightTheme ? 0.06 : 0.03,
+      opacity: zone.active ? lightTheme ? 1 : 0.9 : lightTheme ? 0.62 : 0.45,
+      weight: hasOpenAlert ? 3 : lightTheme ? 2.5 : 2,
       dashArray: zone.active ? null : "7 6",
     };
     let layer = zoneLayers.get(zone.id);
@@ -1602,7 +1625,7 @@ function updateSensorMarkers(sensors) {
         icon: sensorIcon(sensor.status),
         zIndexOffset: 200,
       }).addTo(map);
-      marker.on("click", () => map.panTo(marker.getLatLng()));
+      marker.on("click", () => focusSensorInSidebar(sensor.id));
       sensorMarkers.set(sensor.id, marker);
     } else {
       marker.setLatLng(latLng);
@@ -1639,7 +1662,7 @@ function updateTrackMarkers(tracks) {
     }
     visibleIds.add(track.id);
     const droneLatLng = [track.latitude, track.longitude];
-    const color = stateColors[track.state] ?? stateColors.ended;
+    const color = stateColor(track.state);
     let layer = trackLayers.get(track.id);
 
     if (!layer) {
@@ -1711,7 +1734,7 @@ function updateLiveTrailLayers(trails, tracks) {
     }
 
     visibleIds.add(trail.track_id);
-    const color = stateColors[track.state] ?? stateColors.active;
+    const color = stateColor(track.state);
     let layer = liveTrailLayers.get(trail.track_id);
     if (!layer) {
       layer = L.polyline(points, {
@@ -1835,7 +1858,7 @@ function setTheme(theme, { persist = true } = {}) {
   document.documentElement.style.colorScheme = currentTheme;
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
     "content",
-    light ? "#eef3f7" : "#0a0d12",
+    light ? "#e7edf3" : "#0a0d12",
   );
   elements.themeToggle.setAttribute("aria-pressed", String(light));
   elements.themeToggle.setAttribute(
@@ -1844,8 +1867,30 @@ function setTheme(theme, { persist = true } = {}) {
   );
   elements.themeToggleIcon.textContent = light ? "☾" : "☀";
   elements.themeToggleLabel.textContent = light ? "Ciemny" : "Jasny";
+  refreshMapThemeColors();
   if (persist) {
     writeDisplaySettings({ theme: currentTheme });
+  }
+}
+
+function refreshMapThemeColors() {
+  if (zonesLoaded) {
+    updateZoneLayers(currentZones, currentOpenAlerts);
+  }
+  updateTrackMarkers(currentTracks);
+  updateLiveTrailLayers(currentLiveTrails, currentTracks);
+  incidentEntryMarker?.setStyle({
+    color: severityColor(selectedAlertSnapshot?.severity),
+    fillColor: themeColor("--map-marker-fill", "#101723"),
+  });
+  incidentTrail?.setStyle({ color: themeColor("--red", "#ff4d5e") });
+  archivePreviewOperatorLine?.setStyle({
+    color: themeColor("--zone-inactive", "#778292"),
+  });
+  replayOperatorLine?.setStyle({ color: themeColor("--purple", "#b48cff") });
+  replayTrail?.setStyle({ color: themeColor("--purple", "#b48cff") });
+  if (drawingLayer && drawingPoints.length > 0) {
+    updateDrawingLayer();
   }
 }
 
@@ -2802,6 +2847,7 @@ function renderSensorList(sensors) {
   for (const sensor of sensors) {
     const card = document.createElement("div");
     card.className = `entity-card managed-card sensor-card sensor-${sensor.status}${sensor.id === selectedSensorId ? " selected" : ""}`;
+    card.dataset.sensorId = String(sensor.id);
     const main = document.createElement("button");
     main.type = "button";
     main.className = "managed-card-main";
@@ -2946,6 +2992,34 @@ function focusZoneInSidebar(zoneId, { scroll = true } = {}) {
     }
   }
 
+  if (scroll && selectedCard) {
+    requestAnimationFrame(() => {
+      selectedCard.scrollIntoView({ behavior: "smooth", block: "center" });
+      selectedCard.querySelector(".managed-card-main")?.focus({
+        preventScroll: true,
+      });
+    });
+  }
+}
+
+function focusSensorInSidebar(sensorId, { scroll = true } = {}) {
+  if (
+    !elements.zoneEditor.classList.contains("hidden")
+    || !elements.sensorEditor.classList.contains("hidden")
+    || !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
+    return;
+  }
+
+  setSidebarHidden(false);
+  if (elements.sensorsSection.classList.contains("collapsed")) {
+    setSectionCollapsed(elements.sensorsSection, false);
+  }
+  selectSensor(sensorId);
+
+  const selectedCard = [...elements.sensorList.children].find(
+    (card) => card.dataset.sensorId === String(sensorId),
+  );
   if (scroll && selectedCard) {
     requestAnimationFrame(() => {
       selectedCard.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -3512,8 +3586,8 @@ function showIncidentEntry() {
       [alert.latitude, alert.longitude],
       {
         radius: 8,
-        color: severityColors[alert.severity] ?? severityColors.high,
-        fillColor: "#101723",
+        color: severityColor(alert.severity),
+        fillColor: themeColor("--map-marker-fill", "#101723"),
         fillOpacity: 0.92,
         weight: 3,
       },
@@ -3575,7 +3649,7 @@ async function showIncidentRoute() {
     removeIncidentTrail();
     incidentTrail = L.polyline(
       points.map((point) => [point.latitude, point.longitude]),
-      { color: "#ff4d5e", weight: 4, opacity: 0.88 },
+      { color: themeColor("--red", "#ff4d5e"), weight: 4, opacity: 0.88 },
     ).addTo(map);
     map.fitBounds(incidentTrail.getBounds(), { padding: [55, 55], maxZoom: 16 });
   } catch (error) {
@@ -3668,7 +3742,7 @@ function showArchivePreview(track) {
     archivePreviewOperatorLine = L.polyline(
       [droneLatLng, pilotLatLng],
       {
-        color: "#778292",
+        color: themeColor("--zone-inactive", "#778292"),
         weight: 2,
         opacity: 0.58,
         dashArray: "5 7",
@@ -3787,7 +3861,7 @@ function updateReplayMap(index, rebuildTrail = false) {
     const connection = [droneLatLng, pilotLatLng];
     if (!replayOperatorLine) {
       replayOperatorLine = L.polyline(connection, {
-        color: "#b48cff",
+        color: themeColor("--purple", "#b48cff"),
         weight: 2,
         opacity: 0.65,
         dashArray: "5 7",
@@ -4013,7 +4087,7 @@ async function startTrackReplay() {
       zIndexOffset: 600,
     }).addTo(map);
     replayTrail = L.polyline([], {
-      color: "#b48cff",
+      color: themeColor("--purple", "#b48cff"),
       weight: 3,
       opacity: 0.82,
     }).addTo(map);
@@ -4331,11 +4405,12 @@ function updateDrawingLayer() {
     return;
   }
 
+  const drawingColor = themeColor("--amber", "#ffb84d");
   const layers = drawingPoints.map((point) =>
     L.circleMarker(point, {
       radius: 4,
-      color: "#ffb84d",
-      fillColor: "#ffb84d",
+      color: drawingColor,
+      fillColor: drawingColor,
       fillOpacity: 0.9,
       weight: 1,
     }),
@@ -4344,13 +4419,13 @@ function updateDrawingLayer() {
   if (drawingPoints.length >= 2) {
     const shape = drawingMode
       ? L.polyline(drawingPoints, {
-          color: "#ffb84d",
+          color: drawingColor,
           weight: 2,
           dashArray: "7 6",
         })
       : L.polygon(drawingPoints, {
-          color: "#ffb84d",
-          fillColor: "#ffb84d",
+          color: drawingColor,
+          fillColor: drawingColor,
           fillOpacity: 0.16,
           weight: 2,
         });
