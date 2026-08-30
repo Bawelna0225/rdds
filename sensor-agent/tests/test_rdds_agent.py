@@ -140,6 +140,13 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual("new", json.loads(rows[0]["payload_json"])["value"])
         self.assertEqual(2, self.outbox.depth())
 
+    def test_oldest_message_age_is_reported_without_changing_queue(self) -> None:
+        self.assertIsNone(self.outbox.oldest_age_seconds(now=1000))
+        self.outbox.enqueue("/observation", {"value": "event"})
+        self.outbox.connection.execute("UPDATE outbox SET created_at = 900")
+        self.assertEqual(100, self.outbox.oldest_age_seconds(now=1000))
+        self.assertEqual(1, self.outbox.depth())
+
 
 class HeartbeatTelemetryTests(unittest.TestCase):
     def test_heartbeat_reports_source_and_delivery_health(self) -> None:
@@ -163,7 +170,18 @@ class HeartbeatTelemetryTests(unittest.TestCase):
             agent = SensorAgent(config)
             try:
                 agent.source_connection = object()
+                agent.source_connected_at = "2026-08-26T11:59:00+00:00"
                 agent.last_source_message_at = "2026-08-26T12:00:00+00:00"
+                agent.received_lines = 25
+                agent.parsed_detections = 20
+                agent.enqueued_observations = 19
+                agent.ignored_lines = 5
+                agent.source_connections = 2
+                agent.delivery_successes = 17
+                agent.delivery_retries = 3
+                agent.last_delivery_success_at = "2026-08-26T12:00:01+00:00"
+                agent.last_delivery_error_at = "2026-08-26T11:58:00+00:00"
+                agent.last_delivery_error_reason = "connection_failed"
                 message_id = agent.enqueue_heartbeat()
                 message = agent.outbox.get(message_id)
                 self.assertIsNotNone(message)
@@ -171,12 +189,60 @@ class HeartbeatTelemetryTests(unittest.TestCase):
                 self.assertEqual(AGENT_VERSION, payload["status"]["agent_version"])
                 self.assertTrue(payload["status"]["source_connected"])
                 self.assertEqual(0, payload["status"]["dead_letter_depth"])
+                self.assertEqual(100, payload["status"]["queue_capacity"])
+                self.assertEqual("loopback", payload["status"]["source_kind"])
+                self.assertEqual(25, payload["status"]["input_lines_total"])
+                self.assertEqual(20, payload["status"]["parsed_detections_total"])
+                self.assertEqual(19, payload["status"]["enqueued_observations_total"])
+                self.assertEqual(5, payload["status"]["ignored_lines_total"])
+                self.assertEqual(2, payload["status"]["source_connections_total"])
+                self.assertEqual(17, payload["status"]["delivery_success_total"])
+                self.assertEqual(3, payload["status"]["delivery_retry_total"])
+                self.assertEqual(
+                    "connection_failed",
+                    payload["status"]["last_delivery_error_reason"],
+                )
                 self.assertEqual(
                     "2026-08-26T12:00:00+00:00",
                     payload["status"]["source_last_message_at"],
                 )
             finally:
                 agent.source_connection = None
+                agent.outbox.close()
+
+    def test_delivery_outcome_counters_keep_safe_error_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                api_url="http://127.0.0.1:1",
+                ingest_token="individual-test-token",
+                sensor_id="skyspy-test-01",
+                display_name="Test receiver",
+                source="/dev/ttyACM0",
+                baud_rate=115200,
+                sensor_position=None,
+                transport="unknown",
+                heartbeat_seconds=10,
+                reconnect_seconds=1,
+                request_timeout_seconds=2,
+                replay_messages_per_second=2,
+                spool_path=Path(directory) / "outbox.sqlite3",
+                max_queue_messages=100,
+            )
+            agent = SensorAgent(config)
+            try:
+                agent.record_delivery_outcome("retry", "connection error: refused")
+                self.assertEqual(1, agent.delivery_retries)
+                self.assertEqual("connection_failed", agent.last_delivery_error_reason)
+                agent.record_delivery_outcome("discard", "HTTP 403: disabled")
+                self.assertEqual(1, agent.delivery_discards)
+                self.assertEqual("sensor_disabled", agent.last_delivery_error_reason)
+                agent.record_delivery_outcome("dead_letter", "HTTP 422: invalid")
+                self.assertEqual(1, agent.delivery_dead_letters)
+                self.assertEqual("request_rejected", agent.last_delivery_error_reason)
+                agent.record_delivery_outcome("accepted", "")
+                self.assertEqual(1, agent.delivery_successes)
+                self.assertIsNotNone(agent.last_delivery_success_at)
+            finally:
                 agent.outbox.close()
 
 

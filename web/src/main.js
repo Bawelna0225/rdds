@@ -110,9 +110,30 @@ const sensorHealthReasonLabels = {
   source_silent: "Sky-Spy nie przesyła komunikatów kontrolnych",
   queue_backlog: "zaległa kolejka wysyłkowa",
   dead_letter: "wiadomości w kolejce błędów",
+  api_delivery_failed: "agent nie może dostarczyć danych do RDDS",
   heartbeat_timeout: "brak heartbeat agenta",
   maintenance: "zaplanowana konserwacja",
   disabled: "sensor wyłączony administracyjnie",
+};
+
+const sourceKindLabels = {
+  serial: "port szeregowy USB",
+  socket: "strumień TCP emulatora",
+  loopback: "lokalna pętla testowa",
+  unknown: "nieznane źródło",
+};
+
+const diagnosticErrorLabels = {
+  open_failed: "nie udało się otworzyć źródła",
+  read_failed: "utracono źródło podczas odczytu",
+  authentication_failed: "API odrzuciło uwierzytelnienie",
+  authorization_failed: "API odmówiło dostępu",
+  request_rejected: "API odrzuciło komunikat",
+  server_error: "błąd usługi API",
+  timeout: "przekroczono czas odpowiedzi API",
+  connection_failed: "brak połączenia z API",
+  delivery_failed: "błąd dostarczania",
+  sensor_disabled: "dane odrzucone podczas wyłączenia sensora",
 };
 
 const severityLabels = {
@@ -322,6 +343,8 @@ const elements = {
   incidentShowLive: document.querySelector("#incident-show-live"),
   incidentShowRoute: document.querySelector("#incident-show-route"),
   trackControls: document.querySelector("#track-controls"),
+  sensorControls: document.querySelector("#sensor-controls"),
+  sensorDiagnosticsExport: document.querySelector("#sensor-diagnostics-export"),
   trackFollowLive: document.querySelector("#track-follow-live"),
   trackReplay: document.querySelector("#track-replay"),
   trackPlayer: document.querySelector("#track-player"),
@@ -617,6 +640,88 @@ function sourceConnectionLabel(value) {
   if (value === true) return "połączone";
   if (value === false) return "rozłączone";
   return "brak telemetrii";
+}
+
+function sourceKindLabel(value) {
+  return sourceKindLabels[value] ?? value ?? "brak telemetrii";
+}
+
+function diagnosticErrorLabel(value) {
+  return diagnosticErrorLabels[value] ?? value ?? "—";
+}
+
+function formatClockOffset(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const offset = Number(value);
+  if (!Number.isFinite(offset)) return "—";
+  const rounded = Math.round(offset * 10) / 10;
+  if (Math.abs(rounded) < 0.1) return "zgodny z serwerem";
+  return `${rounded > 0 ? "+" : ""}${rounded.toLocaleString("pl-PL")} s`;
+}
+
+function diagnosticCheck(label, state, value) {
+  const row = document.createElement("div");
+  row.className = `sensor-diagnostic-check diagnostic-${state}`;
+  const name = document.createElement("span");
+  name.textContent = label;
+  const result = document.createElement("strong");
+  result.textContent = value;
+  row.append(name, result);
+  return row;
+}
+
+function sensorDiagnosticSummary(sensor) {
+  const summary = document.createElement("div");
+  summary.className = "sensor-diagnostic-summary";
+
+  let sourceState = "unknown";
+  let sourceValue = "brak telemetrii";
+  if (sensor.source_connected === false) {
+    sourceState = "error";
+    sourceValue = "rozłączone";
+  } else if (sensor.source_connected === true) {
+    sourceState = sensor.health_reason === "source_silent" ? "warning" : "ok";
+    sourceValue = sensor.health_reason === "source_silent" ? "połączone, brak danych" : "połączone";
+  }
+
+  const lastSuccess = Date.parse(sensor.last_delivery_success_at ?? "");
+  const lastError = Date.parse(sensor.last_delivery_error_at ?? "");
+  const deliveryFailed = Number.isFinite(lastError)
+    && (!Number.isFinite(lastSuccess) || lastError > lastSuccess)
+    && sensor.last_delivery_error_reason !== "sensor_disabled";
+  const heartbeatReceived = Boolean(sensor.last_heartbeat_at);
+  const apiState = deliveryFailed
+    ? "error" : Number.isFinite(lastSuccess) || heartbeatReceived ? "ok" : "unknown";
+  const apiValue = deliveryFailed
+    ? diagnosticErrorLabel(sensor.last_delivery_error_reason)
+    : Number.isFinite(lastSuccess) ? "dostarczanie działa"
+      : heartbeatReceived ? "heartbeat odebrany" : "brak telemetrii";
+
+  const hasQueueTelemetry = Number.isFinite(sensor.dead_letter_depth)
+    || Number.isFinite(sensor.queue_depth);
+  const deadLetters = Number(sensor.dead_letter_depth ?? 0);
+  const queueDepth = Number(sensor.queue_depth ?? 0);
+  const queueState = !hasQueueTelemetry
+    ? "unknown" : deadLetters > 0 ? "error" : queueDepth > 0 ? "warning" : "ok";
+  const queueValue = deadLetters > 0
+    ? `${formatInteger(deadLetters)} w kolejce błędów`
+    : queueDepth > 0 ? `${formatInteger(queueDepth)} oczekuje`
+      : hasQueueTelemetry ? "pusta" : "brak telemetrii";
+
+  const clockOffset = sensor.clock_offset_seconds === null
+    || sensor.clock_offset_seconds === undefined
+    ? Number.NaN : Number(sensor.clock_offset_seconds);
+  const clockState = !Number.isFinite(clockOffset)
+    ? "unknown"
+    : Math.abs(clockOffset) > 30 ? "error" : Math.abs(clockOffset) > 5 ? "warning" : "ok";
+
+  summary.append(
+    diagnosticCheck("Sky-Spy → agent", sourceState, sourceValue),
+    diagnosticCheck("Agent → RDDS", apiState, apiValue),
+    diagnosticCheck("Bufor wysyłkowy", queueState, queueValue),
+    diagnosticCheck("Zegar agenta", clockState, formatClockOffset(sensor.clock_offset_seconds)),
+  );
+  return summary;
 }
 
 function alertStateLabel(state) {
@@ -3146,6 +3251,7 @@ function renderSelection(track) {
     elements.selectionDetails.replaceChildren();
     elements.trackControls.classList.add("hidden");
     elements.incidentControls.classList.add("hidden");
+    elements.sensorControls.classList.add("hidden");
     elements.selectionTimeline.classList.add("hidden");
     elements.selectionTimelineList.replaceChildren();
     return;
@@ -3158,6 +3264,7 @@ function renderSelection(track) {
   elements.selectionTitle.textContent = track.basic_id || track.identity_key || track.track_key;
   elements.trackControls.classList.remove("hidden");
   elements.incidentControls.classList.add("hidden");
+  elements.sensorControls.classList.add("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
@@ -3182,9 +3289,12 @@ function renderSensorSelection(sensor) {
   elements.selectionTitle.textContent = sensor.display_name || sensor.sensor_id;
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.add("hidden");
+  elements.sensorControls.classList.remove("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
   elements.selectionDetails.replaceChildren(
+    sensorDiagnosticSummary(sensor),
+    detailSection("Stan operacyjny"),
     detailItem("Status", stateLabel(sensor.status)),
     detailItem("Stan toru detekcji", sensorHealthReasonLabel(sensor.health_reason)),
     detailItem("Zmiana stanu", formatDateTime(sensor.health_changed_at)),
@@ -3199,7 +3309,9 @@ function renderSensorSelection(sensor) {
           detailItem("Planowane zakończenie", formatDateTime(sensor.maintenance_until)),
         ]
       : []),
+    detailSection("Agent"),
     detailItem("Identyfikator", sensor.sensor_id),
+    detailItem("Boot ID", sensor.agent_boot_id),
     detailItem(
       "Uwierzytelnianie",
       sensor.credential_mode === "individual" ? "token indywidualny" : "token wspólny",
@@ -3207,18 +3319,40 @@ function renderSensorSelection(sensor) {
     detailItem("Prefiks tokenu", sensor.token_prefix ? `${sensor.token_prefix}…` : "—"),
     detailItem("Ostatni heartbeat", formatDateTime(sensor.last_heartbeat_at)),
     detailItem("Czas raportu agenta", formatDateTime(sensor.last_heartbeat_reported_at)),
-    detailItem("Ostatnia obserwacja", formatDateTime(sensor.last_observation_received_at)),
-    detailItem("Połączenie Sky-Spy", sourceConnectionLabel(sensor.source_connected)),
-    detailItem("Ostatnia wiadomość Sky-Spy", formatDateTime(sensor.source_last_message_at)),
+    detailItem("Różnica zegara", formatClockOffset(sensor.clock_offset_seconds)),
     detailItem("Wersja agenta", sensor.agent_version),
-    detailItem("MGRS", formatMgrs(sensor.latitude, sensor.longitude)),
+    detailItem("Uptime", formatDuration(sensor.uptime_seconds)),
+    detailSection("Sky-Spy → agent"),
+    detailItem("Rodzaj źródła", sourceKindLabel(sensor.source_kind)),
+    detailItem("Połączenie Sky-Spy", sourceConnectionLabel(sensor.source_connected)),
+    detailItem("Połączone od", formatDateTime(sensor.source_connected_at)),
+    detailItem("Liczba połączeń", formatInteger(sensor.source_connections_total)),
+    detailItem("Ostatnia wiadomość Sky-Spy", formatDateTime(sensor.source_last_message_at)),
+    detailItem("Ostatni błąd źródła", diagnosticErrorLabel(sensor.source_last_error_reason)),
+    detailItem("Czas błędu źródła", formatDateTime(sensor.source_last_error_at)),
+    detailItem("Odczytane linie", formatInteger(sensor.input_lines_total)),
+    detailItem("Rozpoznane detekcje", formatInteger(sensor.parsed_detections_total)),
+    detailItem("Dodane do kolejki", formatInteger(sensor.enqueued_observations_total)),
+    detailItem("Pominięte linie", formatInteger(sensor.ignored_lines_total)),
+    detailSection("Agent → RDDS"),
+    detailItem("Ostatnia obserwacja", formatDateTime(sensor.last_observation_received_at)),
     detailItem("Obserwacje", formatInteger(sensor.observation_count)),
     detailItem("Heartbeat", formatInteger(sensor.heartbeat_count)),
-    detailItem("Uptime", formatDuration(sensor.uptime_seconds)),
+    detailItem("Dostarczone komunikaty", formatInteger(sensor.delivery_success_total)),
+    detailItem("Ponowienia", formatInteger(sensor.delivery_retry_total)),
+    detailItem("Odrzucone przy wyłączeniu", formatInteger(sensor.delivery_discard_total)),
+    detailItem("Przeniesione do błędów", formatInteger(sensor.delivery_dead_letter_total)),
+    detailItem("Ostatnie dostarczenie", formatDateTime(sensor.last_delivery_success_at)),
+    detailItem("Ostatni błąd dostarczania", diagnosticErrorLabel(sensor.last_delivery_error_reason)),
+    detailItem("Czas błędu dostarczania", formatDateTime(sensor.last_delivery_error_at)),
+    detailSection("Bufor i urządzenie"),
+    detailItem("Kolejka", formatInteger(sensor.queue_depth)),
+    detailItem("Pojemność kolejki", formatInteger(sensor.queue_capacity)),
+    detailItem("Wiek najstarszej wiadomości", formatDuration(sensor.queue_oldest_age_seconds)),
+    detailItem("Kolejka błędów", formatInteger(sensor.dead_letter_depth)),
     detailItem("RSSI modemu", formatNumber(sensor.cellular_rssi, 0, " dBm")),
     detailItem("Wolna pamięć", formatBytes(sensor.free_heap_bytes)),
-    detailItem("Kolejka", formatInteger(sensor.queue_depth)),
-    detailItem("Kolejka błędów", formatInteger(sensor.dead_letter_depth)),
+    detailItem("MGRS", formatMgrs(sensor.latitude, sensor.longitude)),
   );
 }
 
@@ -3228,6 +3362,7 @@ function renderIncidentSelection(alert) {
   elements.selectionTitle.textContent = alert.basic_id || alert.identity_key || alert.track_key;
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.remove("hidden");
+  elements.sensorControls.classList.add("hidden");
   elements.incidentShowEntry.disabled = !hasPosition(alert);
   elements.incidentShowLive.disabled = !hasPosition(alert, "live_");
   elements.incidentShowRoute.disabled = !alert.track_id;
@@ -3320,6 +3455,7 @@ function renderAuditSelection(event) {
   elements.selectionTimelineTitle.textContent = auditTimelineTitle(event);
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.add("hidden");
+  elements.sensorControls.classList.add("hidden");
   elements.selectionDetails.replaceChildren(
     detailItem("Czas", formatDateTime(event.occurred_at)),
     detailItem("Wykonawca zdarzenia", event.actor),
@@ -4082,6 +4218,50 @@ function selectSensor(sensorId) {
   }
 }
 
+function downloadSelectedSensorDiagnostics() {
+  const sensor = currentSensors.find((candidate) => candidate.id === selectedSensorId);
+  if (!sensor) {
+    showToast("Wybierz sensor przed pobraniem diagnostyki.", true);
+    return;
+  }
+  const fields = [
+    "id", "sensor_id", "display_name", "status", "health_reason",
+    "health_changed_at", "health_issue_started_at", "latitude", "longitude",
+    "firmware_version", "agent_version", "agent_boot_id", "uptime_seconds",
+    "last_heartbeat_at", "last_heartbeat_reported_at", "clock_offset_seconds",
+    "source_kind", "source_connected", "source_connected_at",
+    "source_last_message_at", "source_last_error_at", "source_last_error_reason",
+    "input_lines_total", "parsed_detections_total", "enqueued_observations_total",
+    "ignored_lines_total", "source_connections_total", "queue_depth",
+    "queue_capacity", "queue_oldest_age_seconds", "dead_letter_depth",
+    "delivery_success_total", "delivery_retry_total", "delivery_discard_total",
+    "delivery_dead_letter_total", "last_delivery_success_at",
+    "last_delivery_error_at", "last_delivery_error_reason",
+    "last_observation_received_at", "observation_count", "heartbeat_count",
+    "cellular_rssi", "free_heap_bytes",
+  ];
+  const diagnosticSensor = Object.fromEntries(
+    fields.map((field) => [field, sensor[field] ?? null]),
+  );
+  const payload = {
+    schema: "rdds/sensor-diagnostics/1.0",
+    exported_at: new Date().toISOString(),
+    sensor: diagnosticSensor,
+  };
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
+    type: "application/json",
+  });
+  const link = document.createElement("a");
+  const safeSensorId = String(sensor.sensor_id ?? "sensor").replace(/[^A-Za-z0-9._-]/g, "_");
+  const date = new Date().toISOString().replace(/[:.]/g, "-");
+  link.href = URL.createObjectURL(blob);
+  link.download = `rdds-diagnostics-${safeSensorId}-${date}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
 function selectAuditEvent(event) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
@@ -4761,6 +4941,10 @@ elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
 elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
 elements.closeSelection.addEventListener("click", clearSelection);
+elements.sensorDiagnosticsExport.addEventListener(
+  "click",
+  downloadSelectedSensorDiagnostics,
+);
 elements.incidentShowEntry.addEventListener("click", showIncidentEntry);
 elements.incidentShowLive.addEventListener("click", showIncidentLivePosition);
 elements.incidentShowRoute.addEventListener("click", () => void showIncidentRoute());

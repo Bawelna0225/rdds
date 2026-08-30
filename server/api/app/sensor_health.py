@@ -32,6 +32,16 @@ def assess_heartbeat(
         )
         if source_is_old or source_never_reported:
             return HealthAssessment("degraded", "source_silent")
+    latest_delivery_failed = (
+        status.last_delivery_error_reason not in (None, "sensor_disabled")
+        and status.last_delivery_error_at is not None
+        and (
+            status.last_delivery_success_at is None
+            or status.last_delivery_error_at > status.last_delivery_success_at
+        )
+    )
+    if latest_delivery_failed:
+        return HealthAssessment("degraded", "api_delivery_failed")
     if (status.dead_letter_depth or 0) > 0:
         return HealthAssessment("degraded", "dead_letter")
     if (status.queue_depth or 0) >= queue_warning_messages:

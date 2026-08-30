@@ -24,7 +24,7 @@ except ImportError:  # Allows parser/outbox unit tests without pyserial on the h
 
 LOG = logging.getLogger("rdds-sensor-agent")
 PROTOCOL_VERSION = "rdds/1.0"
-AGENT_VERSION = "0.17.0"
+AGENT_VERSION = "0.18.0"
 OBSERVATION_PATH = "/api/v1/ingest/observation"
 HEARTBEAT_PATH = "/api/v1/ingest/heartbeat"
 RETRYABLE_HTTP_CODES = {401, 403, 408, 425, 429}
@@ -202,6 +202,15 @@ class Outbox:
             "SELECT count(*) AS count FROM dead_letter"
         ).fetchone()
         return int(row["count"])
+
+    def oldest_age_seconds(self, now: float | None = None) -> int | None:
+        row = self.connection.execute(
+            "SELECT MIN(created_at) AS oldest_created_at FROM outbox"
+        ).fetchone()
+        if row["oldest_created_at"] is None:
+            return None
+        current_time = time.time() if now is None else now
+        return max(0, round(current_time - float(row["oldest_created_at"])))
 
     def enqueue(self, path: str, payload: dict[str, Any]) -> int:
         self.connection.execute("BEGIN IMMEDIATE")
@@ -458,6 +467,32 @@ def parse_skyspy_line(line: bytes | str, transport: str = "unknown") -> dict[str
     return normalize_detection(raw, transport)
 
 
+def source_kind(source: str) -> str:
+    if source.startswith("socket://"):
+        return "socket"
+    if source.startswith("loop://"):
+        return "loopback"
+    if source.startswith("/"):
+        return "serial"
+    return "unknown"
+
+
+def delivery_error_reason(error: str) -> str:
+    if error.startswith("HTTP 401"):
+        return "authentication_failed"
+    if error.startswith("HTTP 403"):
+        return "authorization_failed"
+    if error.startswith("HTTP 4"):
+        return "request_rejected"
+    if error.startswith("HTTP 5"):
+        return "server_error"
+    if "timed out" in error.lower() or "timeout" in error.lower():
+        return "timeout"
+    if error.startswith("connection error"):
+        return "connection_failed"
+    return "delivery_failed"
+
+
 class SensorAgent:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -468,12 +503,24 @@ class SensorAgent:
         self.last_heartbeat_monotonic = 0.0
         self.next_replay_monotonic = 0.0
         self.source_connection: Any = None
+        self.source_connected_at: str | None = None
         self.next_source_connect_monotonic = 0.0
         self.last_source_message_at: str | None = None
+        self.last_source_error_at: str | None = None
+        self.last_source_error_reason: str | None = None
         self.running = True
         self.received_lines = 0
-        self.accepted_detections = 0
+        self.parsed_detections = 0
+        self.enqueued_observations = 0
         self.ignored_lines = 0
+        self.source_connections = 0
+        self.delivery_successes = 0
+        self.delivery_retries = 0
+        self.delivery_discards = 0
+        self.delivery_dead_letters = 0
+        self.last_delivery_success_at: str | None = None
+        self.last_delivery_error_at: str | None = None
+        self.last_delivery_error_reason: str | None = None
 
     def stop(self, signum: int | None = None, _frame: Any = None) -> None:
         if signum is not None:
@@ -504,10 +551,28 @@ class SensorAgent:
             "status": {
                 "uptime_seconds": round(time.monotonic() - self.started_monotonic),
                 "queue_depth": self.outbox.depth(),
+                "queue_capacity": self.config.max_queue_messages,
+                "queue_oldest_age_seconds": self.outbox.oldest_age_seconds(),
                 "dead_letter_depth": self.outbox.dead_letter_depth(),
                 "agent_version": AGENT_VERSION,
+                "source_kind": source_kind(self.config.source),
                 "source_connected": self.source_connection is not None,
+                "source_connected_at": self.source_connected_at,
                 "source_last_message_at": self.last_source_message_at,
+                "source_last_error_at": self.last_source_error_at,
+                "source_last_error_reason": self.last_source_error_reason,
+                "input_lines_total": self.received_lines,
+                "parsed_detections_total": self.parsed_detections,
+                "enqueued_observations_total": self.enqueued_observations,
+                "ignored_lines_total": self.ignored_lines,
+                "source_connections_total": self.source_connections,
+                "delivery_success_total": self.delivery_successes,
+                "delivery_retry_total": self.delivery_retries,
+                "delivery_discard_total": self.delivery_discards,
+                "delivery_dead_letter_total": self.delivery_dead_letters,
+                "last_delivery_success_at": self.last_delivery_success_at,
+                "last_delivery_error_at": self.last_delivery_error_at,
+                "last_delivery_error_reason": self.last_delivery_error_reason,
             },
         }
         return self.outbox.replace_pending(HEARTBEAT_PATH, payload)
@@ -533,6 +598,8 @@ class SensorAgent:
                 baudrate=self.config.baud_rate,
                 timeout=1,
             )
+            self.source_connections += 1
+            self.source_connected_at = datetime.now(timezone.utc).isoformat()
             LOG.debug(
                 "connected to Sky-Spy source %s at %d baud",
                 self.config.source,
@@ -541,6 +608,9 @@ class SensorAgent:
         except (serial.SerialException, OSError) as exc:
             LOG.warning("cannot open Sky-Spy source %s: %s", self.config.source, exc)
             self.source_connection = None
+            self.source_connected_at = None
+            self.last_source_error_at = datetime.now(timezone.utc).isoformat()
+            self.last_source_error_reason = "open_failed"
             self.next_source_connect_monotonic = now + self.config.reconnect_seconds
 
     def disconnect_source(self) -> None:
@@ -550,6 +620,7 @@ class SensorAgent:
             except OSError:
                 LOG.debug("error while closing Sky-Spy source", exc_info=True)
         self.source_connection = None
+        self.source_connected_at = None
         self.next_source_connect_monotonic = (
             time.monotonic() + self.config.reconnect_seconds
         )
@@ -564,6 +635,8 @@ class SensorAgent:
             line = self.source_connection.readline()
         except (serial.SerialException, OSError) as exc:
             LOG.warning("Sky-Spy source disconnected: %s", exc)
+            self.last_source_error_at = datetime.now(timezone.utc).isoformat()
+            self.last_source_error_reason = "read_failed"
             self.disconnect_source()
             return
         if not line:
@@ -574,9 +647,10 @@ class SensorAgent:
         if detection is None:
             self.ignored_lines += 1
             return
+        self.parsed_detections += 1
         try:
             message_id = self.enqueue_detection(detection)
-            self.accepted_detections += 1
+            self.enqueued_observations += 1
             self.deliver_message_by_id(message_id)
         except OutboxFull as exc:
             LOG.error("detection rejected because %s", exc)
@@ -614,6 +688,26 @@ class SensorAgent:
         except (URLError, TimeoutError, OSError) as exc:
             return "retry", f"connection error: {exc}"
 
+    def record_delivery_outcome(self, outcome: str, error: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        if outcome == "accepted":
+            self.delivery_successes += 1
+            self.last_delivery_success_at = now
+            return
+        if outcome == "retry":
+            self.delivery_retries += 1
+        elif outcome == "discard":
+            self.delivery_discards += 1
+        elif outcome == "dead_letter":
+            self.delivery_dead_letters += 1
+        if error:
+            self.last_delivery_error_at = now
+            self.last_delivery_error_reason = (
+                "sensor_disabled"
+                if outcome == "discard"
+                else delivery_error_reason(error)
+            )
+
     def flush_outbox(self) -> int:
         now = time.monotonic()
         if now < self.next_replay_monotonic:
@@ -624,6 +718,7 @@ class SensorAgent:
             return 0
 
         outcome, error = self.post_message(message)
+        self.record_delivery_outcome(outcome, error)
         self.next_replay_monotonic = time.monotonic() + (
             1.0 / self.config.replay_messages_per_second
         )
@@ -667,6 +762,7 @@ class SensorAgent:
             return False
 
         outcome, error = self.post_message(message)
+        self.record_delivery_outcome(outcome, error)
         if outcome == "accepted":
             self.outbox.acknowledge(message.message_id)
             return True
@@ -733,7 +829,7 @@ class SensorAgent:
             LOG.info(
                 "agent stopped: lines=%d detections=%d ignored=%d queued=%d dead_letter=%d",
                 self.received_lines,
-                self.accepted_detections,
+                self.parsed_detections,
                 self.ignored_lines,
                 self.outbox.depth(),
                 self.outbox.dead_letter_depth(),

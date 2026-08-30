@@ -2224,6 +2224,66 @@ button.entity-card.selected {
   gap: 10px;
 }
 
+.sensor-diagnostic-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-bottom: 3px;
+}
+
+.sensor-diagnostic-check {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  background: rgba(20, 26, 35, 0.72);
+}
+
+.sensor-diagnostic-check span,
+.sensor-diagnostic-check strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.sensor-diagnostic-check span {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sensor-diagnostic-check strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.sensor-diagnostic-check.diagnostic-ok {
+  border-left: 3px solid var(--green);
+}
+
+.sensor-diagnostic-check.diagnostic-warning {
+  border-left: 3px solid var(--amber);
+}
+
+.sensor-diagnostic-check.diagnostic-error {
+  border-left: 3px solid var(--red);
+}
+
+.sensor-diagnostic-check.diagnostic-unknown {
+  border-left: 3px solid #778292;
+}
+
+.sensor-controls {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sensor-controls button {
+  width: 100%;
+}
+
 .track-controls {
   margin-top: 14px;
   padding-top: 12px;
@@ -2521,7 +2581,8 @@ html[data-theme="light"] .storage-panel,
 html[data-theme="light"] .alarm-training-tools,
 html[data-theme="light"] .alarm-audio-settings,
 html[data-theme="light"] .security-summary-card,
-html[data-theme="light"] .security-alert-message {
+html[data-theme="light"] .security-alert-message,
+html[data-theme="light"] .sensor-diagnostic-check {
   background: rgba(229, 236, 243, 0.72);
 }
 

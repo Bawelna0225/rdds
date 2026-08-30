@@ -70,10 +70,28 @@ Example:
     "uptime_seconds": 3600,
     "free_heap_bytes": 196000,
     "queue_depth": 0,
+    "queue_capacity": 250000,
+    "queue_oldest_age_seconds": null,
     "dead_letter_depth": 0,
-    "agent_version": "0.17.0",
+    "agent_version": "0.18.0",
+    "source_kind": "serial",
     "source_connected": true,
+    "source_connected_at": "2026-08-19T08:00:02Z",
     "source_last_message_at": "2026-08-19T08:44:58Z",
+    "source_last_error_at": null,
+    "source_last_error_reason": null,
+    "input_lines_total": 12800,
+    "parsed_detections_total": 9300,
+    "enqueued_observations_total": 9300,
+    "ignored_lines_total": 3500,
+    "source_connections_total": 1,
+    "delivery_success_total": 9360,
+    "delivery_retry_total": 0,
+    "delivery_discard_total": 0,
+    "delivery_dead_letter_total": 0,
+    "last_delivery_success_at": "2026-08-19T08:44:50Z",
+    "last_delivery_error_at": null,
+    "last_delivery_error_reason": null,
     "cellular_rssi": -67
   }
 }
@@ -84,6 +102,12 @@ The Stage 17 fields separate API connectivity from the local Sky-Spy source.
 backlog marks the sensor as degraded. Heartbeats are state snapshots: the agent
 coalesces queued heartbeat messages so delayed replay cannot overwrite newer
 health data.
+
+Stage 18 adds per-boot diagnostic counters and safe error categories. Counters
+are monotonic only within the `sensor.boot_id` process lifetime. Error fields do
+not contain exception text, credentials or response bodies. The API calculates
+clock offset from heartbeat `measured_at` and server `received_at`; the agent
+does not claim direct clock synchronization.
 
 ## Observation
 

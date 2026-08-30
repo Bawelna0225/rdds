@@ -58,16 +58,78 @@
             "uptime_seconds": { "type": ["integer", "null"], "minimum": 0 },
             "free_heap_bytes": { "type": ["integer", "null"], "minimum": 0 },
             "queue_depth": { "type": ["integer", "null"], "minimum": 0 },
+            "queue_capacity": { "type": ["integer", "null"], "minimum": 1 },
+            "queue_oldest_age_seconds": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
             "dead_letter_depth": { "type": ["integer", "null"], "minimum": 0 },
             "agent_version": {
               "type": ["string", "null"],
               "minLength": 1,
               "maxLength": 64
             },
+            "source_kind": {
+              "type": ["string", "null"],
+              "enum": ["serial", "socket", "loopback", "unknown", null]
+            },
             "source_connected": { "type": ["boolean", "null"] },
+            "source_connected_at": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
             "source_last_message_at": {
               "type": ["string", "null"],
               "format": "date-time"
+            },
+            "source_last_error_at": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "source_last_error_reason": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "input_lines_total": { "type": ["integer", "null"], "minimum": 0 },
+            "parsed_detections_total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "enqueued_observations_total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "ignored_lines_total": { "type": ["integer", "null"], "minimum": 0 },
+            "source_connections_total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "delivery_success_total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "delivery_retry_total": { "type": ["integer", "null"], "minimum": 0 },
+            "delivery_discard_total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "delivery_dead_letter_total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "last_delivery_success_at": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "last_delivery_error_at": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "last_delivery_error_reason": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 64
             },
             "cellular_rssi": {
               "type": ["integer", "null"],

@@ -12,6 +12,12 @@ INTERVAL_SECONDS = max(
 )
 CENTER_LAT = float(os.getenv("RDDS_SKYSPY_EMULATOR_CENTER_LAT", "52.229700"))
 CENTER_LON = float(os.getenv("RDDS_SKYSPY_EMULATOR_CENTER_LON", "21.012200"))
+FAULT_MODE = os.getenv("RDDS_SKYSPY_EMULATOR_FAULT_MODE", "normal").strip().lower()
+DISCONNECT_AFTER_MESSAGES = max(
+    1,
+    int(os.getenv("RDDS_SKYSPY_EMULATOR_DISCONNECT_AFTER_MESSAGES", "20")),
+)
+VALID_FAULT_MODES = {"normal", "silent", "malformed", "disconnect"}
 
 
 def offset_position(east_m: float, north_m: float) -> tuple[float, float]:
@@ -68,8 +74,32 @@ def send_line(connection: socket.socket, value: str | dict[str, object]) -> None
     connection.sendall(text.encode("utf-8") + b"\n")
 
 
+def validate_fault_mode(value: str) -> str:
+    if value not in VALID_FAULT_MODES:
+        choices = ", ".join(sorted(VALID_FAULT_MODES))
+        raise ValueError(f"invalid emulator fault mode {value!r}; expected one of {choices}")
+    return value
+
+
+def serve_silent_connection(connection: socket.socket) -> None:
+    print("Sky-Spy emulator fault mode: silent source", flush=True)
+    connection.settimeout(1.0)
+    while True:
+        try:
+            if connection.recv(1024) == b"":
+                return
+        except socket.timeout:
+            continue
+        except (ConnectionResetError, OSError):
+            return
+
+
 def serve_connection(connection: socket.socket, address: tuple[str, int]) -> None:
     print(f"Sky-Spy emulator client connected: {address}", flush=True)
+    fault_mode = validate_fault_mode(FAULT_MODE)
+    if fault_mode == "silent":
+        serve_silent_connection(connection)
+        return
     sequence = 0
     started = time.monotonic()
     try:
@@ -77,11 +107,25 @@ def serve_connection(connection: socket.socket, address: tuple[str, int]) -> Non
         send_line(connection, "Orange LED initialized on GPIO21 (inverted logic)")
         while True:
             sequence += 1
+            if fault_mode == "malformed":
+                send_line(connection, '{"malformed":')
+                time.sleep(INTERVAL_SECONDS)
+                continue
             if sequence % 15 == 0:
                 send_line(connection, {"status": "scanning"})
             if sequence % 23 == 0:
                 send_line(connection, "Heartbeat: Drone still in range")
             send_line(connection, detection(sequence))
+            if (
+                fault_mode == "disconnect"
+                and sequence >= DISCONNECT_AFTER_MESSAGES
+            ):
+                print(
+                    "Sky-Spy emulator fault mode: forced disconnect "
+                    f"after {sequence} messages",
+                    flush=True,
+                )
+                return
             if sequence % 30 == 0:
                 elapsed = round(time.monotonic() - started)
                 print(f"Emulated {sequence} packets in {elapsed}s", flush=True)
@@ -91,6 +135,7 @@ def serve_connection(connection: socket.socket, address: tuple[str, int]) -> Non
 
 
 def main() -> None:
+    validate_fault_mode(FAULT_MODE)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((HOST, PORT))

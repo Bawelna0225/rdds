@@ -34,20 +34,48 @@ class HeartbeatStatus(StrictModel):
     uptime_seconds: int | None = Field(default=None, ge=0)
     free_heap_bytes: int | None = Field(default=None, ge=0)
     queue_depth: int | None = Field(default=None, ge=0)
+    queue_capacity: int | None = Field(default=None, ge=1)
+    queue_oldest_age_seconds: int | None = Field(default=None, ge=0)
     dead_letter_depth: int | None = Field(default=None, ge=0)
     cellular_rssi: int | None = Field(default=None, ge=-150, le=0)
     agent_version: str | None = Field(default=None, min_length=1, max_length=64)
+    source_kind: Literal["serial", "socket", "loopback", "unknown"] | None = None
     source_connected: bool | None = None
+    source_connected_at: datetime | None = None
     source_last_message_at: datetime | None = None
+    source_last_error_at: datetime | None = None
+    source_last_error_reason: str | None = Field(default=None, min_length=1, max_length=64)
+    input_lines_total: int | None = Field(default=None, ge=0)
+    parsed_detections_total: int | None = Field(default=None, ge=0)
+    enqueued_observations_total: int | None = Field(default=None, ge=0)
+    ignored_lines_total: int | None = Field(default=None, ge=0)
+    source_connections_total: int | None = Field(default=None, ge=0)
+    delivery_success_total: int | None = Field(default=None, ge=0)
+    delivery_retry_total: int | None = Field(default=None, ge=0)
+    delivery_discard_total: int | None = Field(default=None, ge=0)
+    delivery_dead_letter_total: int | None = Field(default=None, ge=0)
+    last_delivery_success_at: datetime | None = None
+    last_delivery_error_at: datetime | None = None
+    last_delivery_error_reason: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+    )
 
-    @field_validator("source_last_message_at")
+    @field_validator(
+        "source_connected_at",
+        "source_last_message_at",
+        "source_last_error_at",
+        "last_delivery_success_at",
+        "last_delivery_error_at",
+    )
     @classmethod
-    def source_timestamp_must_include_timezone(
+    def diagnostic_timestamp_must_include_timezone(
         cls,
         value: datetime | None,
     ) -> datetime | None:
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise ValueError("source_last_message_at must include a UTC offset")
+            raise ValueError("diagnostic timestamps must include a UTC offset")
         return value
 
 

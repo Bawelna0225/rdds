@@ -48,7 +48,27 @@ SENSOR_COLUMNS = """
     credential.last_used_at AS token_last_used_at,
     heartbeat.uptime_seconds,
     heartbeat.free_heap_bytes,
-    heartbeat.cellular_rssi
+    heartbeat.cellular_rssi,
+    heartbeat.sensor_boot_id AS agent_boot_id,
+    heartbeat.source_kind,
+    heartbeat.source_connected_at,
+    heartbeat.source_last_error_at,
+    heartbeat.source_last_error_reason,
+    heartbeat.input_lines_total,
+    heartbeat.parsed_detections_total,
+    heartbeat.enqueued_observations_total,
+    heartbeat.ignored_lines_total,
+    heartbeat.source_connections_total,
+    heartbeat.queue_capacity,
+    heartbeat.queue_oldest_age_seconds,
+    heartbeat.delivery_success_total,
+    heartbeat.delivery_retry_total,
+    heartbeat.delivery_discard_total,
+    heartbeat.delivery_dead_letter_total,
+    heartbeat.last_delivery_success_at,
+    heartbeat.last_delivery_error_at,
+    heartbeat.last_delivery_error_reason,
+    heartbeat.clock_offset_seconds
 """
 
 SENSOR_JOINS = """
@@ -68,7 +88,31 @@ SENSOR_JOINS = """
         SELECT
             latest_heartbeat.uptime_seconds,
             latest_heartbeat.free_heap_bytes,
-            latest_heartbeat.cellular_rssi
+            latest_heartbeat.cellular_rssi,
+            latest_heartbeat.sensor_boot_id,
+            latest_heartbeat.source_kind,
+            latest_heartbeat.source_connected_at,
+            latest_heartbeat.source_last_error_at,
+            latest_heartbeat.source_last_error_reason,
+            latest_heartbeat.input_lines_total,
+            latest_heartbeat.parsed_detections_total,
+            latest_heartbeat.enqueued_observations_total,
+            latest_heartbeat.ignored_lines_total,
+            latest_heartbeat.source_connections_total,
+            latest_heartbeat.queue_capacity,
+            latest_heartbeat.queue_oldest_age_seconds,
+            latest_heartbeat.delivery_success_total,
+            latest_heartbeat.delivery_retry_total,
+            latest_heartbeat.delivery_discard_total,
+            latest_heartbeat.delivery_dead_letter_total,
+            latest_heartbeat.last_delivery_success_at,
+            latest_heartbeat.last_delivery_error_at,
+            latest_heartbeat.last_delivery_error_reason,
+            EXTRACT(
+                EPOCH FROM (
+                    latest_heartbeat.received_at - latest_heartbeat.measured_at
+                )
+            )::DOUBLE PRECISION AS clock_offset_seconds
         FROM sensor_heartbeats AS latest_heartbeat
         WHERE latest_heartbeat.sensor_id = sensor.id
         ORDER BY latest_heartbeat.measured_at DESC, latest_heartbeat.received_at DESC

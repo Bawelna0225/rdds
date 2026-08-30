@@ -119,6 +119,34 @@ class HealthAssessmentTests(unittest.TestCase):
         )
         self.assertEqual("queue_backlog", result.reason)
 
+    def test_latest_delivery_error_marks_api_path_degraded(self) -> None:
+        result = assess_heartbeat(
+            HeartbeatStatus(
+                source_connected=True,
+                last_delivery_success_at=self.reported_at - timedelta(minutes=2),
+                last_delivery_error_at=self.reported_at - timedelta(minutes=1),
+                last_delivery_error_reason="connection_failed",
+            ),
+            queue_warning_messages=100,
+            source_silent_after_seconds=90,
+            reported_at=self.reported_at,
+        )
+        self.assertEqual(("degraded", "api_delivery_failed"), (result.state, result.reason))
+
+    def test_recovery_after_delivery_error_is_healthy(self) -> None:
+        result = assess_heartbeat(
+            HeartbeatStatus(
+                source_connected=True,
+                last_delivery_success_at=self.reported_at - timedelta(seconds=10),
+                last_delivery_error_at=self.reported_at - timedelta(minutes=1),
+                last_delivery_error_reason="connection_failed",
+            ),
+            queue_warning_messages=100,
+            source_silent_after_seconds=90,
+            reported_at=self.reported_at,
+        )
+        self.assertEqual(("online", "healthy"), (result.state, result.reason))
+
     def test_open_but_silent_source_is_degraded_after_grace_period(self) -> None:
         result = assess_heartbeat(
             HeartbeatStatus(
@@ -169,10 +197,23 @@ class HealthPersistenceTests(unittest.TestCase):
                     "timestamp": "2026-08-26T12:00:00+00:00",
                 },
                 "status": {
-                    "agent_version": "0.17.0",
+                    "agent_version": "0.18.0",
                     "source_connected": False,
+                    "source_kind": "serial",
                     "queue_depth": 3,
+                    "queue_capacity": 250000,
+                    "queue_oldest_age_seconds": 12,
                     "dead_letter_depth": 0,
+                    "input_lines_total": 100,
+                    "parsed_detections_total": 80,
+                    "enqueued_observations_total": 79,
+                    "ignored_lines_total": 20,
+                    "source_connections_total": 2,
+                    "delivery_success_total": 75,
+                    "delivery_retry_total": 4,
+                    "delivery_discard_total": 0,
+                    "delivery_dead_letter_total": 0,
+                    "last_delivery_success_at": "2026-08-26T11:59:50+00:00",
                 },
             }
         )
@@ -193,6 +234,9 @@ class HealthPersistenceTests(unittest.TestCase):
         health_update = cursor.queries[2]
         self.assertIn("dead_letter_depth", heartbeat_insert)
         self.assertIn("source_connected", heartbeat_insert)
+        self.assertIn("parsed_detections_total", heartbeat_insert)
+        self.assertIn("delivery_success_total", heartbeat_insert)
+        self.assertIn("queue_oldest_age_seconds", heartbeat_insert)
         self.assertIn("last_heartbeat_reported_at < %(reported_at)s", health_update)
         self.assertIn("status IN ('disabled', 'maintenance')", health_update)
         self.assertEqual("degraded", cursor.parameters[2]["health_state"])

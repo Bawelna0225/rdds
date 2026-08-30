@@ -13,6 +13,11 @@ TRACK_DETECTION_MIGRATION = (
 SENSOR_SUPERVISION_MIGRATION = (
     PROJECT_ROOT / "database" / "migrations" / "015_sensor_supervision.sql"
 )
+SENSOR_DIAGNOSTICS_MIGRATION = (
+    PROJECT_ROOT / "database" / "migrations" / "016_sensor_diagnostics.sql"
+)
+SKYSPY_EMULATOR = PROJECT_ROOT / "skyspy-emulator" / "main.py"
+COMPOSE_SOURCE = PROJECT_ROOT / "compose.yaml"
 
 
 class WebRefreshBoundaryTests(unittest.TestCase):
@@ -27,6 +32,11 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         cls.sensor_supervision_migration = SENSOR_SUPERVISION_MIGRATION.read_text(
             encoding="utf-8"
         )
+        cls.sensor_diagnostics_migration = SENSOR_DIAGNOSTICS_MIGRATION.read_text(
+            encoding="utf-8"
+        )
+        cls.skyspy_emulator = SKYSPY_EMULATOR.read_text(encoding="utf-8")
+        cls.compose_source = COMPOSE_SOURCE.read_text(encoding="utf-8")
         match = re.search(
             r"async function refresh\(.*?\n}\n\nelements\.closedAlertApply",
             cls.source,
@@ -384,6 +394,41 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         self.assertIn(".sensor-meta {", self.styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr) auto", self.styles)
         self.assertIn("overflow-wrap: anywhere", self.styles)
+
+    def test_sensor_diagnostics_are_grouped_and_exportable(self) -> None:
+        self.assertIn('id="sensor-controls"', self.index)
+        self.assertIn('id="sensor-diagnostics-export"', self.index)
+        self.assertIn("function sensorDiagnosticSummary(sensor)", self.source)
+        self.assertIn("function downloadSelectedSensorDiagnostics()", self.source)
+        for heading in ("Stan operacyjny", "Agent", "Sky-Spy → agent", "Agent → RDDS"):
+            with self.subTest(heading=heading):
+                self.assertIn(f'detailSection("{heading}")', self.source)
+        self.assertIn("sensor-diagnostic-summary", self.styles)
+        self.assertNotIn('"token_prefix",', self.source.split("const fields = [", 1)[1].split("];", 1)[0])
+
+    def test_sensor_diagnostic_migration_keeps_counters_in_heartbeats(self) -> None:
+        for field in (
+            "input_lines_total",
+            "parsed_detections_total",
+            "enqueued_observations_total",
+            "delivery_success_total",
+            "delivery_retry_total",
+            "queue_oldest_age_seconds",
+            "last_delivery_error_reason",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, self.sensor_diagnostics_migration)
+        self.assertNotIn("ALTER TABLE sensors\n", self.sensor_diagnostics_migration)
+
+    def test_skyspy_emulator_has_controlled_fault_modes(self) -> None:
+        for mode in ("normal", "silent", "malformed", "disconnect"):
+            with self.subTest(mode=mode):
+                self.assertIn(f'"{mode}"', self.skyspy_emulator)
+        self.assertIn("RDDS_SKYSPY_EMULATOR_FAULT_MODE", self.compose_source)
+        self.assertIn(
+            "RDDS_SKYSPY_EMULATOR_DISCONNECT_AFTER_MESSAGES",
+            self.compose_source,
+        )
 
     def test_sidebar_lists_scroll_without_squashing_cards_and_sections_are_divided(self) -> None:
         self.assertIn(".entity-list > .entity-card", self.styles)
