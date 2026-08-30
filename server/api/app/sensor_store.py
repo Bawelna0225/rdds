@@ -167,6 +167,48 @@ def list_sensors() -> list[dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
 
 
+def list_sensor_health_overview() -> list[dict[str, Any]]:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT
+                {SENSOR_COLUMNS},
+                COALESCE(health_24h.issue_starts_24h, 0) AS issue_starts_24h,
+                COALESCE(health_24h.health_changes_24h, 0) AS health_changes_24h,
+                COALESCE(health_24h.recoveries_24h, 0) AS recoveries_24h,
+                health_24h.last_health_event_at
+            FROM sensors AS sensor
+            {SENSOR_JOINS}
+            LEFT JOIN (
+                SELECT
+                    sensor_id,
+                    COUNT(*) FILTER (
+                        WHERE event_type IN ('sensor_degraded', 'sensor_offline')
+                    )::INTEGER AS issue_starts_24h,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'sensor_health_changed'
+                    )::INTEGER AS health_changes_24h,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'sensor_recovered'
+                    )::INTEGER AS recoveries_24h,
+                    MAX(occurred_at) AS last_health_event_at
+                FROM audit_events
+                WHERE occurred_at >= NOW() - INTERVAL '24 hours'
+                  AND event_type IN (
+                      'sensor_degraded',
+                      'sensor_offline',
+                      'sensor_health_changed',
+                      'sensor_recovered'
+                  )
+                GROUP BY sensor_id
+            ) AS health_24h ON health_24h.sensor_id = sensor.id
+            WHERE sensor.deleted_at IS NULL
+            ORDER BY sensor.sensor_key
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_sensor_quality_history(
     sensor_id: UUID,
     limit: int,

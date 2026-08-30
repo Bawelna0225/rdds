@@ -157,6 +157,42 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         self.assertIn("reported_quality_ignored_ratio", self.sensor_stream_quality_migration)
         self.assertIn("OLD.health_reason IS DISTINCT FROM NEW.health_reason", self.sensor_stream_quality_migration)
 
+    def test_sensor_health_overview_is_loaded_only_on_demand(self) -> None:
+        self.assertIn('id="sensor-overview-open"', self.index)
+        self.assertIn('id="sensor-overview-panel"', self.index)
+        self.assertIn('id="sensor-overview-list"', self.index)
+        self.assertIn("async function loadSensorOverview", self.source)
+        self.assertIn('/api/v1/sensors/health-overview', self.source)
+        self.assertNotIn('/api/v1/sensors/health-overview', self.live_refresh)
+        self.assertIn("mergeSensorOverviewWithLive", self.live_refresh)
+
+    def test_sensor_health_overview_prioritizes_issues_and_opens_sensor(self) -> None:
+        self.assertIn("function sensorOverviewPriority", self.source)
+        priority = self.source.split(
+            "function sensorOverviewPriority", 1,
+        )[1].split("function sensorOverviewQuality", 1)[0]
+        self.assertLess(priority.index("offline: 0"), priority.index("degraded: 1"))
+        self.assertLess(priority.index("degraded: 1"), priority.index("online: 3"))
+        self.assertIn('row.dataset.sensorId = String(sensor.id)', self.source)
+        self.assertIn("closeSensorOverview({ restoreFocus: false });", self.source)
+        self.assertIn("focusSensorInSidebar(sensor.id);", self.source)
+
+    def test_sensor_health_overview_has_filters_sticky_header_and_theme(self) -> None:
+        for control in (
+            "sensor-overview-search",
+            "sensor-overview-filter",
+            "sensor-overview-sort",
+            "sensor-overview-refresh",
+        ):
+            with self.subTest(control=control):
+                self.assertIn(f'id="{control}"', self.index)
+        overview_header = self.styles.split(
+            ".sensor-overview-header {", 1,
+        )[1].split("}", 1)[0]
+        self.assertIn("position: sticky", overview_header)
+        self.assertIn('html[data-theme="light"] .sensor-overview-panel', self.styles)
+        self.assertIn('html[data-theme="light"] .sensor-overview-row', self.styles)
+
     def test_selection_close_action_stays_visible_while_details_scroll(self) -> None:
         self.assertIn('class="selection-header"', self.index)
         self.assertIn('id="close-selection"', self.index)

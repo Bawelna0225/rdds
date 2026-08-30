@@ -73,7 +73,7 @@ Example:
     "queue_capacity": 250000,
     "queue_oldest_age_seconds": null,
     "dead_letter_depth": 0,
-    "agent_version": "0.19.0",
+    "agent_version": "0.20.0",
     "source_kind": "serial",
     "source_connected": true,
     "source_connected_at": "2026-08-19T08:00:02Z",

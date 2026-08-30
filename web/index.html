@@ -257,10 +257,20 @@
       <div class="workspace">
         <aside id="sidebar" class="sidebar">
           <div class="summary-grid">
-            <div class="summary-card">
+            <button
+              id="sensor-overview-open"
+              class="summary-card summary-card-action"
+              type="button"
+              aria-controls="sensor-overview-panel"
+              aria-expanded="false"
+              title="Otwórz zbiorczą kondycję sensorów"
+            >
               <span>Sensory sprawne</span>
-              <strong id="online-sensors">0</strong>
-            </div>
+              <span class="summary-card-value">
+                <strong id="online-sensors">0</strong>
+                <span class="summary-card-arrow" aria-hidden="true">›</span>
+              </span>
+            </button>
             <div class="summary-card">
               <span>Aktywne drony</span>
               <strong id="active-tracks">0</strong>
@@ -467,6 +477,96 @@
             <div><span class="legend-symbol zone-critical"></span>Strefa krytyczna</div>
             <div><span class="legend-symbol alert"></span>Alarm aktywny</div>
           </div>
+
+          <section
+            id="sensor-overview-panel"
+            class="sensor-overview-panel hidden"
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="sensor-overview-title"
+          >
+            <div class="sensor-overview-header">
+              <div class="selection-heading">
+                <p class="eyebrow">Stan całej sieci</p>
+                <h2 id="sensor-overview-title">Kondycja sensorów</h2>
+                <p id="sensor-overview-updated" class="sensor-overview-updated">
+                  Dane 24 h zostaną pobrane po otwarciu
+                </p>
+              </div>
+              <div class="sensor-overview-header-actions">
+                <button
+                  id="sensor-overview-refresh"
+                  type="button"
+                  class="secondary-button"
+                >
+                  Odśwież
+                </button>
+                <button id="sensor-overview-close" type="button" aria-label="Zamknij">×</button>
+              </div>
+            </div>
+
+            <div class="sensor-overview-summary" aria-label="Podsumowanie sensorów">
+              <div class="sensor-overview-stat stat-online">
+                <span>Sprawne</span><strong id="sensor-overview-online">0</strong>
+              </div>
+              <div class="sensor-overview-stat stat-degraded">
+                <span>Ograniczone</span><strong id="sensor-overview-degraded">0</strong>
+              </div>
+              <div class="sensor-overview-stat stat-offline">
+                <span>Offline</span><strong id="sensor-overview-offline">0</strong>
+              </div>
+              <div class="sensor-overview-stat stat-maintenance">
+                <span>Poza nadzorem</span><strong id="sensor-overview-maintenance">0</strong>
+              </div>
+              <div class="sensor-overview-stat stat-issues">
+                <span>Nowe usterki 24 h</span><strong id="sensor-overview-issues">0</strong>
+              </div>
+            </div>
+
+            <div class="sensor-overview-toolbar">
+              <label>
+                <span>Szukaj</span>
+                <input
+                  id="sensor-overview-search"
+                  type="search"
+                  autocomplete="off"
+                  placeholder="Nazwa lub identyfikator"
+                />
+              </label>
+              <label>
+                <span>Widok</span>
+                <select id="sensor-overview-filter">
+                  <option value="all">Wszystkie sensory</option>
+                  <option value="issues">Wymagające uwagi</option>
+                  <option value="online">Sprawne</option>
+                  <option value="maintenance">Konserwacja i wyłączone</option>
+                </select>
+              </label>
+              <label>
+                <span>Sortowanie</span>
+                <select id="sensor-overview-sort">
+                  <option value="priority">Priorytet operacyjny</option>
+                  <option value="name">Nazwa</option>
+                  <option value="issues">Usterki w 24 h</option>
+                  <option value="heartbeat">Ostatni heartbeat</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="sensor-overview-table-wrap">
+              <div class="sensor-overview-columns" aria-hidden="true">
+                <span>Sensor</span>
+                <span>Stan</span>
+                <span>Tor detekcji</span>
+                <span>Jakość</span>
+                <span>Rozłączenia</span>
+                <span>Kolejka</span>
+                <span>Heartbeat</span>
+                <span>Usterki 24 h</span>
+              </div>
+              <div id="sensor-overview-list" class="sensor-overview-list"></div>
+            </div>
+          </section>
 
           <section id="selection-panel" class="selection-panel hidden">
             <div class="selection-header">

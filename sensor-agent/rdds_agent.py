@@ -24,7 +24,7 @@ except ImportError:  # Allows parser/outbox unit tests without pyserial on the h
 
 LOG = logging.getLogger("rdds-sensor-agent")
 PROTOCOL_VERSION = "rdds/1.0"
-AGENT_VERSION = "0.19.0"
+AGENT_VERSION = "0.20.0"
 OBSERVATION_PATH = "/api/v1/ingest/observation"
 HEARTBEAT_PATH = "/api/v1/ingest/heartbeat"
 RETRYABLE_HTTP_CODES = {401, 403, 408, 425, 429}

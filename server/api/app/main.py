@@ -91,6 +91,7 @@ from app.security_store import (
 from app.sensor_store import (
     delete_sensor,
     get_sensor_quality_history,
+    list_sensor_health_overview,
     list_sensors,
     register_sensor,
     rotate_sensor_token,
@@ -133,7 +134,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.19.0",
+    version="0.20.0",
     lifespan=lifespan,
 )
 
@@ -624,6 +625,25 @@ def get_sensors() -> dict[str, object]:
 
     return {
         "time": utc_now(),
+        "sensors": sensors,
+    }
+
+
+@app.get(
+    "/api/v1/sensors/health-overview",
+    tags=["sensors"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_health_overview() -> dict[str, object]:
+    try:
+        sensors = list_sensor_health_overview()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor health overview query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "window_hours": 24,
         "sensors": sensors,
     }
 

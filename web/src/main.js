@@ -240,6 +240,7 @@ const elements = {
   alarmAudioVolume: document.querySelector("#alarm-audio-volume"),
   alarmAudioVolumeValue: document.querySelector("#alarm-audio-volume-value"),
   alarmAudioRepeat: document.querySelector("#alarm-audio-repeat"),
+  sensorOverviewOpen: document.querySelector("#sensor-overview-open"),
   onlineSensors: document.querySelector("#online-sensors"),
   activeTracks: document.querySelector("#active-tracks"),
   openAlerts: document.querySelector("#open-alerts"),
@@ -336,6 +337,19 @@ const elements = {
   auditExportCsv: document.querySelector("#audit-export-csv"),
   auditExportJson: document.querySelector("#audit-export-json"),
   fitMap: document.querySelector("#fit-map"),
+  sensorOverviewPanel: document.querySelector("#sensor-overview-panel"),
+  sensorOverviewClose: document.querySelector("#sensor-overview-close"),
+  sensorOverviewRefresh: document.querySelector("#sensor-overview-refresh"),
+  sensorOverviewUpdated: document.querySelector("#sensor-overview-updated"),
+  sensorOverviewSearch: document.querySelector("#sensor-overview-search"),
+  sensorOverviewFilter: document.querySelector("#sensor-overview-filter"),
+  sensorOverviewSort: document.querySelector("#sensor-overview-sort"),
+  sensorOverviewOnline: document.querySelector("#sensor-overview-online"),
+  sensorOverviewDegraded: document.querySelector("#sensor-overview-degraded"),
+  sensorOverviewOffline: document.querySelector("#sensor-overview-offline"),
+  sensorOverviewMaintenance: document.querySelector("#sensor-overview-maintenance"),
+  sensorOverviewIssues: document.querySelector("#sensor-overview-issues"),
+  sensorOverviewList: document.querySelector("#sensor-overview-list"),
   selectionPanel: document.querySelector("#selection-panel"),
   selectionEyebrow: document.querySelector("#selection-eyebrow"),
   selectionTitle: document.querySelector("#selection-title"),
@@ -423,6 +437,10 @@ const trackLayers = new Map();
 const liveTrailLayers = new Map();
 const zoneLayers = new Map();
 let currentSensors = [];
+let sensorOverviewRows = [];
+let sensorOverviewLoaded = false;
+let sensorOverviewLoading = false;
+let sensorOverviewLoadedAt = null;
 let currentTracks = [];
 let currentLiveTracks = [];
 let currentArchivedTracks = [];
@@ -2185,6 +2203,7 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   cancelZoneDrawing();
   cancelSensorRegistration();
   closeSensorToken();
+  closeSensorOverview({ restoreFocus: false });
   elements.operatorEditor.classList.add("hidden");
   elements.securityEditor.classList.add("hidden");
   currentUser = null;
@@ -2192,6 +2211,9 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   initialLiveDataLoaded = false;
   zonesLoaded = false;
   currentSensors = [];
+  sensorOverviewRows = [];
+  sensorOverviewLoaded = false;
+  sensorOverviewLoadedAt = null;
   currentTracks = [];
   currentLiveTracks = [];
   currentArchivedTracks = [];
@@ -2949,6 +2971,248 @@ function renderSensorList(sensors) {
   }
 }
 
+
+function formatRelativeAge(value) {
+  const timestamp = Date.parse(value ?? "");
+  if (!Number.isFinite(timestamp)) {
+    return "—";
+  }
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 10) return "teraz";
+  if (seconds < 60) return `${seconds} s temu`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min temu`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h temu`;
+  return `${Math.floor(hours / 24)} d temu`;
+}
+
+function sensorOverviewPriority(sensor) {
+  return ({
+    offline: 0,
+    degraded: 1,
+    provisioning: 2,
+    online: 3,
+    maintenance: 4,
+    disabled: 5,
+  })[sensor.status] ?? 2;
+}
+
+function sensorOverviewQuality(sensor) {
+  if (sensor.status === "maintenance" || sensor.status === "disabled") {
+    return "—";
+  }
+  const ratio = Number(sensor.quality_ignored_ratio);
+  const inputLines = Number(sensor.quality_input_lines);
+  if (!Number.isFinite(ratio) || !Number.isFinite(inputLines) || inputLines <= 0) {
+    return "rozgrzewanie";
+  }
+  return `${Math.max(0, (1 - ratio) * 100).toFixed(1)}%`;
+}
+
+function sensorOverviewSource(sensor) {
+  if (sensor.status === "disabled") return "wyłączony";
+  if (sensor.status === "maintenance") return "konserwacja";
+  if (sensor.source_connected === false) return "Sky-Spy rozłączony";
+  return sensorHealthReasonLabel(sensor.health_reason);
+}
+
+function mergeSensorOverviewWithLive() {
+  if (!sensorOverviewLoaded) return;
+  if (!initialLiveDataLoaded && currentSensors.length === 0) return;
+  const historyById = new Map(
+    sensorOverviewRows.map((sensor) => [String(sensor.id), sensor]),
+  );
+  sensorOverviewRows = currentSensors.map((sensor) => {
+    const historical = historyById.get(String(sensor.id)) ?? {};
+    return {
+      issue_starts_24h: 0,
+      health_changes_24h: 0,
+      recoveries_24h: 0,
+      last_health_event_at: null,
+      ...historical,
+      ...sensor,
+    };
+  });
+}
+
+function filteredSensorOverviewRows() {
+  const query = elements.sensorOverviewSearch.value.trim().toLocaleLowerCase("pl-PL");
+  const filter = elements.sensorOverviewFilter.value;
+  const rows = sensorOverviewRows.filter((sensor) => {
+    const matchesQuery = !query || [sensor.display_name, sensor.sensor_id]
+      .some((value) => String(value ?? "").toLocaleLowerCase("pl-PL").includes(query));
+    if (!matchesQuery) return false;
+    if (filter === "issues") {
+      return ["offline", "degraded", "provisioning"].includes(sensor.status);
+    }
+    if (filter === "online") return sensor.status === "online";
+    if (filter === "maintenance") {
+      return sensor.status === "maintenance" || sensor.status === "disabled";
+    }
+    return true;
+  });
+
+  const byName = (left, right) => String(
+    left.display_name || left.sensor_id,
+  ).localeCompare(String(right.display_name || right.sensor_id), "pl-PL");
+  const sort = elements.sensorOverviewSort.value;
+  rows.sort((left, right) => {
+    if (sort === "name") return byName(left, right);
+    if (sort === "issues") {
+      return Number(right.issue_starts_24h || 0) - Number(left.issue_starts_24h || 0)
+        || sensorOverviewPriority(left) - sensorOverviewPriority(right)
+        || byName(left, right);
+    }
+    if (sort === "heartbeat") {
+      const leftHeartbeat = Date.parse(left.last_heartbeat_at ?? "");
+      const rightHeartbeat = Date.parse(right.last_heartbeat_at ?? "");
+      return (Number.isFinite(rightHeartbeat) ? rightHeartbeat : -Infinity)
+        - (Number.isFinite(leftHeartbeat) ? leftHeartbeat : -Infinity)
+        || byName(left, right);
+    }
+    return sensorOverviewPriority(left) - sensorOverviewPriority(right)
+      || Number(right.issue_starts_24h || 0) - Number(left.issue_starts_24h || 0)
+      || byName(left, right);
+  });
+  return rows;
+}
+
+function sensorOverviewCell(primary, secondary = "") {
+  const cell = document.createElement("span");
+  cell.className = "sensor-overview-cell";
+  const value = document.createElement("strong");
+  value.textContent = primary;
+  cell.append(value);
+  if (secondary) {
+    const detail = document.createElement("small");
+    detail.textContent = secondary;
+    cell.append(detail);
+  }
+  return cell;
+}
+
+function renderSensorOverview() {
+  const sensors = sensorOverviewRows;
+  elements.sensorOverviewOnline.textContent = String(
+    sensors.filter((sensor) => sensor.status === "online").length,
+  );
+  elements.sensorOverviewDegraded.textContent = String(
+    sensors.filter((sensor) => sensor.status === "degraded").length,
+  );
+  elements.sensorOverviewOffline.textContent = String(
+    sensors.filter((sensor) => sensor.status === "offline").length,
+  );
+  elements.sensorOverviewMaintenance.textContent = String(
+    sensors.filter((sensor) => ["maintenance", "disabled"].includes(sensor.status)).length,
+  );
+  elements.sensorOverviewIssues.textContent = String(
+    sensors.reduce((total, sensor) => total + Number(sensor.issue_starts_24h || 0), 0),
+  );
+
+  const visibleRows = filteredSensorOverviewRows();
+  elements.sensorOverviewList.replaceChildren();
+  elements.sensorOverviewList.classList.toggle("empty-state", visibleRows.length === 0);
+  if (visibleRows.length === 0) {
+    elements.sensorOverviewList.textContent = sensorOverviewLoaded
+      ? "Brak sensorów spełniających wybrane kryteria."
+      : "Brak danych o sensorach.";
+    return;
+  }
+
+  for (const sensor of visibleRows) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `sensor-overview-row sensor-${sensor.status}`;
+    row.dataset.sensorId = String(sensor.id);
+    row.title = `Otwórz szczegóły sensora ${sensor.display_name || sensor.sensor_id}`;
+    const issueStarts = Number(sensor.issue_starts_24h || 0);
+    const healthChanges = Number(sensor.health_changes_24h || 0);
+    const recoveries = Number(sensor.recoveries_24h || 0);
+    const supervisionLabel = sensor.status === "online"
+      ? "bez usterek"
+      : ["maintenance", "disabled"].includes(sensor.status)
+        ? "poza nadzorem"
+        : "wymaga uwagi";
+    row.append(
+      sensorOverviewCell(sensor.display_name || sensor.sensor_id, sensor.sensor_id),
+      sensorOverviewCell(stateLabel(sensor.status), supervisionLabel),
+      sensorOverviewCell(sensorOverviewSource(sensor), sourceKindLabel(sensor.source_kind)),
+      sensorOverviewCell(sensorOverviewQuality(sensor), `${formatInteger(sensor.quality_input_lines)} linii`),
+      sensorOverviewCell(formatInteger(sensor.quality_reconnects), "w bieżącym oknie"),
+      sensorOverviewCell(
+        `${formatInteger(sensor.queue_depth)} / ${formatInteger(sensor.dead_letter_depth)}`,
+        "oczekujące / błędy",
+      ),
+      sensorOverviewCell(formatRelativeAge(sensor.last_heartbeat_at), formatCompactDateTime(sensor.last_heartbeat_at)),
+      sensorOverviewCell(String(issueStarts), `${healthChanges} zmian · ${recoveries} powrotów`),
+    );
+    row.addEventListener("click", () => {
+      closeSensorOverview({ restoreFocus: false });
+      focusSensorInSidebar(sensor.id);
+    });
+    elements.sensorOverviewList.append(row);
+  }
+}
+
+async function loadSensorOverview({ showLoader = true } = {}) {
+  if (sensorOverviewLoading) return;
+  sensorOverviewLoading = true;
+  elements.sensorOverviewRefresh.disabled = true;
+  if (showLoader) {
+    elements.sensorOverviewList.classList.remove("empty-state");
+    elements.sensorOverviewList.textContent = "Pobieranie kondycji sensorów…";
+  }
+  try {
+    const payload = await fetchJson("/api/v1/sensors/health-overview");
+    sensorOverviewRows = payload.sensors ?? [];
+    sensorOverviewLoaded = true;
+    sensorOverviewLoadedAt = payload.time ?? new Date().toISOString();
+    mergeSensorOverviewWithLive();
+    elements.sensorOverviewUpdated.textContent =
+      `Stan bieżący i zdarzenia z ${payload.window_hours ?? 24} h · `
+      + `aktualizacja ${formatTime(sensorOverviewLoadedAt)}`;
+    renderSensorOverview();
+  } catch (error) {
+    if (!sensorOverviewLoaded) {
+      elements.sensorOverviewList.classList.add("empty-state");
+      elements.sensorOverviewList.textContent = "Nie udało się pobrać kondycji sensorów.";
+    } else {
+      elements.sensorOverviewUpdated.textContent =
+        `Ostatnie poprawne dane: ${formatTime(sensorOverviewLoadedAt)} · odświeżenie nieudane`;
+      renderSensorOverview();
+    }
+    showToast(`Zestawienie sensorów jest niedostępne: ${error.message}`, true);
+  } finally {
+    sensorOverviewLoading = false;
+    elements.sensorOverviewRefresh.disabled = false;
+  }
+}
+
+function openSensorOverview() {
+  if (
+    !elements.zoneEditor.classList.contains("hidden")
+    || !elements.sensorEditor.classList.contains("hidden")
+    || !elements.sensorTokenPanel.classList.contains("hidden")
+  ) {
+    showToast("Zakończ lub anuluj bieżącą edycję przed otwarciem zestawienia.", true);
+    return;
+  }
+  clearSelection();
+  elements.sensorOverviewPanel.classList.remove("hidden");
+  elements.sensorOverviewOpen.setAttribute("aria-expanded", "true");
+  elements.sensorOverviewSearch.focus();
+  void loadSensorOverview();
+}
+
+function closeSensorOverview({ restoreFocus = true } = {}) {
+  if (elements.sensorOverviewPanel.classList.contains("hidden")) return;
+  elements.sensorOverviewPanel.classList.add("hidden");
+  elements.sensorOverviewOpen.setAttribute("aria-expanded", "false");
+  if (restoreFocus) elements.sensorOverviewOpen.focus();
+}
+
+
 async function runZoneStateChange(zone, active, button) {
   button.disabled = true;
   try {
@@ -3037,6 +3301,7 @@ function focusSensorInSidebar(sensorId, { scroll = true } = {}) {
     return;
   }
 
+  closeSensorOverview({ restoreFocus: false });
   setSidebarHidden(false);
   if (elements.sensorsSection.classList.contains("collapsed")) {
     setSectionCollapsed(elements.sensorsSection, false);
@@ -4999,6 +5264,10 @@ async function refresh({ initial = false } = {}) {
 
     currentSensors = sensorPayload.sensors ?? [];
     processSensorHealth(currentSensors);
+    mergeSensorOverviewWithLive();
+    if (!elements.sensorOverviewPanel.classList.contains("hidden")) {
+      renderSensorOverview();
+    }
     currentLiveTracks = (trackPayload.tracks ?? []).filter(
       (track) => track.state !== "ended",
     );
@@ -5143,6 +5412,14 @@ elements.auditRefresh.addEventListener("click", () => void loadAuditEvents());
 elements.auditExportCsv.addEventListener("click", () => downloadAudit("csv"));
 elements.auditExportJson.addEventListener("click", () => downloadAudit("json"));
 elements.fitMap.addEventListener("click", fitAllEntities);
+elements.sensorOverviewOpen.addEventListener("click", openSensorOverview);
+elements.sensorOverviewClose.addEventListener("click", () => closeSensorOverview());
+elements.sensorOverviewRefresh.addEventListener("click", () => {
+  void loadSensorOverview();
+});
+elements.sensorOverviewSearch.addEventListener("input", renderSensorOverview);
+elements.sensorOverviewFilter.addEventListener("change", renderSensorOverview);
+elements.sensorOverviewSort.addEventListener("change", renderSensorOverview);
 elements.closeSelection.addEventListener("click", clearSelection);
 elements.sensorDiagnosticsExport.addEventListener(
   "click",
@@ -5234,7 +5511,12 @@ document.addEventListener("click", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !elements.zoneEditor.classList.contains("hidden")) {
+  if (
+    event.key === "Escape" &&
+    !elements.sensorOverviewPanel.classList.contains("hidden")
+  ) {
+    closeSensorOverview();
+  } else if (event.key === "Escape" && !elements.zoneEditor.classList.contains("hidden")) {
     cancelZoneDrawing();
   } else if (
     event.key === "Escape" &&

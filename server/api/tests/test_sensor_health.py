@@ -294,6 +294,35 @@ class HealthModelTests(unittest.TestCase):
 
 
 class HealthPersistenceTests(unittest.TestCase):
+    def test_health_overview_aggregates_audit_events_for_last_24_hours(self) -> None:
+        sensor_id = uuid4()
+        cursor = FakeCursor(
+            rows=[
+                {
+                    "id": sensor_id,
+                    "sensor_id": "skyspy-sensor-01",
+                    "status": "degraded",
+                    "issue_starts_24h": 2,
+                    "health_changes_24h": 1,
+                    "recoveries_24h": 1,
+                }
+            ]
+        )
+        with patch.object(
+            sensor_store,
+            "connection",
+            fake_connection_for(cursor),
+        ):
+            overview = sensor_store.list_sensor_health_overview()
+
+        self.assertEqual(2, overview[0]["issue_starts_24h"])
+        query = cursor.queries[0]
+        self.assertIn("INTERVAL '24 hours'", query)
+        self.assertIn("sensor_degraded", query)
+        self.assertIn("sensor_health_changed", query)
+        self.assertIn("sensor_recovered", query)
+        self.assertIn("sensor.deleted_at IS NULL", query)
+
     def test_quality_history_is_scoped_and_classified_by_server_thresholds(self) -> None:
         sensor_id = uuid4()
         cursor = FakeCursor(

@@ -379,6 +379,20 @@ button {
   padding: 12px;
 }
 
+.summary-card-action {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.summary-card-action:hover,
+.summary-card-action:focus-visible {
+  border-color: rgba(67, 213, 255, 0.68);
+  outline: none;
+  transform: translateY(-1px);
+}
+
 .summary-card span {
   display: block;
   color: var(--muted);
@@ -390,6 +404,21 @@ button {
   font-size: 25px;
   font-weight: 600;
   color: var(--cyan);
+}
+
+.summary-card .summary-card-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+}
+
+.summary-card .summary-card-arrow {
+  margin: 0;
+  color: var(--cyan);
+  font-size: 24px;
+  line-height: 1;
 }
 
 .summary-card.alert-summary strong {
@@ -1897,6 +1926,268 @@ button.entity-card.selected {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
 }
 
+.sensor-overview-panel {
+  position: absolute;
+  z-index: 640;
+  right: 14px;
+  top: 14px;
+  width: min(1100px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid rgba(67, 213, 255, 0.34);
+  background: rgba(10, 13, 18, 0.97);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.44);
+}
+
+.sensor-overview-header {
+  position: sticky;
+  z-index: 5;
+  top: -16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  margin: -16px -16px 14px;
+  padding: 14px 12px 12px 16px;
+  border-bottom: 1px solid rgba(67, 213, 255, 0.3);
+  background: #0a0d12;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+.sensor-overview-header h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.sensor-overview-updated {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sensor-overview-header-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.sensor-overview-header-actions button {
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid rgba(149, 166, 185, 0.38);
+  background: #151c25;
+  color: var(--text);
+  cursor: pointer;
+}
+
+#sensor-overview-close {
+  display: grid;
+  width: 32px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.sensor-overview-header-actions button:hover,
+.sensor-overview-header-actions button:focus-visible {
+  border-color: var(--cyan);
+  outline: none;
+  background: #202b37;
+}
+
+.sensor-overview-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sensor-overview-stat {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--zone-inactive);
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.sensor-overview-stat span {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sensor-overview-stat strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 22px;
+}
+
+.sensor-overview-stat.stat-online { border-left-color: var(--green); }
+.sensor-overview-stat.stat-degraded { border-left-color: var(--amber); }
+.sensor-overview-stat.stat-offline { border-left-color: var(--red); }
+.sensor-overview-stat.stat-maintenance { border-left-color: var(--purple); }
+.sensor-overview-stat.stat-issues { border-left-color: var(--cyan); }
+
+.sensor-overview-toolbar {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.4fr) minmax(160px, 1fr) minmax(180px, 1fr);
+  gap: 9px;
+  margin: 12px 0;
+}
+
+.sensor-overview-toolbar label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sensor-overview-toolbar input,
+.sensor-overview-toolbar select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: #0b1017;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.sensor-overview-toolbar input:focus,
+.sensor-overview-toolbar select:focus {
+  border-color: var(--cyan);
+  outline: none;
+}
+
+.sensor-overview-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+
+.sensor-overview-columns,
+.sensor-overview-row {
+  min-width: 980px;
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.25fr)
+    minmax(105px, 0.75fr)
+    minmax(180px, 1.45fr)
+    minmax(85px, 0.65fr)
+    minmax(85px, 0.65fr)
+    minmax(110px, 0.75fr)
+    minmax(115px, 0.85fr)
+    minmax(110px, 0.75fr);
+  gap: 0;
+}
+
+.sensor-overview-columns {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: var(--muted);
+  background: #111720;
+  border-bottom: 1px solid var(--border);
+}
+
+.sensor-overview-columns span {
+  padding: 8px 9px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sensor-overview-list.empty-state {
+  min-height: 82px;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sensor-overview-row {
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  color: var(--text);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--zone-inactive);
+  background: rgba(18, 24, 33, 0.92);
+  cursor: pointer;
+}
+
+.sensor-overview-row:last-child {
+  border-bottom: 0;
+}
+
+.sensor-overview-row:hover,
+.sensor-overview-row:focus-visible {
+  outline: none;
+  background: rgba(67, 213, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(67, 213, 255, 0.34);
+}
+
+.sensor-overview-row.sensor-online { border-left-color: var(--green); }
+.sensor-overview-row.sensor-degraded { border-left-color: var(--amber); }
+.sensor-overview-row.sensor-offline { border-left-color: var(--red); }
+.sensor-overview-row.sensor-maintenance { border-left-color: var(--purple); }
+
+.sensor-overview-cell {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 10px 9px;
+  border-right: 1px solid var(--border);
+}
+
+.sensor-overview-cell:last-child {
+  border-right: 0;
+}
+
+.sensor-overview-cell strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+}
+
+.sensor-overview-cell small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+}
+
+.sensor-overview-row.sensor-online .sensor-overview-cell:nth-child(2) strong {
+  color: var(--green);
+}
+
+.sensor-overview-row.sensor-degraded .sensor-overview-cell:nth-child(2) strong {
+  color: var(--amber);
+}
+
+.sensor-overview-row.sensor-offline .sensor-overview-cell:nth-child(2) strong {
+  color: var(--red);
+}
+
+.sensor-overview-row.sensor-maintenance .sensor-overview-cell:nth-child(2) strong {
+  color: var(--purple);
+}
+
 .zone-editor,
 .sensor-editor,
 .sensor-token-panel {
@@ -2618,6 +2909,7 @@ html[data-theme="light"] .login-screen {
 html[data-theme="light"] .login-card,
 html[data-theme="light"] .operator-panel,
 html[data-theme="light"] .selection-panel,
+html[data-theme="light"] .sensor-overview-panel,
 html[data-theme="light"] .zone-editor,
 html[data-theme="light"] .sensor-editor,
 html[data-theme="light"] .sensor-token-panel {
@@ -2629,6 +2921,25 @@ html[data-theme="light"] .selection-header {
   border-bottom-color: rgba(0, 105, 142, 0.3);
   background: #f8fbfd;
   box-shadow: 0 8px 16px rgba(41, 55, 72, 0.16);
+}
+
+html[data-theme="light"] .sensor-overview-header {
+  border-bottom-color: rgba(0, 105, 142, 0.3);
+  background: #f8fbfd;
+  box-shadow: 0 8px 16px rgba(41, 55, 72, 0.16);
+}
+
+html[data-theme="light"] .sensor-overview-header-actions button {
+  border-color: rgba(39, 55, 75, 0.34);
+  background: #e4ebf2;
+  color: #405066;
+}
+
+html[data-theme="light"] .sensor-overview-header-actions button:hover,
+html[data-theme="light"] .sensor-overview-header-actions button:focus-visible {
+  border-color: var(--cyan);
+  background: #d7e3ed;
+  color: #152233;
 }
 
 html[data-theme="light"] .selection-header > button {
@@ -2669,6 +2980,12 @@ html[data-theme="light"] .summary-card {
   box-shadow: 0 3px 10px rgba(42, 58, 76, 0.08);
 }
 
+html[data-theme="light"] .summary-card-action:hover,
+html[data-theme="light"] .summary-card-action:focus-visible {
+  border-color: var(--cyan);
+  background: linear-gradient(145deg, #ffffff, #dce9f3);
+}
+
 html[data-theme="light"] .operator-quick-volume,
 html[data-theme="light"] .storage-panel,
 html[data-theme="light"] .alarm-training-tools,
@@ -2676,6 +2993,27 @@ html[data-theme="light"] .alarm-audio-settings,
 html[data-theme="light"] .security-summary-card,
 html[data-theme="light"] .security-alert-message {
   background: #e5ecf3;
+}
+
+html[data-theme="light"] .sensor-overview-stat,
+html[data-theme="light"] .sensor-overview-row {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+html[data-theme="light"] .sensor-overview-columns {
+  background: #e5ecf3;
+}
+
+html[data-theme="light"] .sensor-overview-toolbar input,
+html[data-theme="light"] .sensor-overview-toolbar select {
+  color: var(--text);
+  background: #ffffff;
+}
+
+html[data-theme="light"] .sensor-overview-row:hover,
+html[data-theme="light"] .sensor-overview-row:focus-visible {
+  background: rgba(0, 105, 142, 0.11);
+  box-shadow: inset 0 0 0 1px rgba(0, 105, 142, 0.38);
 }
 
 html[data-theme="light"] input:not([type="checkbox"]):not([type="range"]),
@@ -3037,6 +3375,10 @@ html[data-theme="light"] .toast {
   .last-update {
     display: none;
   }
+
+  .sensor-overview-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -3092,5 +3434,27 @@ html[data-theme="light"] .toast {
 
   .legend {
     display: none;
+  }
+
+  .sensor-overview-panel {
+    right: 10px;
+    top: 10px;
+    width: calc(100% - 20px);
+    max-height: calc(100% - 20px);
+    padding: 12px;
+  }
+
+  .sensor-overview-header {
+    top: -12px;
+    margin: -12px -12px 12px;
+    padding-left: 12px;
+  }
+
+  .sensor-overview-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sensor-overview-toolbar {
+    grid-template-columns: 1fr;
   }
 }
