@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 REQUIRED_ENVIRONMENT = {
     "RDDS_DB_HOST": "database",
@@ -17,7 +17,7 @@ REQUIRED_ENVIRONMENT = {
 }
 
 with patch.dict(os.environ, REQUIRED_ENVIRONMENT, clear=False):
-    from app import config, database, sensor_store
+    from app import config, database, main as api_main, sensor_store
     from app.models import HeartbeatEnvelope, HeartbeatStatus, SensorMaintenance
     from app.sensor_health import SourceQuality, assess_heartbeat, measure_source_quality
 
@@ -293,7 +293,174 @@ class HealthModelTests(unittest.TestCase):
         self.assertTrue(accepted.enabled)
 
 
+class HealthHistoryTests(unittest.TestCase):
+    def test_history_calculates_availability_and_excludes_maintenance(self) -> None:
+        window_start = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+        window_end = window_start + timedelta(hours=24)
+        sensor = {
+            "created_at": window_start - timedelta(days=1),
+            "status": "online",
+            "health_reason": "healthy",
+        }
+        events = [
+            {
+                "occurred_at": window_start - timedelta(hours=1),
+                "event_type": "sensor_online",
+                "details": {"from_status": "provisioning", "to_status": "online", "reason": "healthy"},
+            },
+            {
+                "occurred_at": window_start + timedelta(hours=10),
+                "event_type": "sensor_degraded",
+                "details": {"from_status": "online", "to_status": "degraded", "reason": "source_unavailable"},
+            },
+            {
+                "occurred_at": window_start + timedelta(hours=11),
+                "event_type": "sensor_health_changed",
+                "details": {"from_status": "degraded", "to_status": "degraded", "from_reason": "source_unavailable", "reason": "source_unstable"},
+            },
+            {
+                "occurred_at": window_start + timedelta(hours=12),
+                "event_type": "sensor_health_changed",
+                "details": {"from_status": "degraded", "to_status": "offline", "from_reason": "source_unstable", "reason": "heartbeat_timeout"},
+            },
+            {
+                "occurred_at": window_start + timedelta(hours=13),
+                "event_type": "sensor_recovered",
+                "details": {"from_status": "offline", "to_status": "online", "from_reason": "heartbeat_timeout", "reason": "healthy"},
+            },
+            {
+                "occurred_at": window_start + timedelta(hours=20),
+                "event_type": "sensor_maintenance_started",
+                "details": {"from_status": "online", "to_status": "maintenance", "reason": "service"},
+            },
+            {
+                "occurred_at": window_start + timedelta(hours=22),
+                "event_type": "sensor_maintenance_ended",
+                "details": {"from_status": "maintenance", "to_status": "online"},
+            },
+        ]
+
+        history = sensor_store._health_history_summary(
+            sensor=sensor,
+            events=events,
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+        summary = history["summary"]
+        self.assertEqual(19 * 3600, summary["online_seconds"])
+        self.assertEqual(2 * 3600, summary["degraded_seconds"])
+        self.assertEqual(1 * 3600, summary["offline_seconds"])
+        self.assertEqual(2 * 3600, summary["excluded_seconds"])
+        self.assertEqual(1, summary["issue_count"])
+        self.assertEqual(1, summary["recovery_count"])
+        self.assertEqual(95.45, summary["availability_percent"])
+        self.assertEqual(86.36, summary["healthy_percent"])
+        self.assertEqual(7, len(history["timeline"]))
+
+    def test_duplicate_transition_events_do_not_double_count_issue(self) -> None:
+        window_start = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+        window_end = window_start + timedelta(hours=1)
+        transition_at = window_start + timedelta(minutes=30)
+        sensor = {
+            "created_at": window_start - timedelta(days=1),
+            "status": "offline",
+            "health_reason": "heartbeat_timeout",
+        }
+        events = [
+            {
+                "occurred_at": window_start - timedelta(minutes=1),
+                "event_type": "sensor_disabled",
+                "details": {"status": "disabled"},
+            },
+            {
+                "occurred_at": transition_at,
+                "event_type": "sensor_enabled",
+                "details": {"status": "offline"},
+            },
+            {
+                "occurred_at": transition_at,
+                "event_type": "sensor_offline",
+                "details": {"from_status": "disabled", "to_status": "offline", "reason": "heartbeat_timeout"},
+            },
+        ]
+
+        history = sensor_store._health_history_summary(
+            sensor=sensor,
+            events=events,
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+        self.assertEqual(1, history["summary"]["issue_count"])
+        self.assertEqual(2, len(history["timeline"]))
+        self.assertEqual("disabled", history["timeline"][0]["state"])
+        self.assertEqual("offline", history["timeline"][1]["state"])
+
+
+
 class HealthPersistenceTests(unittest.TestCase):
+    def test_health_history_reads_prior_transition_and_window_events(self) -> None:
+        sensor_id = uuid4()
+        generated_at = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+        cursor = FakeCursor(
+            rows=[
+                {
+                    "id": sensor_id,
+                    "sensor_id": "skyspy-sensor-01",
+                    "display_name": "Sensor 01",
+                    "status": "online",
+                    "health_reason": "healthy",
+                    "created_at": generated_at - timedelta(days=10),
+                    "generated_at": generated_at,
+                },
+                {
+                    "id": uuid4(),
+                    "occurred_at": generated_at - timedelta(hours=25),
+                    "event_type": "sensor_online",
+                    "details": {"to_status": "online", "reason": "healthy"},
+                },
+                {
+                    "id": uuid4(),
+                    "occurred_at": generated_at - timedelta(hours=2),
+                    "event_type": "sensor_degraded",
+                    "details": {
+                        "from_status": "online",
+                        "to_status": "degraded",
+                        "reason": "source_unstable",
+                    },
+                },
+                {
+                    "id": uuid4(),
+                    "occurred_at": generated_at - timedelta(hours=1),
+                    "event_type": "sensor_recovered",
+                    "details": {
+                        "from_status": "degraded",
+                        "to_status": "online",
+                        "reason": "healthy",
+                    },
+                },
+            ]
+        )
+        with patch.object(
+            sensor_store,
+            "connection",
+            fake_connection_for(cursor),
+        ):
+            history = sensor_store.get_sensor_health_history(sensor_id, 24)
+
+        self.assertIsNotNone(history)
+        assert history is not None
+        self.assertEqual(24, history["window_hours"])
+        self.assertEqual(1, history["summary"]["issue_count"])
+        self.assertEqual(1, history["summary"]["recovery_count"])
+        self.assertIn("WITH prior_event AS", cursor.queries[1])
+        self.assertIn("event_type = ANY", cursor.queries[1])
+        parameters = cursor.parameters[1]
+        assert isinstance(parameters, dict)
+        self.assertIn("sensor_health_changed", parameters["event_types"])
+        self.assertIn("sensor_maintenance_started", parameters["event_types"])
+
     def test_health_overview_aggregates_audit_events_for_last_24_hours(self) -> None:
         sensor_id = uuid4()
         cursor = FakeCursor(
@@ -522,6 +689,19 @@ class HealthPersistenceTests(unittest.TestCase):
         self.assertIn("maintenance_reason = NULL", delete_query)
         self.assertIn("maintenance_until = NULL", delete_query)
 
+
+class HealthHistoryRouteTests(unittest.TestCase):
+    def test_query_string_windows_are_coerced_to_allowed_integer_enum(self) -> None:
+        adapter = TypeAdapter(api_main.SensorHealthHistoryWindow)
+        for hours in (1, 6, 24, 168):
+            with self.subTest(hours=hours):
+                parsed = adapter.validate_python(str(hours))
+                self.assertEqual(hours, int(parsed))
+
+    def test_unknown_history_window_is_rejected_by_query_type(self) -> None:
+        adapter = TypeAdapter(api_main.SensorHealthHistoryWindow)
+        with self.assertRaises(ValidationError):
+            adapter.validate_python("2")
 
 if __name__ == "__main__":
     unittest.main()

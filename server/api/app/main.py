@@ -4,6 +4,7 @@ import io
 import json
 import logging
 from contextlib import asynccontextmanager, suppress
+from enum import IntEnum
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
@@ -90,6 +91,7 @@ from app.security_store import (
 )
 from app.sensor_store import (
     delete_sensor,
+    get_sensor_health_history,
     get_sensor_quality_history,
     list_sensor_health_overview,
     list_sensors,
@@ -106,6 +108,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("rdds.api")
+
+
+class SensorHealthHistoryWindow(IntEnum):
+    ONE_HOUR = 1
+    SIX_HOURS = 6
+    ONE_DAY = 24
+    SEVEN_DAYS = 168
 
 
 async def sensor_status_monitor() -> None:
@@ -134,7 +143,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.20.0",
+    version="0.21.0",
     lifespan=lifespan,
 )
 
@@ -645,6 +654,31 @@ def get_sensor_health_overview() -> dict[str, object]:
         "time": utc_now(),
         "window_hours": 24,
         "sensors": sensors,
+    }
+
+
+@app.get(
+    "/api/v1/sensors/{sensor_id}/health-history",
+    tags=["sensors"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_health_history_view(
+    sensor_id: UUID,
+    hours: SensorHealthHistoryWindow = Query(
+        default=SensorHealthHistoryWindow.ONE_DAY
+    ),
+) -> dict[str, object]:
+    try:
+        history = get_sensor_health_history(sensor_id, int(hours))
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor health history query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if history is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+
+    return {
+        "time": utc_now(),
+        **history,
     }
 
 

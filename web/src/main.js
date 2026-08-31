@@ -9,6 +9,7 @@ const STORAGE_REFRESH_INTERVAL_MS = 60000;
 const SECURITY_SUMMARY_INTERVAL_MS = 60000;
 const DEFAULT_CENTER = [52.2297, 21.0122];
 const SIDEBAR_STATE_KEY = "rdds.sidebar.sections.v1";
+const SENSOR_DETAIL_STATE_KEY = "rdds.sensor.detail.sections.v1";
 const DISPLAY_SETTINGS_KEY = "rdds.display.v1";
 const ALERT_AUDIO_SETTINGS_KEY = "rdds.alert.audio.v1";
 const CRITICAL_REPEAT_INTERVAL_MS = 30000;
@@ -361,6 +362,10 @@ const elements = {
   incidentShowRoute: document.querySelector("#incident-show-route"),
   trackControls: document.querySelector("#track-controls"),
   sensorControls: document.querySelector("#sensor-controls"),
+  sensorHealthHistory: document.querySelector("#sensor-health-history"),
+  sensorQualityHistory: document.querySelector("#sensor-quality-history"),
+  sensorHealthWindow: document.querySelector("#sensor-health-window"),
+  sensorHealthWindowButtons: document.querySelectorAll("[data-health-hours]"),
   sensorDiagnosticsExport: document.querySelector("#sensor-diagnostics-export"),
   trackFollowLive: document.querySelector("#track-follow-live"),
   trackReplay: document.querySelector("#track-replay"),
@@ -456,6 +461,11 @@ let currentAuditTotal = 0;
 let selectedTrackId = null;
 let selectedTrackSnapshot = null;
 let selectedSensorId = null;
+let sensorHistoryMode = "health";
+let sensorHealthHistoryHours = 24;
+let sensorHealthHistorySensorId = null;
+let sensorHealthHistory = null;
+let sensorHealthHistoryLoadingId = null;
 let sensorQualityHistorySensorId = null;
 let sensorQualityHistory = [];
 let sensorQualityHistoryLoadingId = null;
@@ -3610,6 +3620,64 @@ function detailSection(title) {
   return section;
 }
 
+function readSensorDetailState() {
+  try {
+    return JSON.parse(localStorage.getItem(SENSOR_DETAIL_STATE_KEY) || "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSensorDetailState(state) {
+  try {
+    localStorage.setItem(SENSOR_DETAIL_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Zwijanie nadal działa, nawet jeśli przeglądarka blokuje localStorage.
+  }
+}
+
+function setSensorDetailCollapsed(section, collapsed, persist = true) {
+  const toggle = section.querySelector(".sensor-detail-section-toggle");
+  section.classList.toggle("collapsed", collapsed);
+  toggle?.setAttribute("aria-expanded", String(!collapsed));
+
+  if (persist) {
+    const state = readSensorDetailState();
+    state[section.dataset.detailSectionKey] = collapsed;
+    writeSensorDetailState(state);
+  }
+}
+
+function sensorDetailSection(title, key, items, { collapsed = false } = {}) {
+  const section = document.createElement("section");
+  section.className = "sensor-detail-section";
+  section.dataset.detailSectionKey = key;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "sensor-detail-section-toggle";
+
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const chevron = document.createElement("span");
+  chevron.className = "section-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  toggle.append(heading, chevron);
+
+  const body = document.createElement("div");
+  body.className = "sensor-detail-section-body";
+  body.append(...items);
+  section.append(toggle, body);
+
+  const storedState = readSensorDetailState()[key];
+  const initiallyCollapsed = typeof storedState === "boolean" ? storedState : collapsed;
+  setSensorDetailCollapsed(section, initiallyCollapsed, false);
+  toggle.addEventListener("click", () => {
+    setSensorDetailCollapsed(section, !section.classList.contains("collapsed"));
+  });
+  return section;
+}
+
 function renderSelection(track) {
   if (!track) {
     elements.selectionPanel.classList.add("hidden");
@@ -3655,80 +3723,240 @@ function renderSensorSelection(sensor) {
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.add("hidden");
   elements.sensorControls.classList.remove("hidden");
-  elements.selectionTimelineTitle.textContent = "Historia jakości strumienia";
   elements.selectionTimeline.classList.remove("hidden");
   elements.selectionDetails.replaceChildren(
     sensorDiagnosticSummary(sensor),
-    detailSection("Stan operacyjny"),
-    detailItem("Status", stateLabel(sensor.status)),
-    detailItem("Stan toru detekcji", sensorHealthReasonLabel(sensor.health_reason)),
-    detailItem("Zmiana stanu", formatDateTime(sensor.health_changed_at)),
-    ...(sensor.health_issue_started_at
-      ? [detailItem("Początek usterki", formatDateTime(sensor.health_issue_started_at))]
-      : []),
-    ...(sensor.status === "maintenance"
-      ? [
-          detailItem("Powód konserwacji", sensor.maintenance_reason),
-          detailItem("Rozpoczął", sensor.maintenance_started_by),
-          detailItem("Początek konserwacji", formatDateTime(sensor.maintenance_started_at)),
-          detailItem("Planowane zakończenie", formatDateTime(sensor.maintenance_until)),
-        ]
-      : []),
-    detailSection("Agent"),
-    detailItem("Identyfikator", sensor.sensor_id),
-    detailItem("Boot ID", sensor.agent_boot_id),
-    detailItem(
-      "Uwierzytelnianie",
-      sensor.credential_mode === "individual" ? "token indywidualny" : "token wspólny",
+    sensorDetailSection(
+      "Stan operacyjny",
+      "operational",
+      [
+        detailItem("Status", stateLabel(sensor.status)),
+        detailItem("Stan toru detekcji", sensorHealthReasonLabel(sensor.health_reason)),
+        detailItem("Zmiana stanu", formatDateTime(sensor.health_changed_at)),
+        ...(sensor.health_issue_started_at
+          ? [detailItem("Początek usterki", formatDateTime(sensor.health_issue_started_at))]
+          : []),
+        ...(sensor.status === "maintenance"
+          ? [
+              detailItem("Powód konserwacji", sensor.maintenance_reason),
+              detailItem("Rozpoczął", sensor.maintenance_started_by),
+              detailItem("Początek konserwacji", formatDateTime(sensor.maintenance_started_at)),
+              detailItem("Planowane zakończenie", formatDateTime(sensor.maintenance_until)),
+            ]
+          : []),
+      ],
     ),
-    detailItem("Prefiks tokenu", sensor.token_prefix ? `${sensor.token_prefix}…` : "—"),
-    detailItem("Ostatni heartbeat", formatDateTime(sensor.last_heartbeat_at)),
-    detailItem("Czas raportu agenta", formatDateTime(sensor.last_heartbeat_reported_at)),
-    detailItem("Różnica zegara", formatClockOffset(sensor.clock_offset_seconds)),
-    detailItem("Wersja agenta", sensor.agent_version),
-    detailItem("Uptime", formatDuration(sensor.uptime_seconds)),
-    detailSection("Sky-Spy → agent"),
-    detailItem("Rodzaj źródła", sourceKindLabel(sensor.source_kind)),
-    detailItem("Połączenie Sky-Spy", sourceConnectionLabel(sensor.source_connected)),
-    detailItem("Połączone od", formatDateTime(sensor.source_connected_at)),
-    detailItem("Liczba połączeń", formatInteger(sensor.source_connections_total)),
-    detailItem("Ostatnia wiadomość Sky-Spy", formatDateTime(sensor.source_last_message_at)),
-    detailItem("Ostatni błąd źródła", diagnosticErrorLabel(sensor.source_last_error_reason)),
-    detailItem("Czas błędu źródła", formatDateTime(sensor.source_last_error_at)),
-    detailItem("Odczytane linie", formatInteger(sensor.input_lines_total)),
-    detailItem("Rozpoznane detekcje", formatInteger(sensor.parsed_detections_total)),
-    detailItem("Dodane do kolejki", formatInteger(sensor.enqueued_observations_total)),
-    detailItem("Pominięte linie", formatInteger(sensor.ignored_lines_total)),
-    detailSection("Bieżące okno jakości"),
-    detailItem("Długość okna", formatDuration(sensor.quality_window_seconds)),
-    detailItem("Linie w oknie", formatInteger(sensor.quality_input_lines)),
-    detailItem(
-      "Rozpoznane w oknie",
-      formatInteger(sensor.quality_parsed_detections),
+    sensorDetailSection(
+      "Agent",
+      "agent",
+      [
+        detailItem("Identyfikator", sensor.sensor_id),
+        detailItem("Boot ID", sensor.agent_boot_id),
+        detailItem(
+          "Uwierzytelnianie",
+          sensor.credential_mode === "individual" ? "token indywidualny" : "token wspólny",
+        ),
+        detailItem("Prefiks tokenu", sensor.token_prefix ? `${sensor.token_prefix}…` : "—"),
+        detailItem("Ostatni heartbeat", formatDateTime(sensor.last_heartbeat_at)),
+        detailItem("Czas raportu agenta", formatDateTime(sensor.last_heartbeat_reported_at)),
+        detailItem("Różnica zegara", formatClockOffset(sensor.clock_offset_seconds)),
+        detailItem("Wersja agenta", sensor.agent_version),
+        detailItem("Uptime", formatDuration(sensor.uptime_seconds)),
+      ],
+      { collapsed: true },
     ),
-    detailItem("Pominięte w oknie", formatInteger(sensor.quality_ignored_lines)),
-    detailItem("Udział pominiętych", formatPercent(sensor.quality_ignored_ratio, 1)),
-    detailItem("Ponowne połączenia", formatInteger(sensor.quality_reconnects)),
-    detailSection("Agent → RDDS"),
-    detailItem("Ostatnia obserwacja", formatDateTime(sensor.last_observation_received_at)),
-    detailItem("Obserwacje", formatInteger(sensor.observation_count)),
-    detailItem("Heartbeat", formatInteger(sensor.heartbeat_count)),
-    detailItem("Dostarczone komunikaty", formatInteger(sensor.delivery_success_total)),
-    detailItem("Ponowienia", formatInteger(sensor.delivery_retry_total)),
-    detailItem("Odrzucone przy wyłączeniu", formatInteger(sensor.delivery_discard_total)),
-    detailItem("Przeniesione do błędów", formatInteger(sensor.delivery_dead_letter_total)),
-    detailItem("Ostatnie dostarczenie", formatDateTime(sensor.last_delivery_success_at)),
-    detailItem("Ostatni błąd dostarczania", diagnosticErrorLabel(sensor.last_delivery_error_reason)),
-    detailItem("Czas błędu dostarczania", formatDateTime(sensor.last_delivery_error_at)),
-    detailSection("Bufor i urządzenie"),
-    detailItem("Kolejka", formatInteger(sensor.queue_depth)),
-    detailItem("Pojemność kolejki", formatInteger(sensor.queue_capacity)),
-    detailItem("Wiek najstarszej wiadomości", formatDuration(sensor.queue_oldest_age_seconds)),
-    detailItem("Kolejka błędów", formatInteger(sensor.dead_letter_depth)),
-    detailItem("RSSI modemu", formatNumber(sensor.cellular_rssi, 0, " dBm")),
-    detailItem("Wolna pamięć", formatBytes(sensor.free_heap_bytes)),
-    detailItem("MGRS", formatMgrs(sensor.latitude, sensor.longitude)),
+    sensorDetailSection(
+      "Sky-Spy → agent",
+      "skyspy-agent",
+      [
+        detailItem("Rodzaj źródła", sourceKindLabel(sensor.source_kind)),
+        detailItem("Połączenie Sky-Spy", sourceConnectionLabel(sensor.source_connected)),
+        detailItem("Połączone od", formatDateTime(sensor.source_connected_at)),
+        detailItem("Liczba połączeń", formatInteger(sensor.source_connections_total)),
+        detailItem("Ostatnia wiadomość Sky-Spy", formatDateTime(sensor.source_last_message_at)),
+        detailItem("Ostatni błąd źródła", diagnosticErrorLabel(sensor.source_last_error_reason)),
+        detailItem("Czas błędu źródła", formatDateTime(sensor.source_last_error_at)),
+        detailItem("Odczytane linie", formatInteger(sensor.input_lines_total)),
+        detailItem("Rozpoznane detekcje", formatInteger(sensor.parsed_detections_total)),
+        detailItem("Dodane do kolejki", formatInteger(sensor.enqueued_observations_total)),
+        detailItem("Pominięte linie", formatInteger(sensor.ignored_lines_total)),
+      ],
+      { collapsed: true },
+    ),
+    sensorDetailSection(
+      "Bieżące okno jakości",
+      "quality-window",
+      [
+        detailItem("Długość okna", formatDuration(sensor.quality_window_seconds)),
+        detailItem("Linie w oknie", formatInteger(sensor.quality_input_lines)),
+        detailItem("Rozpoznane w oknie", formatInteger(sensor.quality_parsed_detections)),
+        detailItem("Pominięte w oknie", formatInteger(sensor.quality_ignored_lines)),
+        detailItem("Udział pominiętych", formatPercent(sensor.quality_ignored_ratio, 1)),
+        detailItem("Ponowne połączenia", formatInteger(sensor.quality_reconnects)),
+      ],
+      { collapsed: true },
+    ),
+    sensorDetailSection(
+      "Agent → RDDS",
+      "agent-rdds",
+      [
+        detailItem("Ostatnia obserwacja", formatDateTime(sensor.last_observation_received_at)),
+        detailItem("Obserwacje", formatInteger(sensor.observation_count)),
+        detailItem("Heartbeat", formatInteger(sensor.heartbeat_count)),
+        detailItem("Dostarczone komunikaty", formatInteger(sensor.delivery_success_total)),
+        detailItem("Ponowienia", formatInteger(sensor.delivery_retry_total)),
+        detailItem("Odrzucone przy wyłączeniu", formatInteger(sensor.delivery_discard_total)),
+        detailItem("Przeniesione do błędów", formatInteger(sensor.delivery_dead_letter_total)),
+        detailItem("Ostatnie dostarczenie", formatDateTime(sensor.last_delivery_success_at)),
+        detailItem("Ostatni błąd dostarczania", diagnosticErrorLabel(sensor.last_delivery_error_reason)),
+        detailItem("Czas błędu dostarczania", formatDateTime(sensor.last_delivery_error_at)),
+      ],
+      { collapsed: true },
+    ),
+    sensorDetailSection(
+      "Bufor i urządzenie",
+      "buffer-device",
+      [
+        detailItem("Kolejka", formatInteger(sensor.queue_depth)),
+        detailItem("Pojemność kolejki", formatInteger(sensor.queue_capacity)),
+        detailItem("Wiek najstarszej wiadomości", formatDuration(sensor.queue_oldest_age_seconds)),
+        detailItem("Kolejka błędów", formatInteger(sensor.dead_letter_depth)),
+        detailItem("RSSI modemu", formatNumber(sensor.cellular_rssi, 0, " dBm")),
+        detailItem("Wolna pamięć", formatBytes(sensor.free_heap_bytes)),
+        detailItem("MGRS", formatMgrs(sensor.latitude, sensor.longitude)),
+      ],
+      { collapsed: true },
+    ),
   );
+  renderSelectedSensorHistory(sensor);
+}
+
+function updateSensorHistoryControls() {
+  const healthMode = sensorHistoryMode === "health";
+  elements.sensorHealthHistory.classList.toggle("active", healthMode);
+  elements.sensorQualityHistory.classList.toggle("active", !healthMode);
+  elements.sensorHealthWindow.classList.toggle("hidden", !healthMode);
+  for (const button of elements.sensorHealthWindowButtons) {
+    button.classList.toggle(
+      "active",
+      Number(button.dataset.healthHours) === sensorHealthHistoryHours,
+    );
+  }
+}
+
+function healthPercentLabel(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `${value.toLocaleString("pl-PL", { maximumFractionDigits: 2 })}%`;
+}
+
+function healthHistoryMetric(label, value) {
+  const item = document.createElement("div");
+  item.className = "sensor-health-history-metric";
+  const name = document.createElement("span");
+  name.textContent = label;
+  const content = document.createElement("strong");
+  content.textContent = value;
+  item.append(name, content);
+  return item;
+}
+
+function renderSensorHealthHistory(history) {
+  elements.selectionTimelineList.replaceChildren();
+  elements.selectionTimelineList.classList.remove("inline-loading");
+  const timeline = history?.timeline ?? [];
+  const summary = history?.summary ?? {};
+
+  const summaryGrid = document.createElement("div");
+  summaryGrid.className = "sensor-health-history-summary";
+  summaryGrid.append(
+    healthHistoryMetric("Dostępność", healthPercentLabel(summary.availability_percent)),
+    healthHistoryMetric("Pełna sprawność", healthPercentLabel(summary.healthy_percent)),
+    healthHistoryMetric("Usterki", formatInteger(summary.issue_count)),
+    healthHistoryMetric("Odzyskania", formatInteger(summary.recovery_count)),
+    healthHistoryMetric("Offline", formatDuration(summary.offline_seconds)),
+    healthHistoryMetric("Poza nadzorem", formatDuration(summary.excluded_seconds)),
+  );
+  elements.selectionTimelineList.append(summaryGrid);
+
+  if (timeline.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "sensor-health-history-empty";
+    empty.textContent = "Brak historii kondycji w wybranym okresie.";
+    elements.selectionTimelineList.append(empty);
+    return;
+  }
+
+  const bar = document.createElement("div");
+  bar.className = "sensor-health-history-bar";
+  bar.setAttribute("aria-label", "Oś czasu kondycji sensora");
+  const coverageSeconds = Math.max(1, Number(history.coverage_seconds) || 1);
+  for (const segment of timeline) {
+    const part = document.createElement("span");
+    part.className = `sensor-health-segment state-${segment.state ?? "unknown"}`;
+    part.style.flexGrow = String(Math.max(0, Number(segment.duration_seconds) || 0));
+    part.title = [
+      stateLabel(segment.state),
+      sensorHealthReasonLabel(segment.reason),
+      formatDuration(segment.duration_seconds),
+    ].join(" · ");
+    bar.append(part);
+  }
+  elements.selectionTimelineList.append(bar);
+
+  const legend = document.createElement("div");
+  legend.className = "sensor-health-history-legend";
+  for (const [state, label] of [
+    ["online", "online"],
+    ["degraded", "ograniczony"],
+    ["offline", "offline"],
+    ["excluded", "poza nadzorem"],
+  ]) {
+    const item = document.createElement("span");
+    item.className = `legend-${state}`;
+    item.textContent = label;
+    legend.append(item);
+  }
+  elements.selectionTimelineList.append(legend);
+
+  const eventList = document.createElement("div");
+  eventList.className = "sensor-health-history-events";
+  for (const segment of [...timeline].reverse()) {
+    const item = document.createElement("div");
+    item.className = `timeline-event sensor health-state-${segment.state ?? "unknown"}`;
+    const marker = document.createElement("span");
+    marker.className = "timeline-marker";
+    const content = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${stateLabel(segment.state)} · ${sensorHealthReasonLabel(segment.reason)}`;
+    const meta = document.createElement("span");
+    meta.textContent = [
+      `${formatDateTime(segment.started_at)} → ${formatDateTime(segment.ended_at)}`,
+      formatDuration(segment.duration_seconds),
+    ].join(" · ");
+    content.append(title, meta);
+    item.append(marker, content);
+    eventList.append(item);
+  }
+  elements.selectionTimelineList.append(eventList);
+}
+
+function renderSelectedSensorHistory(sensor) {
+  updateSensorHistoryControls();
+  if (sensorHistoryMode === "health") {
+    elements.selectionTimelineTitle.textContent = "Historia kondycji";
+    if (sensorHealthHistorySensorId === sensor.id && sensorHealthHistory) {
+      renderSensorHealthHistory(sensorHealthHistory);
+    } else if (sensorHealthHistoryLoadingId === sensor.id) {
+      elements.selectionTimelineList.classList.add("inline-loading");
+      elements.selectionTimelineList.textContent = "Ładowanie historii kondycji…";
+    } else {
+      elements.selectionTimelineList.classList.remove("inline-loading");
+      elements.selectionTimelineList.textContent = "Brak historii kondycji dla tego sensora.";
+    }
+    return;
+  }
+
+  elements.selectionTimelineTitle.textContent = "Historia jakości strumienia";
   if (sensorQualityHistorySensorId === sensor.id) {
     renderSensorQualityHistory(sensorQualityHistory);
   } else if (sensorQualityHistoryLoadingId === sensor.id) {
@@ -3736,8 +3964,22 @@ function renderSensorSelection(sensor) {
     elements.selectionTimelineList.textContent = "Ładowanie historii jakości…";
   } else {
     elements.selectionTimelineList.classList.remove("inline-loading");
-    elements.selectionTimelineList.textContent = "Brak historii jakości dla tego sensora.";
+    elements.selectionTimelineList.textContent = "Wybierz „Jakość strumienia”, aby pobrać próbki.";
   }
+}
+
+async function refreshSelectedSensorHealthHistory(sensorId) {
+  const requestedSensorId = String(sensorId);
+  const requestedHours = sensorHealthHistoryHours;
+  sensorHealthHistoryLoadingId = sensorId;
+  const payload = await fetchJson(
+    `/api/v1/sensors/${encodeURIComponent(requestedSensorId)}/health-history?hours=${requestedHours}`,
+  );
+  if (String(selectedSensorId) !== requestedSensorId || sensorHealthHistoryHours !== requestedHours) return;
+  sensorHealthHistorySensorId = sensorId;
+  sensorHealthHistoryLoadingId = null;
+  sensorHealthHistory = payload;
+  if (sensorHistoryMode === "health") renderSensorHealthHistory(sensorHealthHistory);
 }
 
 function renderSensorQualityHistory(samples) {
@@ -4650,10 +4892,16 @@ function selectSensor(sensorId) {
   selectedAlertId = null;
   selectedAlertSnapshot = null;
   selectedSensorId = sensorId;
+  sensorHistoryMode = "health";
+  if (sensorHealthHistorySensorId !== sensorId) {
+    sensorHealthHistory = null;
+    sensorHealthHistorySensorId = null;
+    sensorHealthHistoryLoadingId = sensorId;
+  }
   if (sensorQualityHistorySensorId !== sensorId) {
     sensorQualityHistory = [];
     sensorQualityHistorySensorId = null;
-    sensorQualityHistoryLoadingId = sensorId;
+    sensorQualityHistoryLoadingId = null;
   }
   liveFollowTrackId = null;
   stopTrackReplay();
@@ -4670,12 +4918,12 @@ function selectSensor(sensorId) {
       map.setView([sensor.latitude, sensor.longitude], Math.max(map.getZoom(), 14));
       sensorMarkers.get(sensor.id)?.openPopup();
     }
-    refreshSelectedSensorQualityHistory(sensorId).catch((error) => {
+    refreshSelectedSensorHealthHistory(sensorId).catch((error) => {
       if (String(selectedSensorId) !== String(sensorId)) return;
-      sensorQualityHistoryLoadingId = null;
+      sensorHealthHistoryLoadingId = null;
       elements.selectionTimelineList.classList.remove("inline-loading");
-      elements.selectionTimelineList.textContent = "Nie udało się pobrać historii jakości.";
-      console.error("Nie udało się pobrać historii jakości sensora", error);
+      elements.selectionTimelineList.textContent = "Nie udało się pobrać historii kondycji.";
+      console.error("Nie udało się pobrać historii kondycji sensora", error);
     });
   }
 }
@@ -4768,6 +5016,10 @@ function clearSelection() {
   selectedTrackId = null;
   selectedTrackSnapshot = null;
   selectedSensorId = null;
+  sensorHistoryMode = "health";
+  sensorHealthHistorySensorId = null;
+  sensorHealthHistory = null;
+  sensorHealthHistoryLoadingId = null;
   sensorQualityHistorySensorId = null;
   sensorQualityHistory = [];
   sensorQualityHistoryLoadingId = null;
@@ -5421,6 +5673,55 @@ elements.sensorOverviewSearch.addEventListener("input", renderSensorOverview);
 elements.sensorOverviewFilter.addEventListener("change", renderSensorOverview);
 elements.sensorOverviewSort.addEventListener("change", renderSensorOverview);
 elements.closeSelection.addEventListener("click", clearSelection);
+elements.sensorHealthHistory.addEventListener("click", () => {
+  if (!selectedSensorId) return;
+  sensorHistoryMode = "health";
+  const sensor = currentSensors.find((candidate) => candidate.id === selectedSensorId);
+  if (sensor) renderSensorSelection(sensor);
+  if (sensorHealthHistorySensorId !== selectedSensorId || !sensorHealthHistory) {
+    refreshSelectedSensorHealthHistory(selectedSensorId).catch((error) => {
+      sensorHealthHistoryLoadingId = null;
+      elements.selectionTimelineList.classList.remove("inline-loading");
+      elements.selectionTimelineList.textContent = "Nie udało się pobrać historii kondycji.";
+      console.error("Nie udało się pobrać historii kondycji sensora", error);
+    });
+  }
+});
+elements.sensorQualityHistory.addEventListener("click", () => {
+  if (!selectedSensorId) return;
+  sensorHistoryMode = "quality";
+  const sensor = currentSensors.find((candidate) => candidate.id === selectedSensorId);
+  if (sensor) renderSensorSelection(sensor);
+  if (sensorQualityHistorySensorId !== selectedSensorId) {
+    sensorQualityHistoryLoadingId = selectedSensorId;
+    if (sensor) renderSensorSelection(sensor);
+    refreshSelectedSensorQualityHistory(selectedSensorId).catch((error) => {
+      sensorQualityHistoryLoadingId = null;
+      elements.selectionTimelineList.classList.remove("inline-loading");
+      elements.selectionTimelineList.textContent = "Nie udało się pobrać historii jakości.";
+      console.error("Nie udało się pobrać historii jakości sensora", error);
+    });
+  }
+});
+for (const button of elements.sensorHealthWindowButtons) {
+  button.addEventListener("click", () => {
+    if (!selectedSensorId) return;
+    const hours = Number(button.dataset.healthHours);
+    if (![1, 6, 24, 168].includes(hours) || hours === sensorHealthHistoryHours) return;
+    sensorHealthHistoryHours = hours;
+    sensorHealthHistory = null;
+    sensorHealthHistorySensorId = null;
+    sensorHealthHistoryLoadingId = selectedSensorId;
+    const sensor = currentSensors.find((candidate) => candidate.id === selectedSensorId);
+    if (sensor) renderSensorSelection(sensor);
+    refreshSelectedSensorHealthHistory(selectedSensorId).catch((error) => {
+      sensorHealthHistoryLoadingId = null;
+      elements.selectionTimelineList.classList.remove("inline-loading");
+      elements.selectionTimelineList.textContent = "Nie udało się pobrać historii kondycji.";
+      console.error("Nie udało się pobrać historii kondycji sensora", error);
+    });
+  });
+}
 elements.sensorDiagnosticsExport.addEventListener(
   "click",
   downloadSelectedSensorDiagnostics,

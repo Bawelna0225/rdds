@@ -578,6 +578,19 @@
             </div>
             <div id="selection-details" class="selection-details"></div>
             <div id="sensor-controls" class="sensor-controls hidden">
+              <div class="sensor-history-mode" role="group" aria-label="Rodzaj historii sensora">
+                <button id="sensor-health-history" type="button">Historia kondycji</button>
+                <button id="sensor-quality-history" type="button" class="secondary-button">
+                  Jakość strumienia
+                </button>
+              </div>
+              <div id="sensor-health-window" class="sensor-history-window" aria-label="Zakres historii kondycji">
+                <span>Zakres</span>
+                <button type="button" data-health-hours="1" class="secondary-button">1 h</button>
+                <button type="button" data-health-hours="6" class="secondary-button">6 h</button>
+                <button type="button" data-health-hours="24" class="secondary-button active">24 h</button>
+                <button type="button" data-health-hours="168" class="secondary-button">7 dni</button>
+              </div>
               <button id="sensor-diagnostics-export" type="button" class="secondary-button">
                 Pobierz diagnostykę JSON
               </button>

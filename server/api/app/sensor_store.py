@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
@@ -8,6 +9,196 @@ from app.database import connection
 from app.models import SensorMaintenance, SensorRegistration, SensorUpdate
 
 LegacySensorAccess = Literal["allowed", "disabled", "individual_required"]
+
+
+HEALTH_HISTORY_EVENT_TYPES = (
+    "sensor_registered",
+    "sensor_enabled",
+    "sensor_disabled",
+    "sensor_online",
+    "sensor_degraded",
+    "sensor_offline",
+    "sensor_health_changed",
+    "sensor_recovered",
+    "sensor_maintenance_started",
+    "sensor_maintenance_ended",
+)
+
+MONITORED_SENSOR_STATES = {"online", "degraded", "offline"}
+ISSUE_SENSOR_STATES = {"degraded", "offline"}
+
+
+def _default_health_reason(state: str | None) -> str | None:
+    return {
+        "online": "healthy",
+        "offline": "heartbeat_timeout",
+        "maintenance": "maintenance",
+        "disabled": "disabled",
+        "provisioning": "awaiting_heartbeat",
+    }.get(state)
+
+
+def _health_event_target(event: dict[str, Any]) -> tuple[str | None, str | None]:
+    details = event.get("details") or {}
+    event_type = event.get("event_type")
+    state = details.get("to_status")
+    if state is None and event_type in {
+        "sensor_registered",
+        "sensor_enabled",
+        "sensor_disabled",
+    }:
+        state = details.get("status")
+
+    if event_type == "sensor_maintenance_started":
+        reason = "maintenance"
+    elif event_type == "sensor_disabled":
+        reason = "disabled"
+    else:
+        reason = details.get("reason") or _default_health_reason(state)
+    return state, reason
+
+
+def _health_history_summary(
+    *,
+    sensor: dict[str, Any],
+    events: list[dict[str, Any]],
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[str, Any]:
+    created_at = sensor["created_at"]
+    coverage_start = max(window_start, created_at)
+    if coverage_start >= window_end:
+        return {
+            "coverage_start": coverage_start,
+            "coverage_end": window_end,
+            "coverage_seconds": 0,
+            "summary": {
+                "availability_percent": None,
+                "healthy_percent": None,
+                "online_seconds": 0,
+                "degraded_seconds": 0,
+                "offline_seconds": 0,
+                "excluded_seconds": 0,
+                "issue_count": 0,
+                "recovery_count": 0,
+            },
+            "timeline": [],
+        }
+
+    prior_events = [event for event in events if event["occurred_at"] < coverage_start]
+    window_events = [
+        event
+        for event in events
+        if coverage_start <= event["occurred_at"] <= window_end
+    ]
+
+    initial_state: str | None = None
+    initial_reason: str | None = None
+    if prior_events:
+        initial_state, initial_reason = _health_event_target(prior_events[-1])
+    elif window_events:
+        first_details = window_events[0].get("details") or {}
+        initial_state = first_details.get("from_status")
+        initial_reason = first_details.get("from_reason") or _default_health_reason(
+            initial_state
+        )
+    if initial_state is None:
+        if created_at >= window_start:
+            initial_state = "provisioning"
+            initial_reason = "awaiting_heartbeat"
+        else:
+            initial_state = sensor["status"]
+            initial_reason = sensor["health_reason"]
+
+    timeline: list[dict[str, Any]] = []
+    state = initial_state
+    reason = initial_reason or _default_health_reason(state)
+    segment_start = coverage_start
+    issue_count = 0
+    recovery_count = 0
+
+    for event in window_events:
+        event_at = min(max(event["occurred_at"], coverage_start), window_end)
+        next_state, next_reason = _health_event_target(event)
+        if next_state is None:
+            continue
+        next_reason = next_reason or reason or _default_health_reason(next_state)
+        if next_state == state and next_reason == reason:
+            continue
+
+        if event_at > segment_start:
+            timeline.append(
+                {
+                    "state": state,
+                    "reason": reason,
+                    "started_at": segment_start,
+                    "ended_at": event_at,
+                    "duration_seconds": int((event_at - segment_start).total_seconds()),
+                }
+            )
+
+        if next_state in ISSUE_SENSOR_STATES and state not in ISSUE_SENSOR_STATES:
+            issue_count += 1
+        if state in ISSUE_SENSOR_STATES and next_state == "online":
+            recovery_count += 1
+
+        state = next_state
+        reason = next_reason
+        segment_start = event_at
+
+    if segment_start < window_end:
+        timeline.append(
+            {
+                "state": state,
+                "reason": reason,
+                "started_at": segment_start,
+                "ended_at": window_end,
+                "duration_seconds": int((window_end - segment_start).total_seconds()),
+            }
+        )
+
+    durations = {
+        "online": 0,
+        "degraded": 0,
+        "offline": 0,
+        "excluded": 0,
+    }
+    for segment in timeline:
+        duration = segment["duration_seconds"]
+        segment_state = segment["state"]
+        if segment_state in MONITORED_SENSOR_STATES:
+            durations[segment_state] += duration
+        else:
+            durations["excluded"] += duration
+
+    monitored_seconds = (
+        durations["online"] + durations["degraded"] + durations["offline"]
+    )
+    availability_percent = None
+    healthy_percent = None
+    if monitored_seconds > 0:
+        availability_percent = round(
+            100 * (durations["online"] + durations["degraded"]) / monitored_seconds,
+            2,
+        )
+        healthy_percent = round(100 * durations["online"] / monitored_seconds, 2)
+
+    return {
+        "coverage_start": coverage_start,
+        "coverage_end": window_end,
+        "coverage_seconds": int((window_end - coverage_start).total_seconds()),
+        "summary": {
+            "availability_percent": availability_percent,
+            "healthy_percent": healthy_percent,
+            "online_seconds": durations["online"],
+            "degraded_seconds": durations["degraded"],
+            "offline_seconds": durations["offline"],
+            "excluded_seconds": durations["excluded"],
+            "issue_count": issue_count,
+            "recovery_count": recovery_count,
+        },
+        "timeline": timeline,
+    }
 
 SENSOR_COLUMNS = """
     sensor.id,
@@ -208,6 +399,81 @@ def list_sensor_health_overview() -> list[dict[str, Any]]:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+
+
+def get_sensor_health_history(
+    sensor_id: UUID,
+    hours: int,
+) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                sensor_key AS sensor_id,
+                display_name,
+                status,
+                health_reason,
+                created_at,
+                NOW() AS generated_at
+            FROM sensors
+            WHERE id = %s AND deleted_at IS NULL
+            """,
+            (sensor_id,),
+        )
+        sensor = cursor.fetchone()
+        if sensor is None:
+            return None
+
+        window_end = sensor["generated_at"]
+        window_start = window_end - timedelta(hours=hours)
+        cursor.execute(
+            """
+            WITH prior_event AS (
+                SELECT id, occurred_at, event_type, details
+                FROM audit_events
+                WHERE sensor_id = %(sensor_id)s
+                  AND occurred_at < %(window_start)s
+                  AND event_type = ANY(%(event_types)s)
+                ORDER BY occurred_at DESC, id DESC
+                LIMIT 1
+            ),
+            window_events AS (
+                SELECT id, occurred_at, event_type, details
+                FROM audit_events
+                WHERE sensor_id = %(sensor_id)s
+                  AND occurred_at >= %(window_start)s
+                  AND occurred_at <= %(window_end)s
+                  AND event_type = ANY(%(event_types)s)
+            )
+            SELECT id, occurred_at, event_type, details
+            FROM prior_event
+            UNION ALL
+            SELECT id, occurred_at, event_type, details
+            FROM window_events
+            ORDER BY occurred_at, id
+            """,
+            {
+                "sensor_id": sensor_id,
+                "window_start": window_start,
+                "window_end": window_end,
+                "event_types": list(HEALTH_HISTORY_EVENT_TYPES),
+            },
+        )
+        events = [dict(row) for row in cursor.fetchall()]
+
+    history = _health_history_summary(
+        sensor=dict(sensor),
+        events=events,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    return {
+        "sensor_id": sensor["sensor_id"],
+        "display_name": sensor["display_name"],
+        "window_hours": hours,
+        **history,
+    }
 
 def get_sensor_quality_history(
     sensor_id: UUID,

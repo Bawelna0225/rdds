@@ -157,6 +157,40 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         self.assertIn("reported_quality_ignored_ratio", self.sensor_stream_quality_migration)
         self.assertIn("OLD.health_reason IS DISTINCT FROM NEW.health_reason", self.sensor_stream_quality_migration)
 
+    def test_sensor_detail_sections_are_collapsible_and_persisted(self) -> None:
+        self.assertIn('SENSOR_DETAIL_STATE_KEY = "rdds.sensor.detail.sections.v1"', self.source)
+        self.assertIn("function sensorDetailSection", self.source)
+        self.assertIn("function setSensorDetailCollapsed", self.source)
+        self.assertIn('section.dataset.detailSectionKey = key', self.source)
+        self.assertIn('localStorage.setItem(SENSOR_DETAIL_STATE_KEY', self.source)
+        for key in (
+            "operational",
+            "agent",
+            "skyspy-agent",
+            "quality-window",
+            "agent-rdds",
+            "buffer-device",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(f'"{key}"', self.source)
+        self.assertIn(".sensor-detail-section.collapsed .sensor-detail-section-body", self.styles)
+        self.assertIn(".sensor-detail-section.collapsed .section-chevron", self.styles)
+
+    def test_sensor_health_history_is_on_demand_with_explicit_windows(self) -> None:
+        self.assertIn('id="sensor-health-history"', self.index)
+        self.assertIn('id="sensor-quality-history"', self.index)
+        for hours in (1, 6, 24, 168):
+            with self.subTest(hours=hours):
+                self.assertIn(f'data-health-hours="{hours}"', self.index)
+        self.assertIn("async function refreshSelectedSensorHealthHistory", self.source)
+        self.assertIn("/health-history?hours=", self.source)
+        self.assertNotIn("/health-history?hours=", self.live_refresh)
+        self.assertIn("function renderSensorHealthHistory", self.source)
+        self.assertIn("availability_percent", self.source)
+        self.assertIn("healthy_percent", self.source)
+        self.assertIn("sensor-health-history-bar", self.styles)
+        self.assertIn("health-state-offline", self.styles)
+
     def test_sensor_health_overview_is_loaded_only_on_demand(self) -> None:
         self.assertIn('id="sensor-overview-open"', self.index)
         self.assertIn('id="sensor-overview-panel"', self.index)
@@ -528,7 +562,8 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         self.assertIn("function downloadSelectedSensorDiagnostics()", self.source)
         for heading in ("Stan operacyjny", "Agent", "Sky-Spy → agent", "Agent → RDDS"):
             with self.subTest(heading=heading):
-                self.assertIn(f'detailSection("{heading}")', self.source)
+                self.assertIn(f'"{heading}",', self.source)
+        self.assertIn("function sensorDetailSection", self.source)
         self.assertIn("sensor-diagnostic-summary", self.styles)
         self.assertNotIn('"token_prefix",', self.source.split("const fields = [", 1)[1].split("];", 1)[0])
 

@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.20.0**. The complete software path is tested
+> Current development version: **0.21.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -242,6 +242,7 @@ annotated Git tag:
 | `rdds-v0.18.1` | higher-contrast light theme and map-to-sensor sidebar navigation |
 | `rdds-v0.19.0` | automatic Sky-Spy stream-quality supervision and history |
 | `rdds-v0.20.0` | fleet-wide sensor health overview and map navigation |
+| `rdds-v0.21.0` | per-sensor health history, availability and operational timeline |
 
 Start with:
 
@@ -254,6 +255,7 @@ Start with:
 - `docs/RDDS_STAGE18.md` for sensor diagnostics and controlled fault tests;
 - `docs/RDDS_STAGE19.md` for automatic stream-quality supervision;
 - `docs/RDDS_STAGE20.md` for the fleet-wide sensor health overview;
+- `docs/RDDS_STAGE21.md` for sensor health history and availability metrics;
 - `docs/RDDS_STAGE14.md` for loading states and storage-budget monitoring;
 - `docs/RDDS_STAGE15.md` for operator sessions and security-event monitoring;
 - `docs/RDDS_STAGE16.md` for zone incident awareness and audible alerts;
