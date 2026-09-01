@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.22.0**. The complete software path is tested
+> Current development version: **0.22.1**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -263,6 +263,16 @@ Start with:
 - `docs/RDDS_STAGE15.md` for operator sessions and security-event monitoring;
 - `docs/RDDS_STAGE16.md` for zone incident awareness and audible alerts;
 - `docs/RDDS_STAGE11.md` for firmware fields and compilation.
+
+
+## RDDS 0.22.1 archive performance hotfix
+
+RDDS 0.22.1 removes archive-time scans of the raw observation history. Closed
+intrusion-alert lists no longer recalculate contributing sensors across the
+entire track, and `include_ended=true` track archive requests skip
+`track_observations`/`observations`. Live track requests retain the existing
+sensor-count behavior. The audit list remains capped at 100 rows per request and
+is unchanged by this hotfix.
 
 ## Planned work
 

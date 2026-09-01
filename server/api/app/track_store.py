@@ -398,17 +398,21 @@ def list_tracks(include_ended: bool = False) -> list[dict[str, Any]]:
                 track.last_seen_at,
                 track.ended_at,
                 track.observation_count,
-                COUNT(DISTINCT observation.sensor_id) AS contributing_sensors
+                CASE
+                    WHEN %s THEN NULL
+                    ELSE COUNT(DISTINCT observation.sensor_id)
+                END AS contributing_sensors
             FROM tracks AS track
             LEFT JOIN track_observations AS link
                 ON link.track_id = track.id
+               AND NOT %s
             LEFT JOIN observations AS observation
                 ON observation.id = link.observation_id
             WHERE (%s OR track.state <> 'ended')
             GROUP BY track.id
             ORDER BY track.last_seen_at DESC
             """,
-            (include_ended,),
+            (include_ended, include_ended, include_ended),
         )
         return [dict(row) for row in cursor.fetchall()]
 

@@ -3144,7 +3144,9 @@ function renderTrackList(tracks, { archived = false } = {}) {
     const altitude = document.createElement("span");
     altitude.textContent = formatNumber(track.altitude_m, 0, " m");
     const sensors = document.createElement("span");
-    sensors.textContent = `${track.contributing_sensors} sensory`;
+    sensors.textContent = track.contributing_sensors == null
+      ? "sensory: —"
+      : `${track.contributing_sensors} sensory`;
     const time = document.createElement("span");
     time.textContent = archived
       ? formatCompactDateTime(track.last_seen_at)

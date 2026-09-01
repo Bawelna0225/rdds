@@ -322,6 +322,7 @@ def list_alerts(
                 JOIN observations AS observation
                     ON observation.id = link.observation_id
                 WHERE link.track_id = track.id
+                  AND NOT %(closed_only)s
             ) AS sensor_summary ON TRUE
             WHERE (
                 CASE
