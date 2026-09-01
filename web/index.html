@@ -24,7 +24,12 @@
           </label>
           <label>
             Hasło
-            <input id="login-password" type="password" autocomplete="current-password" required />
+            <span class="password-input-row">
+              <input id="login-password" type="password" autocomplete="current-password" required />
+              <button type="button" class="secondary-button password-visibility-button"
+                data-password-toggle data-password-target="login-password" aria-pressed="false"
+                aria-label="Pokaż hasło" title="Pokaż hasło"></button>
+            </span>
           </label>
           <button id="login-submit" type="submit">Zaloguj</button>
           <p id="login-message" class="operator-message">
@@ -222,23 +227,33 @@
                 <form id="password-form" class="operator-login-form">
                   <label>
                     Obecne hasło
-                    <input
-                      id="current-password"
-                      type="password"
-                      autocomplete="current-password"
-                      required
-                    />
+                    <span class="password-input-row">
+                      <input
+                        id="current-password"
+                        type="password"
+                        autocomplete="current-password"
+                        required
+                      />
+                      <button type="button" class="secondary-button password-visibility-button"
+                        data-password-toggle data-password-target="current-password" aria-pressed="false"
+                        aria-label="Pokaż hasło" title="Pokaż hasło"></button>
+                    </span>
                   </label>
                   <label>
                     Nowe hasło (min. 12 znaków)
-                    <input
-                      id="new-password"
-                      type="password"
-                      minlength="12"
-                      maxlength="128"
-                      autocomplete="new-password"
-                      required
-                    />
+                    <span class="password-input-row">
+                      <input
+                        id="new-password"
+                        type="password"
+                        minlength="12"
+                        maxlength="128"
+                        autocomplete="new-password"
+                        required
+                      />
+                      <button type="button" class="secondary-button password-visibility-button"
+                        data-password-toggle data-password-target="new-password" aria-pressed="false"
+                        aria-label="Pokaż hasło" title="Pokaż hasło"></button>
+                    </span>
                   </label>
                   <button id="password-submit" type="submit">Zmień hasło</button>
                   <p id="operator-message" class="operator-message">
@@ -302,6 +317,39 @@
             <div class="section-body">
               <div id="alert-list" class="entity-list empty-state">
                 Brak otwartych alarmów
+              </div>
+            </div>
+          </section>
+
+          <section class="sidebar-section sensor-alerts-section" data-section-key="sensor-alerts">
+            <button class="section-heading section-toggle" type="button" aria-expanded="true">
+              <h2>Alarmy sensorów</h2>
+              <span class="section-heading-meta">
+                <span id="sensor-alert-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="sensor-alert-list" class="entity-list empty-state">
+                Brak otwartych alarmów sensorów
+              </div>
+            </div>
+          </section>
+
+          <section
+            class="sidebar-section closed-sensor-alerts-section collapsed"
+            data-section-key="closed-sensor-alerts"
+          >
+            <button class="section-heading section-toggle" type="button" aria-expanded="false">
+              <h2>Zamknięte alarmy sensorów</h2>
+              <span class="section-heading-meta">
+                <span id="closed-sensor-alert-count" class="counter">0</span>
+                <span class="section-chevron" aria-hidden="true"></span>
+              </span>
+            </button>
+            <div class="section-body">
+              <div id="closed-sensor-alert-list" class="entity-list closed-alert-list empty-state">
+                Rozwiń sekcję, aby wczytać archiwum
               </div>
             </div>
           </section>
@@ -595,6 +643,9 @@
                 Pobierz diagnostykę JSON
               </button>
             </div>
+            <div id="sensor-alert-controls" class="incident-controls hidden">
+              <button id="sensor-alert-open-sensor" type="button">Otwórz sensor</button>
+            </div>
             <div id="incident-controls" class="incident-controls hidden">
               <button id="incident-show-entry" type="button">Punkt wejścia</button>
               <button id="incident-show-live" type="button" class="secondary-button">
@@ -789,7 +840,13 @@
                   Zamknij
                 </button>
               </div>
-              <form id="operator-create-form" class="sensor-form">
+              <div class="operator-create-toolbar">
+                <button id="operator-create-toggle" type="button" aria-expanded="false"
+                  aria-controls="operator-create-form">
+                  Utwórz konto
+                </button>
+              </div>
+              <form id="operator-create-form" class="sensor-form hidden">
                 <label>
                   Login
                   <input id="account-username" type="text" minlength="3" maxlength="64"
@@ -809,10 +866,21 @@
                 </label>
                 <label>
                   Hasło tymczasowe
-                  <input id="account-password" type="password" minlength="12" maxlength="128"
-                    autocomplete="new-password" required />
+                  <span class="password-input-row">
+                    <input id="account-password" type="password" minlength="12" maxlength="128"
+                      autocomplete="new-password" required />
+                    <button id="account-password-toggle" type="button"
+                      class="secondary-button password-visibility-button" data-password-toggle
+                      data-password-target="account-password" aria-pressed="false"
+                      aria-label="Pokaż hasło" title="Pokaż hasło"></button>
+                  </span>
                 </label>
-                <button id="account-create" type="submit">Utwórz konto</button>
+                <div class="operator-create-actions">
+                  <button id="account-create" type="submit">Utwórz konto</button>
+                  <button id="account-create-cancel" type="button" class="secondary-button">
+                    Anuluj
+                  </button>
+                </div>
               </form>
               <div id="operator-list" class="entity-list empty-state">
                 Ładowanie kont…

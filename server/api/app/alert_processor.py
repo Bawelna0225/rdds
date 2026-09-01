@@ -4,6 +4,7 @@ import time
 import psycopg
 
 from app.alert_store import evaluate_intrusions
+from app.sensor_alert_store import evaluate_sensor_alerts
 from app.config import settings
 
 logging.basicConfig(
@@ -22,11 +23,15 @@ def main() -> None:
     while True:
         try:
             detected, presence_changes = evaluate_intrusions()
-            if detected or presence_changes:
+            sensor_alerts, sensor_alerts_closed = evaluate_sensor_alerts()
+            if detected or presence_changes or sensor_alerts or sensor_alerts_closed:
                 logger.info(
-                    "Alert cycle: detected_or_refreshed=%s presence_changes=%s",
+                    "Alert cycle: detected_or_refreshed=%s presence_changes=%s "
+                    "sensor_alerts=%s sensor_alerts_closed=%s",
                     detected,
                     presence_changes,
+                    sensor_alerts,
+                    sensor_alerts_closed,
                 )
         except (psycopg.Error, RuntimeError):
             logger.exception("Alert processing cycle failed")

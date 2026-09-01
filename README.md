@@ -6,7 +6,7 @@ the open-source [Sky-Spy](https://github.com/colonelpanichacks/Sky-Spy)
 receiver firmware with a durable field agent, a PostGIS backend, track
 processing, protected zones, alerts and an operator web interface.
 
-> Current development version: **0.21.0**. The complete software path is tested
+> Current development version: **0.22.0**. The complete software path is tested
 > with emulators. Firmware builds for XIAO ESP32-S3 and XIAO ESP32-C5, but
 > reception with physical hardware still requires validation.
 
@@ -58,6 +58,7 @@ operator actions.
 - deduplicated 60-second live trails;
 - protected zones with persistent incident snapshots and live presence status;
 - alert acknowledgement, closure, timeline and controlled audible notification;
+- deduplicated sensor infrastructure alerts with acknowledgement, automatic recovery closure and reason grouping;
 - sensor and zone editing, disabling and soft deletion;
 - live Leaflet map with collapsible operational layers and panels;
 - synthetic multi-sensor simulator and Sky-Spy serial emulator;
@@ -84,7 +85,7 @@ enforcement decisions.
 | `server/api/` | FastAPI ingest, management and query API |
 | `database/` | initial PostGIS schema and ordered migrations |
 | `server/api/app/tracker.py` | observation-to-track background processor |
-| `server/api/app/alert_processor.py` | protected-zone alert processor |
+| `server/api/app/alert_processor.py` | protected-zone and sensor-infrastructure alert processor |
 | `web/` | operator interface served by Nginx |
 | `simulator/` | synthetic multi-sensor RDDS protocol source |
 | `skyspy-emulator/` | synthetic Sky-Spy serial JSON source |
@@ -243,6 +244,7 @@ annotated Git tag:
 | `rdds-v0.19.0` | automatic Sky-Spy stream-quality supervision and history |
 | `rdds-v0.20.0` | fleet-wide sensor health overview and map navigation |
 | `rdds-v0.21.0` | per-sensor health history, availability and operational timeline |
+| `rdds-v0.22.0` | deduplicated sensor infrastructure alerts and automatic recovery closure |
 
 Start with:
 
@@ -256,6 +258,7 @@ Start with:
 - `docs/RDDS_STAGE19.md` for automatic stream-quality supervision;
 - `docs/RDDS_STAGE20.md` for the fleet-wide sensor health overview;
 - `docs/RDDS_STAGE21.md` for sensor health history and availability metrics;
+- `docs/RDDS_STAGE22.md` for sensor infrastructure alerts and lifecycle;
 - `docs/RDDS_STAGE14.md` for loading states and storage-budget monitoring;
 - `docs/RDDS_STAGE15.md` for operator sessions and security-event monitoring;
 - `docs/RDDS_STAGE16.md` for zone incident awareness and audible alerts;

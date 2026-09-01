@@ -16,6 +16,7 @@ def retention_configuration() -> dict[str, Any]:
             "observations": settings.retention_observations_days,
             "audit_events": settings.retention_audit_days,
             "closed_alerts": settings.retention_alerts_days,
+            "closed_sensor_alerts": settings.retention_alerts_days,
             "ended_tracks": settings.retention_tracks_days,
         },
     }

@@ -83,6 +83,15 @@ def _count_candidate_rows(cursor: psycopg.Cursor) -> dict[str, int]:
             """,
             (settings.retention_audit_days,),
         ),
+        "closed_sensor_alerts": (
+            """
+            SELECT COUNT(*) AS count
+            FROM sensor_alerts
+            WHERE state = 'closed'
+              AND closed_at < NOW() - make_interval(days => %s)
+            """,
+            (settings.retention_alerts_days,),
+        ),
         "closed_alerts": (
             """
             SELECT COUNT(*) AS count
@@ -159,6 +168,16 @@ def _delete_expired_rows(cursor: psycopg.Cursor) -> dict[str, int]:
         id_column="id",
         predicate="occurred_at < NOW() - make_interval(days => %s)",
         parameters=(settings.retention_audit_days,),
+    )
+    counts["closed_sensor_alerts"] = _delete_in_batches(
+        cursor,
+        table="sensor_alerts",
+        id_column="id",
+        predicate="""
+            state = 'closed'
+            AND closed_at < NOW() - make_interval(days => %s)
+        """,
+        parameters=(settings.retention_alerts_days,),
     )
     counts["closed_alerts"] = _delete_in_batches(
         cursor,

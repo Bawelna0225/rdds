@@ -153,6 +153,13 @@ const alertStateLabels = {
   closed: "zamknięty",
 };
 
+const sensorAlertResolutionLabels = {
+  recovered: "sprawność odzyskana",
+  maintenance: "tryb konserwacji",
+  disabled: "sensor wyłączony",
+  sensor_deleted: "sensor usunięty",
+};
+
 const severityColorVariables = {
   low: "--zone-low",
   medium: "--zone-medium",
@@ -191,6 +198,10 @@ const auditEventLabels = {
   sensor_recovered: "Sensor odzyskał sprawność",
   sensor_maintenance_started: "Rozpoczęto konserwację sensora",
   sensor_maintenance_ended: "Zakończono konserwację sensora",
+  sensor_alert_opened: "Otwarto alarm sensora",
+  sensor_alert_acknowledged: "Potwierdzono alarm sensora",
+  sensor_alert_reason_changed: "Zmieniła się przyczyna alarmu sensora",
+  sensor_alert_closed: "Zamknięto alarm sensora",
   operator_created: "Utworzono konto",
   operator_updated: "Zmieniono konto",
   operator_enabled: "Włączono konto",
@@ -284,10 +295,13 @@ const elements = {
   operatorEditor: document.querySelector("#operator-editor"),
   operatorEditorClose: document.querySelector("#operator-editor-close"),
   operatorCreateForm: document.querySelector("#operator-create-form"),
+  operatorCreateToggle: document.querySelector("#operator-create-toggle"),
+  accountCreateCancel: document.querySelector("#account-create-cancel"),
   accountUsername: document.querySelector("#account-username"),
   accountDisplayName: document.querySelector("#account-display-name"),
   accountRole: document.querySelector("#account-role"),
   accountPassword: document.querySelector("#account-password"),
+  accountPasswordToggle: document.querySelector("#account-password-toggle"),
   accountCreate: document.querySelector("#account-create"),
   operatorList: document.querySelector("#operator-list"),
   securityEditor: document.querySelector("#security-editor"),
@@ -322,6 +336,12 @@ const elements = {
   sensorHealthBanner: document.querySelector("#sensor-health-banner"),
   alertList: document.querySelector("#alert-list"),
   alertsSection: document.querySelector('[data-section-key="alerts"]'),
+  sensorAlertList: document.querySelector("#sensor-alert-list"),
+  sensorAlertsSection: document.querySelector('[data-section-key="sensor-alerts"]'),
+  sensorAlertCount: document.querySelector("#sensor-alert-count"),
+  closedSensorAlertsSection: document.querySelector('[data-section-key="closed-sensor-alerts"]'),
+  closedSensorAlertList: document.querySelector("#closed-sensor-alert-list"),
+  closedSensorAlertCount: document.querySelector("#closed-sensor-alert-count"),
   closedAlertsSection: document.querySelector('[data-section-key="closed-alerts"]'),
   closedAlertCount: document.querySelector("#closed-alert-count"),
   closedAlertList: document.querySelector("#closed-alert-list"),
@@ -356,6 +376,8 @@ const elements = {
   selectionTitle: document.querySelector("#selection-title"),
   selectionDetails: document.querySelector("#selection-details"),
   selectionTimelineTitle: document.querySelector("#selection-timeline-title"),
+  sensorAlertControls: document.querySelector("#sensor-alert-controls"),
+  sensorAlertOpenSensor: document.querySelector("#sensor-alert-open-sensor"),
   incidentControls: document.querySelector("#incident-controls"),
   incidentShowEntry: document.querySelector("#incident-show-entry"),
   incidentShowLive: document.querySelector("#incident-show-live"),
@@ -454,8 +476,12 @@ let currentZones = [];
 let currentAlerts = [];
 let currentOpenAlerts = [];
 let currentClosedAlerts = [];
+let currentOpenSensorAlerts = [];
+let currentClosedSensorAlerts = [];
 const pendingAlertActions = new Map();
+const pendingSensorAlertActions = new Map();
 let alertDataRevision = 0;
+let sensorAlertDataRevision = 0;
 let currentAuditEvents = [];
 let currentAuditTotal = 0;
 let selectedTrackId = null;
@@ -473,6 +499,8 @@ let selectedZoneId = null;
 let selectedAuditEvent = null;
 let selectedAlertId = null;
 let selectedAlertSnapshot = null;
+let selectedSensorAlertId = null;
+let selectedSensorAlertSnapshot = null;
 let sidebarResizeTimer = null;
 let liveFollowTrackId = null;
 let replayTrackId = null;
@@ -503,6 +531,9 @@ let trackAudioBaselineReady = false;
 let knownTrackIds = new Set();
 let sensorHealthBaselineReady = false;
 let knownSensorIssueIds = new Set();
+let sensorAlertBaselineReady = false;
+let knownSensorAlertIds = new Set();
+let openSensorAlertGroups = new Set();
 let alertAudioSettings = {
   enabled: false,
   volume: 0.8,
@@ -515,6 +546,8 @@ let archiveLoadInProgress = false;
 let archivedTracksLoaded = false;
 let closedAlertsLoadInProgress = false;
 let closedAlertsLoaded = false;
+let closedSensorAlertsLoadInProgress = false;
+let closedSensorAlertsLoaded = false;
 let zonesLoadInProgress = false;
 let auditLoadInProgress = false;
 let zonesLoaded = false;
@@ -565,6 +598,12 @@ function formatInteger(value) {
     return "—";
   }
   return new Intl.NumberFormat("pl-PL").format(value);
+}
+
+function formatBoolean(value) {
+  if (value === true) return "tak";
+  if (value === false) return "nie";
+  return "—";
 }
 
 function formatPercent(value, digits = 0) {
@@ -1042,6 +1081,9 @@ function auditEventCategory(event) {
 }
 
 function auditTimelineTitle(event) {
+  if (event?.sensor_alert_id) {
+    return "Historia alarmu sensora";
+  }
   if (event?.alert_id || auditEventCategory(event) === "alert") {
     return "Historia alarmu strefowego";
   }
@@ -2026,6 +2068,13 @@ function initializeCollapsibleSections() {
         void loadClosedAlerts();
       }
       if (
+        section === elements.closedSensorAlertsSection
+        && !collapsed
+        && !closedSensorAlertsLoaded
+      ) {
+        void loadClosedSensorAlerts();
+      }
+      if (
         section === elements.archivedTracksSection
         && !collapsed
         && !archivedTracksLoaded
@@ -2039,11 +2088,13 @@ function initializeCollapsibleSections() {
 function applyOperationalSidebarOrder() {
   const sectionOrder = [
     "alerts",
+    "sensor-alerts",
     "tracks",
     "zones",
     "sensors",
     "archived-tracks",
     "closed-alerts",
+    "closed-sensor-alerts",
     "audit",
   ];
 
@@ -2060,6 +2111,12 @@ function applyOperationalSidebarOrder() {
 function revealAlertsSectionForNewAlarm() {
   if (elements.alertsSection?.classList.contains("collapsed")) {
     setSectionCollapsed(elements.alertsSection, false, false);
+  }
+}
+
+function revealSensorAlertsSection() {
+  if (elements.sensorAlertsSection?.classList.contains("collapsed")) {
+    setSectionCollapsed(elements.sensorAlertsSection, false, false);
   }
 }
 
@@ -2190,6 +2247,7 @@ async function login(event) {
       },
     });
     elements.loginPassword.value = "";
+    resetPasswordVisibility(elements.loginForm);
     acceptSession(session);
     renderAlertLists();
     renderSensorList(currentSensors);
@@ -2202,6 +2260,7 @@ async function login(event) {
     currentUser = null;
     csrfToken = null;
     elements.loginPassword.value = "";
+    resetPasswordVisibility(elements.loginForm);
     elements.loginMessage.textContent = "Nieprawidłowy login lub hasło.";
     elements.loginMessage.classList.add("error");
   } finally {
@@ -2232,13 +2291,21 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   currentAlerts = [];
   currentOpenAlerts = [];
   currentClosedAlerts = [];
+  currentOpenSensorAlerts = [];
+  currentClosedSensorAlerts = [];
   closedAlertsLoaded = false;
+  closedSensorAlertsLoaded = false;
+  closedSensorAlertsLoadInProgress = false;
   archivedTracksLoaded = false;
   pendingAlertActions.clear();
+  pendingSensorAlertActions.clear();
   alertDataRevision += 1;
+  sensorAlertDataRevision += 1;
   selectedZoneId = null;
   selectedAlertId = null;
   selectedAlertSnapshot = null;
+  selectedSensorAlertId = null;
+  selectedSensorAlertSnapshot = null;
   stopActiveAlertSounds();
   alertAudioBaselineReady = false;
   knownAlertIds = new Set();
@@ -2246,6 +2313,8 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   knownTrackIds = new Set();
   sensorHealthBaselineReady = false;
   knownSensorIssueIds = new Set();
+  sensorAlertBaselineReady = false;
+  knownSensorAlertIds = new Set();
   currentAuditEvents = [];
   currentAuditTotal = 0;
   elements.closedAlertFrom.value = "";
@@ -2264,6 +2333,9 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   elements.loginMessage.classList.remove("error");
   renderAlertLists();
   renderClosedAlertList();
+  renderSensorAlertSnapshot();
+  elements.closedSensorAlertList.classList.add("empty-state");
+  elements.closedSensorAlertList.textContent = "Rozwiń sekcję, aby wczytać archiwum";
   renderSensorList(currentSensors);
   renderSensorHealthSummary(currentSensors);
   renderTrackList(currentTracks);
@@ -2280,6 +2352,8 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   elements.archivedTrackCount.textContent = "0";
   elements.alertCount.textContent = "0";
   elements.closedAlertCount.textContent = "0";
+  elements.sensorAlertCount.textContent = "0";
+  elements.closedSensorAlertCount.textContent = "0";
   elements.zoneCount.textContent = "0";
   elements.auditCount.textContent = "0";
   elements.loginUsername.focus();
@@ -2314,6 +2388,7 @@ async function changeOwnPassword(event) {
       csrf: true,
     });
     elements.passwordForm.reset();
+    resetPasswordVisibility(elements.passwordForm);
     const session = await requestJson("/api/v1/auth/me");
     acceptSession(session);
     setOperatorMenuOpen(false);
@@ -2324,6 +2399,49 @@ async function changeOwnPassword(event) {
   } finally {
     elements.passwordSubmit.disabled = false;
   }
+}
+
+const PASSWORD_EYE_ICON = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M2.2 12s3.5-6 9.8-6 9.8 6 9.8 6-3.5 6-9.8 6-9.8-6-9.8-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8" />
+  </svg>`;
+
+const PASSWORD_EYE_OFF_ICON = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M3 3l18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    <path d="M10.6 6.2A10.8 10.8 0 0 1 12 6c6.3 0 9.8 6 9.8 6a16.8 16.8 0 0 1-3.1 3.8M14.3 14.3A3.2 3.2 0 0 1 9.7 9.7M6.2 6.2C3.6 8 2.2 12 2.2 12s3.5 6 9.8 6c1.5 0 2.8-.3 4-.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`;
+
+function updatePasswordVisibilityButton(toggle, visible) {
+  if (!toggle) return;
+  const label = visible ? "Ukryj hasło" : "Pokaż hasło";
+  toggle.innerHTML = visible ? PASSWORD_EYE_OFF_ICON : PASSWORD_EYE_ICON;
+  toggle.setAttribute("aria-pressed", String(visible));
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+}
+
+function setPasswordVisible(input, toggle, visible) {
+  if (!input || !toggle) return;
+  input.type = visible ? "text" : "password";
+  updatePasswordVisibilityButton(toggle, visible);
+}
+
+function resetPasswordVisibility(root = document) {
+  for (const toggle of root.querySelectorAll("[data-password-toggle]")) {
+    const input = document.getElementById(toggle.dataset.passwordTarget ?? "");
+    setPasswordVisible(input, toggle, false);
+  }
+}
+
+function handlePasswordVisibilityClick(event) {
+  const toggle = event.target.closest("[data-password-toggle]");
+  if (!toggle) return;
+  const input = document.getElementById(toggle.dataset.passwordTarget ?? "");
+  if (!input) return;
+  setPasswordVisible(input, toggle, input.type === "password");
+  input.focus({ preventScroll: true });
 }
 
 function renderOperatorAccounts(accounts) {
@@ -2395,19 +2513,87 @@ function renderOperatorAccounts(accounts) {
     reset.type = "button";
     reset.textContent = "Resetuj hasło";
     reset.disabled = account.id === currentUser.id;
-    reset.addEventListener("click", async () => {
-      const temporaryPassword = window.prompt(
-        `Podaj nowe hasło tymczasowe dla ${account.username} (min. 12 znaków):`,
-      );
-      if (!temporaryPassword) return;
+
+    const resetForm = document.createElement("form");
+    resetForm.id = `operator-password-reset-${account.id}`;
+    resetForm.className = "operator-password-reset-form hidden";
+    reset.setAttribute("aria-controls", resetForm.id);
+    reset.setAttribute("aria-expanded", "false");
+
+    const resetLabel = document.createElement("label");
+    resetLabel.textContent = `Nowe hasło tymczasowe dla ${account.username} (min. 12 znaków)`;
+    const resetRow = document.createElement("span");
+    resetRow.className = "password-input-row";
+    const resetInput = document.createElement("input");
+    resetInput.id = `operator-reset-password-input-${account.id}`;
+    resetInput.type = "password";
+    resetInput.minLength = 12;
+    resetInput.maxLength = 128;
+    resetInput.autocomplete = "new-password";
+    resetInput.required = true;
+
+    const resetVisibility = document.createElement("button");
+    resetVisibility.type = "button";
+    resetVisibility.className = "secondary-button password-visibility-button";
+    resetVisibility.dataset.passwordToggle = "";
+    resetVisibility.dataset.passwordTarget = resetInput.id;
+    resetVisibility.setAttribute("aria-pressed", "false");
+    resetVisibility.setAttribute("aria-label", "Pokaż hasło");
+    resetVisibility.title = "Pokaż hasło";
+    updatePasswordVisibilityButton(resetVisibility, false);
+
+    resetRow.append(resetInput, resetVisibility);
+    resetLabel.append(resetRow);
+
+    const resetActions = document.createElement("div");
+    resetActions.className = "operator-password-reset-actions";
+
+    const resetSubmit = document.createElement("button");
+    resetSubmit.type = "submit";
+    resetSubmit.textContent = "Ustaw hasło";
+
+    const resetCancel = document.createElement("button");
+    resetCancel.type = "button";
+    resetCancel.className = "secondary-button";
+    resetCancel.textContent = "Anuluj";
+
+    resetActions.append(resetSubmit, resetCancel);
+    resetForm.append(resetLabel, resetActions);
+
+    const closeResetForm = () => {
+      resetForm.reset();
+      resetForm.classList.add("hidden");
+      setPasswordVisible(resetInput, resetVisibility, false);
+      reset.setAttribute("aria-expanded", "false");
+    };
+
+    reset.addEventListener("click", () => {
+      const opening = resetForm.classList.contains("hidden");
+      if (!opening) {
+        closeResetForm();
+        return;
+      }
+      resetForm.classList.remove("hidden");
+      reset.setAttribute("aria-expanded", "true");
+      resetInput.focus();
+    });
+
+    resetCancel.addEventListener("click", closeResetForm);
+
+    resetForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      resetSubmit.disabled = true;
       try {
         await adminRequest(`/api/v1/operators/${account.id}/password/reset`, "POST", {
-          temporary_password: temporaryPassword,
+          temporary_password: resetInput.value,
         });
+        closeResetForm();
         showToast("Hasło tymczasowe ustawione; aktywne sesje konta unieważniono.");
         await loadOperatorAccounts();
       } catch (error) {
         showToast(`Reset hasła nie powiódł się: ${error.message}`, true);
+      } finally {
+        resetSubmit.disabled = false;
       }
     });
 
@@ -2426,7 +2612,7 @@ function renderOperatorAccounts(accounts) {
       }
     });
     actions.append(edit, toggle, reset, remove);
-    card.append(actions);
+    card.append(actions, resetForm);
     elements.operatorList.append(card);
   }
 }
@@ -2442,11 +2628,29 @@ async function loadOperatorAccounts() {
   }
 }
 
+function setAccountPasswordVisible(visible) {
+  setPasswordVisible(elements.accountPassword, elements.accountPasswordToggle, visible);
+}
+
+function setOperatorCreateFormOpen(open, { reset = false } = {}) {
+  elements.operatorCreateForm.classList.toggle("hidden", !open);
+  elements.operatorCreateToggle.setAttribute("aria-expanded", String(open));
+  elements.operatorCreateToggle.textContent = open ? "Schowaj formularz" : "Utwórz konto";
+  if (!open || reset) {
+    elements.operatorCreateForm.reset();
+    setAccountPasswordVisible(false);
+  }
+  if (open) {
+    elements.accountUsername.focus();
+  }
+}
+
 async function openOperatorEditor() {
   if (!canAdminister()) return;
   setOperatorMenuOpen(false);
   elements.securityEditor.classList.add("hidden");
   elements.operatorEditor.classList.remove("hidden");
+  setOperatorCreateFormOpen(false, { reset: true });
   try {
     await loadOperatorAccounts();
   } catch (error) {
@@ -2464,7 +2668,7 @@ async function createOperatorAccount(event) {
       role: elements.accountRole.value,
       temporary_password: elements.accountPassword.value,
     });
-    elements.operatorCreateForm.reset();
+    setOperatorCreateFormOpen(false, { reset: true });
     showToast("Konto utworzone. Przy pierwszym logowaniu użytkownik zmieni hasło.");
     await loadOperatorAccounts();
   } catch (error) {
@@ -2637,6 +2841,200 @@ function renderAlertList(
     }
 
     target.append(card);
+  }
+}
+
+
+function sensorAlertDisplayName(alert) {
+  return alert.sensor_name || alert.sensor_key || alert.sensor_id || "Sensor";
+}
+
+function createSensorAlertCard(alert, { archive = false } = {}) {
+  const pendingAction = pendingSensorAlertActions.get(String(alert.id));
+  const card = document.createElement("div");
+  card.className = `entity-card managed-card alert-card sensor-alert-card severity-${alert.severity} alert-${alert.state}${String(alert.id) === String(selectedSensorAlertId) ? " selected" : ""}`;
+  if (pendingAction) {
+    card.classList.add("is-processing");
+    card.setAttribute("aria-busy", "true");
+  }
+
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "managed-card-main";
+  main.disabled = Boolean(pendingAction);
+  main.addEventListener("click", () => selectSensorAlert(alert));
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "entity-title-row";
+  const title = document.createElement("span");
+  title.className = "entity-title";
+  title.textContent = sensorAlertDisplayName(alert);
+  titleRow.append(title, createAlertBadge(alert.state));
+
+  const meta = document.createElement("div");
+  meta.className = "entity-meta";
+  const reason = document.createElement("span");
+  reason.textContent = sensorHealthReasonLabel(alert.reason);
+  const severity = document.createElement("span");
+  severity.textContent = severityLabel(alert.severity);
+  const time = document.createElement("span");
+  time.textContent = archive
+    ? `Zamknięto: ${formatDateTime(alert.closed_at)}`
+    : `Trwa: ${formatDuration(alert.duration_seconds)}`;
+  meta.append(reason, severity, time);
+  main.append(titleRow, meta);
+  card.append(main);
+
+  if (canOperate() && alert.state === "active") {
+    const actions = document.createElement("div");
+    actions.className = "managed-actions";
+    const acknowledge = document.createElement("button");
+    acknowledge.type = "button";
+    acknowledge.textContent = "Potwierdź";
+    acknowledge.disabled = Boolean(pendingAction);
+    acknowledge.addEventListener("click", () => {
+      void runSensorAlertAction(alert);
+    });
+    actions.append(acknowledge);
+    card.append(actions);
+  }
+
+  if (pendingAction) {
+    card.append(createAlertActionLoader("acknowledge"));
+  }
+  return card;
+}
+
+function renderSensorAlertList(
+  alerts,
+  target = elements.sensorAlertList,
+  emptyMessage = "Brak otwartych alarmów sensorów",
+  archive = false,
+) {
+  target.replaceChildren();
+  target.classList.toggle("empty-state", alerts.length === 0);
+  if (alerts.length === 0) {
+    target.textContent = emptyMessage;
+    return;
+  }
+
+  if (archive) {
+    for (const alert of alerts) target.append(createSensorAlertCard(alert, { archive: true }));
+    return;
+  }
+
+  const groups = new Map();
+  for (const alert of alerts) {
+    const key = alert.reason || "unknown";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(alert);
+  }
+
+  for (const [reason, groupAlerts] of groups) {
+    if (groupAlerts.length < 3) {
+      for (const alert of groupAlerts) target.append(createSensorAlertCard(alert));
+      continue;
+    }
+    const group = document.createElement("details");
+    group.className = "sensor-alert-group";
+    group.open = openSensorAlertGroups.has(reason);
+    group.addEventListener("toggle", () => {
+      if (group.open) openSensorAlertGroups.add(reason);
+      else openSensorAlertGroups.delete(reason);
+    });
+    const summary = document.createElement("summary");
+    const label = document.createElement("span");
+    label.textContent = sensorHealthReasonLabel(reason);
+    const count = document.createElement("strong");
+    count.textContent = `${groupAlerts.length} sensorów`;
+    summary.append(label, count);
+    const body = document.createElement("div");
+    body.className = "sensor-alert-group-list";
+    for (const alert of groupAlerts) body.append(createSensorAlertCard(alert));
+    group.append(summary, body);
+    target.append(group);
+  }
+}
+
+function renderSensorAlertSnapshot() {
+  renderSensorAlertList(currentOpenSensorAlerts);
+  elements.sensorAlertCount.textContent = String(currentOpenSensorAlerts.length);
+  elements.openAlerts.textContent = String(
+    currentOpenAlerts.length + currentOpenSensorAlerts.length,
+  );
+  if (closedSensorAlertsLoaded) {
+    renderSensorAlertList(
+      currentClosedSensorAlerts,
+      elements.closedSensorAlertList,
+      "Brak zamkniętych alarmów sensorów",
+      true,
+    );
+    elements.closedSensorAlertCount.textContent = String(currentClosedSensorAlerts.length);
+  }
+}
+
+function processSensorAlerts(alerts) {
+  const ids = new Set(alerts.map((alert) => String(alert.id)));
+  if (!sensorAlertBaselineReady) {
+    knownSensorAlertIds = ids;
+    sensorAlertBaselineReady = true;
+    if (alerts.length > 0) revealSensorAlertsSection();
+    return;
+  }
+  const newAlerts = alerts.filter((alert) => !knownSensorAlertIds.has(String(alert.id)));
+  knownSensorAlertIds = ids;
+  if (newAlerts.length > 0) {
+    revealSensorAlertsSection();
+    showToast(
+      newAlerts.length === 1
+        ? `Nowy alarm sensora: ${sensorAlertDisplayName(newAlerts[0])}`
+        : `Nowe alarmy sensorów: ${newAlerts.length}`,
+      true,
+    );
+  }
+}
+
+async function reloadSensorAlertsAfterAction() {
+  sensorAlertDataRevision += 1;
+  const payload = await fetchJson("/api/v1/sensor-alerts?include_closed=false");
+  currentOpenSensorAlerts = (payload.alerts ?? []).filter(
+    (alert) => alert.state !== "closed",
+  );
+  if (selectedSensorAlertId) {
+    const selected = currentOpenSensorAlerts.find(
+      (alert) => String(alert.id) === String(selectedSensorAlertId),
+    );
+    if (selected) {
+      selectedSensorAlertSnapshot = { ...selected };
+      renderSensorAlertSelection(selectedSensorAlertSnapshot);
+    }
+  }
+  renderSensorAlertSnapshot();
+  if (closedSensorAlertsLoaded) await loadClosedSensorAlerts({ showLoader: false });
+}
+
+async function runSensorAlertAction(alert) {
+  const alertId = String(alert.id);
+  if (pendingSensorAlertActions.has(alertId)) return;
+  sensorAlertDataRevision += 1;
+  pendingSensorAlertActions.set(alertId, "acknowledge");
+  renderSensorAlertSnapshot();
+  try {
+    await adminRequest(
+      `/api/v1/sensor-alerts/${encodeURIComponent(alert.id)}/acknowledge`,
+      "POST",
+      {},
+    );
+    await reloadSensorAlertsAfterAction();
+    showToast(`Alarm sensora ${sensorAlertDisplayName(alert)} został przyjęty.`);
+    if (String(selectedSensorAlertId) === alertId) {
+      await refreshSelectedSensorAlertTimeline();
+    }
+  } catch (error) {
+    showToast(`Potwierdzenie alarmu sensora nie powiodło się: ${error.message}`, true);
+  } finally {
+    pendingSensorAlertActions.delete(alertId);
+    renderSensorAlertSnapshot();
   }
 }
 
@@ -3425,7 +3823,9 @@ function renderAlertLists() {
 
 function renderAlertSnapshot() {
   renderAlertLists();
-  elements.openAlerts.textContent = String(currentOpenAlerts.length);
+  elements.openAlerts.textContent = String(
+    currentOpenAlerts.length + currentOpenSensorAlerts.length,
+  );
   if (zonesLoaded) {
     updateZoneLayers(currentZones, currentOpenAlerts);
     renderZoneList(currentZones, currentOpenAlerts);
@@ -3495,6 +3895,32 @@ async function loadClosedAlerts({ showLoader = true } = {}) {
     elements.closedAlertApply.disabled = false;
     elements.closedAlertReset.disabled = false;
     closedAlertsLoadInProgress = false;
+  }
+}
+
+
+async function loadClosedSensorAlerts({ showLoader = true } = {}) {
+  if (closedSensorAlertsLoadInProgress || !currentUser) return;
+  closedSensorAlertsLoadInProgress = true;
+  if (showLoader) renderLoadingCards(elements.closedSensorAlertList, 3);
+  try {
+    const payload = await fetchJson(
+      "/api/v1/sensor-alerts?closed_only=true&limit=500",
+    );
+    currentClosedSensorAlerts = (payload.alerts ?? []).filter(
+      (alert) => alert.state === "closed",
+    );
+    closedSensorAlertsLoaded = true;
+    renderSensorAlertSnapshot();
+  } catch (error) {
+    renderListFailure(
+      elements.closedSensorAlertList,
+      "Nie udało się wczytać archiwum alarmów sensorów",
+    );
+    console.error("Nie udało się pobrać zamkniętych alarmów sensorów", error);
+  } finally {
+    finishListLoading(elements.closedSensorAlertList);
+    closedSensorAlertsLoadInProgress = false;
   }
 }
 
@@ -3596,6 +4022,9 @@ async function loadInitialDashboard() {
   if (!elements.closedAlertsSection.classList.contains("collapsed")) {
     initialLoads.push(loadClosedAlerts());
   }
+  if (!elements.closedSensorAlertsSection.classList.contains("collapsed")) {
+    initialLoads.push(loadClosedSensorAlerts());
+  }
   if (!elements.archivedTracksSection.classList.contains("collapsed")) {
     initialLoads.push(loadArchivedTracks());
   }
@@ -3684,6 +4113,7 @@ function renderSelection(track) {
     elements.selectionDetails.replaceChildren();
     elements.trackControls.classList.add("hidden");
     elements.incidentControls.classList.add("hidden");
+    elements.sensorAlertControls.classList.add("hidden");
     elements.sensorControls.classList.add("hidden");
     elements.selectionTimeline.classList.add("hidden");
     elements.selectionTimelineList.replaceChildren();
@@ -3697,6 +4127,7 @@ function renderSelection(track) {
   elements.selectionTitle.textContent = track.basic_id || track.identity_key || track.track_key;
   elements.trackControls.classList.remove("hidden");
   elements.incidentControls.classList.add("hidden");
+  elements.sensorAlertControls.classList.add("hidden");
   elements.sensorControls.classList.add("hidden");
   elements.selectionTimeline.classList.add("hidden");
   elements.selectionTimelineList.replaceChildren();
@@ -3722,6 +4153,7 @@ function renderSensorSelection(sensor) {
   elements.selectionTitle.textContent = sensor.display_name || sensor.sensor_id;
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.add("hidden");
+  elements.sensorAlertControls.classList.add("hidden");
   elements.sensorControls.classList.remove("hidden");
   elements.selectionTimeline.classList.remove("hidden");
   elements.selectionDetails.replaceChildren(
@@ -4029,12 +4461,97 @@ async function refreshSelectedSensorQualityHistory(sensorId) {
   renderSensorQualityHistory(sensorQualityHistory);
 }
 
+
+function renderSensorAlertSelection(alert) {
+  elements.selectionPanel.classList.remove("hidden");
+  elements.selectionEyebrow.textContent = "Alarm infrastruktury";
+  elements.selectionTitle.textContent = sensorAlertDisplayName(alert);
+  elements.trackControls.classList.add("hidden");
+  elements.incidentControls.classList.add("hidden");
+  elements.sensorControls.classList.add("hidden");
+  elements.sensorAlertControls.classList.remove("hidden");
+  elements.selectionTimeline.classList.remove("hidden");
+  elements.selectionTimelineTitle.textContent = "Historia alarmu sensora";
+  elements.selectionDetails.replaceChildren(
+    detailSection("Alarm"),
+    detailItem("Stan", alertStateLabel(alert.state)),
+    detailItem("Priorytet", severityLabel(alert.severity)),
+    detailItem("Powód", sensorHealthReasonLabel(alert.reason)),
+    detailItem("Początek problemu", formatDateTime(alert.condition_started_at)),
+    detailItem("Alarm otwarto", formatDateTime(alert.opened_at)),
+    detailItem("Czas trwania", formatDuration(alert.duration_seconds)),
+    detailItem("Aktualizacje problemu", formatInteger(alert.occurrence_count)),
+    ...(alert.acknowledged_at
+      ? [
+          detailItem("Potwierdził", alert.acknowledged_by),
+          detailItem("Czas potwierdzenia", formatDateTime(alert.acknowledged_at)),
+        ]
+      : []),
+    ...(alert.closed_at
+      ? [
+          detailItem("Zamknięto", formatDateTime(alert.closed_at)),
+          detailItem("Zamknął", alert.closed_by),
+          detailItem(
+            "Rozwiązanie",
+            sensorAlertResolutionLabels[alert.resolution] ?? alert.resolution,
+          ),
+        ]
+      : []),
+    detailSection("Sensor teraz"),
+    detailItem("Sensor", sensorAlertDisplayName(alert)),
+    detailItem("Status", stateLabel(alert.sensor_status)),
+    detailItem("Stan toru detekcji", sensorHealthReasonLabel(alert.sensor_health_reason)),
+    detailItem("Zmiana kondycji", formatDateTime(alert.health_changed_at)),
+    detailItem("Agent", alert.agent_version),
+    detailItem("Źródło połączone", formatBoolean(alert.source_connected)),
+    detailItem("Kolejka", formatInteger(alert.queue_depth)),
+    detailItem("Dead letter", formatInteger(alert.dead_letter_depth)),
+  );
+}
+
+async function refreshSelectedSensorAlertTimeline() {
+  if (!selectedSensorAlertId) return;
+  const requestedId = String(selectedSensorAlertId);
+  elements.selectionTimeline.classList.remove("hidden");
+  elements.selectionTimelineTitle.textContent = "Historia alarmu sensora";
+  elements.selectionTimelineList.classList.add("inline-loading");
+  elements.selectionTimelineList.textContent = "Ładowanie historii alarmu sensora…";
+  const payload = await fetchJson(
+    `/api/v1/audit/events?sensor_alert_id=${encodeURIComponent(requestedId)}&limit=200`,
+  );
+  if (String(selectedSensorAlertId) === requestedId) {
+    renderAuditTimeline(payload.events ?? []);
+  }
+}
+
+async function refreshSelectedSensorAlertSnapshot() {
+  if (!selectedSensorAlertId) return null;
+  const requestedId = String(selectedSensorAlertId);
+  const payload = await fetchJson(
+    `/api/v1/sensor-alerts?include_closed=true&alert_id=${encodeURIComponent(requestedId)}&limit=1`,
+  );
+  if (String(selectedSensorAlertId) !== requestedId) return null;
+  const alert = (payload.alerts ?? [])[0] ?? null;
+  if (!alert) return null;
+  selectedSensorAlertSnapshot = { ...alert };
+  if (alert.state === "closed" && closedSensorAlertsLoaded) {
+    const withoutSelected = currentClosedSensorAlerts.filter(
+      (candidate) => String(candidate.id) !== requestedId,
+    );
+    currentClosedSensorAlerts = [alert, ...withoutSelected];
+    renderSensorAlertSnapshot();
+  }
+  renderSensorAlertSelection(selectedSensorAlertSnapshot);
+  return alert;
+}
+
 function renderIncidentSelection(alert) {
   elements.selectionPanel.classList.remove("hidden");
   elements.selectionEyebrow.textContent = "Incydent strefowy";
   elements.selectionTitle.textContent = alert.basic_id || alert.identity_key || alert.track_key;
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.remove("hidden");
+  elements.sensorAlertControls.classList.add("hidden");
   elements.sensorControls.classList.add("hidden");
   elements.incidentShowEntry.disabled = !hasPosition(alert);
   elements.incidentShowLive.disabled = !hasPosition(alert, "live_");
@@ -4131,6 +4648,7 @@ function renderAuditSelection(event) {
   elements.selectionTimelineTitle.textContent = auditTimelineTitle(event);
   elements.trackControls.classList.add("hidden");
   elements.incidentControls.classList.add("hidden");
+  elements.sensorAlertControls.classList.add("hidden");
   elements.sensorControls.classList.add("hidden");
   elements.selectionDetails.replaceChildren(
     detailItem("Czas", formatDateTime(event.occurred_at)),
@@ -4139,6 +4657,13 @@ function renderAuditSelection(event) {
     detailItem("Operator drona (Remote ID)", event.operator_id),
     detailItem("Strefa", event.zone_name),
     detailItem("Sensor", event.sensor_name || event.sensor_key),
+    ...(event.sensor_alert_id
+      ? [
+          detailItem("Stan alarmu sensora", alertStateLabel(event.sensor_alert_state)),
+          detailItem("Priorytet alarmu sensora", severityLabel(event.sensor_alert_severity)),
+          detailItem("Przyczyna alarmu sensora", sensorHealthReasonLabel(event.sensor_alert_reason)),
+        ]
+      : []),
     ...(auditEventCategory(event) === "sensor"
       ? [
           detailItem(
@@ -4810,6 +5335,8 @@ function selectTrack(trackId) {
   selectedAuditEvent = null;
   selectedAlertId = null;
   selectedAlertSnapshot = null;
+  selectedSensorAlertId = null;
+  selectedSensorAlertSnapshot = null;
   selectedSensorId = null;
   selectedTrackId = trackId;
   const track = findTrack(trackId);
@@ -4819,6 +5346,7 @@ function selectTrack(trackId) {
   renderSensorList(currentSensors);
   renderTrackLists();
   renderAlertLists();
+  renderSensorAlertSnapshot();
   renderSelection(track);
 
   if (track && hasPosition(track)) {
@@ -4854,6 +5382,8 @@ function selectAlert(alert) {
   selectedTrackSnapshot = null;
   selectedSensorId = null;
   selectedAuditEvent = null;
+  selectedSensorAlertId = null;
+  selectedSensorAlertSnapshot = null;
   selectedAlertId = alert.id;
   selectedAlertSnapshot = { ...alert };
   liveFollowTrackId = null;
@@ -4863,6 +5393,7 @@ function selectAlert(alert) {
   renderTrackLists();
   renderSensorList(currentSensors);
   renderAlertLists();
+  renderSensorAlertSnapshot();
   renderAuditList(currentAuditEvents);
   renderIncidentSelection(selectedAlertSnapshot);
   if (alert.presence_state === "inside" && hasPosition(alert, "live_")) {
@@ -4874,6 +5405,38 @@ function selectAlert(alert) {
     elements.selectionTimelineList.classList.remove("inline-loading");
     elements.selectionTimelineList.textContent = "Nie udało się pobrać historii incydentu.";
     console.error("Nie udało się pobrać historii incydentu", error);
+  });
+}
+
+
+function selectSensorAlert(alert) {
+  if (
+    !elements.zoneEditor.classList.contains("hidden") ||
+    !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorTokenPanel.classList.contains("hidden")
+  ) return;
+  selectedTrackId = null;
+  selectedTrackSnapshot = null;
+  selectedSensorId = null;
+  selectedAuditEvent = null;
+  selectedAlertId = null;
+  selectedAlertSnapshot = null;
+  selectedSensorAlertId = alert.id;
+  selectedSensorAlertSnapshot = { ...alert };
+  liveFollowTrackId = null;
+  stopTrackReplay();
+  removeArchivePreviewLayers();
+  removeIncidentLayers();
+  renderTrackLists();
+  renderSensorList(currentSensors);
+  renderAlertLists();
+  renderSensorAlertSnapshot();
+  renderAuditList(currentAuditEvents);
+  renderSensorAlertSelection(selectedSensorAlertSnapshot);
+  refreshSelectedSensorAlertTimeline().catch((error) => {
+    elements.selectionTimelineList.classList.remove("inline-loading");
+    elements.selectionTimelineList.textContent = "Nie udało się pobrać historii alarmu sensora.";
+    console.error("Nie udało się pobrać historii alarmu sensora", error);
   });
 }
 
@@ -4891,6 +5454,8 @@ function selectSensor(sensorId) {
   selectedAuditEvent = null;
   selectedAlertId = null;
   selectedAlertSnapshot = null;
+  selectedSensorAlertId = null;
+  selectedSensorAlertSnapshot = null;
   selectedSensorId = sensorId;
   sensorHistoryMode = "health";
   if (sensorHealthHistorySensorId !== sensorId) {
@@ -4912,6 +5477,7 @@ function selectSensor(sensorId) {
   renderAuditList(currentAuditEvents);
   renderSensorList(currentSensors);
   renderAlertLists();
+  renderSensorAlertSnapshot();
   if (sensor) {
     renderSensorSelection(sensor);
     if (hasPosition(sensor)) {
@@ -4988,6 +5554,8 @@ function selectAuditEvent(event) {
   selectedSensorId = null;
   selectedAlertId = null;
   selectedAlertSnapshot = null;
+  selectedSensorAlertId = null;
+  selectedSensorAlertSnapshot = null;
   liveFollowTrackId = null;
   stopTrackReplay();
   removeArchivePreviewLayers();
@@ -4997,6 +5565,7 @@ function selectAuditEvent(event) {
   renderSensorList(currentSensors);
   renderAuditList(currentAuditEvents);
   renderAlertLists();
+  renderSensorAlertSnapshot();
   renderAuditSelection(event);
 
   const track = findTrack(event.track_id);
@@ -5027,6 +5596,8 @@ function clearSelection() {
   selectedAuditEvent = null;
   selectedAlertId = null;
   selectedAlertSnapshot = null;
+  selectedSensorAlertId = null;
+  selectedSensorAlertSnapshot = null;
   liveFollowTrackId = null;
   stopTrackReplay();
   removeArchivePreviewLayers();
@@ -5037,6 +5608,7 @@ function clearSelection() {
   renderZoneList(currentZones, currentOpenAlerts);
   renderAuditList(currentAuditEvents);
   renderAlertLists();
+  renderSensorAlertSnapshot();
 }
 
 function updateDrawingLayer() {
@@ -5497,21 +6069,24 @@ async function refresh({ initial = false } = {}) {
   }
   refreshInProgress = true;
   const alertRevisionAtStart = alertDataRevision;
+  const sensorAlertRevisionAtStart = sensorAlertDataRevision;
   const firstLiveLoad = initial || !initialLiveDataLoaded;
   if (firstLiveLoad) {
     renderLoadingCards(elements.sensorList, 3);
     renderLoadingCards(elements.trackList, 3);
     renderLoadingCards(elements.alertList, 3);
+    renderLoadingCards(elements.sensorAlertList, 3);
   }
 
   try {
-    const [sensorPayload, trackPayload, trailPayload, alertPayload] = await Promise.all([
+    const [sensorPayload, trackPayload, trailPayload, alertPayload, sensorAlertPayload] = await Promise.all([
       fetchJson("/api/v1/sensors"),
       fetchJson("/api/v1/tracks?include_ended=false"),
       fetchJson(
         `/api/v1/tracks/trails?seconds=${LIVE_TRAIL_SECONDS}&limit=${LIVE_TRAIL_POINT_LIMIT}`,
       ),
       fetchJson("/api/v1/alerts?include_closed=false"),
+      fetchJson("/api/v1/sensor-alerts?include_closed=false"),
     ]);
 
     currentSensors = sensorPayload.sensors ?? [];
@@ -5532,6 +6107,16 @@ async function refresh({ initial = false } = {}) {
       processOperationalSounds(currentLiveTracks, incomingOpenAlerts);
       currentOpenAlerts = incomingOpenAlerts;
       currentAlerts = [...currentOpenAlerts];
+    }
+    const incomingSensorAlerts = (sensorAlertPayload.alerts ?? []).filter(
+      (alert) => alert.state !== "closed",
+    );
+    const sensorAlertPayloadIsCurrent = (
+      sensorAlertRevisionAtStart === sensorAlertDataRevision
+    );
+    if (sensorAlertPayloadIsCurrent) {
+      processSensorAlerts(incomingSensorAlerts);
+      currentOpenSensorAlerts = incomingSensorAlerts;
     }
     currentTracks = [...currentLiveTracks];
 
@@ -5557,6 +6142,9 @@ async function refresh({ initial = false } = {}) {
     if (alertPayloadIsCurrent) {
       renderAlertLists();
     }
+    if (sensorAlertPayloadIsCurrent) {
+      renderSensorAlertSnapshot();
+    }
     if (zonesLoaded) {
       updateZoneLayers(currentZones, currentOpenAlerts);
       renderZoneList(currentZones, currentOpenAlerts);
@@ -5569,7 +6157,9 @@ async function refresh({ initial = false } = {}) {
     const activeTracks = currentLiveTracks.filter((track) => track.state === "active").length;
     elements.onlineSensors.textContent = `${onlineSensors}/${monitoredSensors}`;
     elements.activeTracks.textContent = String(activeTracks);
-    elements.openAlerts.textContent = String(currentOpenAlerts.length);
+    elements.openAlerts.textContent = String(
+      currentOpenAlerts.length + currentOpenSensorAlerts.length,
+    );
     elements.sensorCount.textContent = String(currentSensors.length);
     initialLiveDataLoaded = true;
 
@@ -5610,6 +6200,33 @@ async function refresh({ initial = false } = {}) {
       } else {
         clearSelection();
       }
+    } else if (selectedSensorAlertId) {
+      const selected = currentOpenSensorAlerts.find(
+        (alert) => String(alert.id) === String(selectedSensorAlertId),
+      ) ?? currentClosedSensorAlerts.find(
+        (alert) => String(alert.id) === String(selectedSensorAlertId),
+      );
+      if (selected) {
+        selectedSensorAlertSnapshot = { ...selected };
+        renderSensorAlertSelection(selectedSensorAlertSnapshot);
+      } else if (selectedSensorAlertSnapshot?.state === "closed") {
+        renderSensorAlertSelection(selectedSensorAlertSnapshot);
+      } else {
+        try {
+          const refreshed = await refreshSelectedSensorAlertSnapshot();
+          if (!refreshed) clearSelection();
+          else if (refreshed.state === "closed") {
+            void refreshSelectedSensorAlertTimeline();
+          }
+        } catch (error) {
+          console.error("Nie udało się odświeżyć wybranego alarmu sensora", error);
+          if (selectedSensorAlertSnapshot) {
+            renderSensorAlertSelection(selectedSensorAlertSnapshot);
+          } else {
+            clearSelection();
+          }
+        }
+      }
     }
 
     if (
@@ -5636,12 +6253,14 @@ async function refresh({ initial = false } = {}) {
         renderListFailure(elements.sensorList, "Nie udało się wczytać sensorów");
         renderListFailure(elements.trackList, "Nie udało się wczytać obiektów");
         renderListFailure(elements.alertList, "Nie udało się wczytać alarmów");
+        renderListFailure(elements.sensorAlertList, "Nie udało się wczytać alarmów sensorów");
       }
     }
   } finally {
     finishListLoading(elements.sensorList);
     finishListLoading(elements.trackList);
     finishListLoading(elements.alertList);
+    finishListLoading(elements.sensorAlertList);
     refreshInProgress = false;
   }
 }
@@ -5726,6 +6345,11 @@ elements.sensorDiagnosticsExport.addEventListener(
   "click",
   downloadSelectedSensorDiagnostics,
 );
+elements.sensorAlertOpenSensor.addEventListener("click", () => {
+  if (selectedSensorAlertSnapshot?.sensor_id) {
+    focusSensorInSidebar(selectedSensorAlertSnapshot.sensor_id);
+  }
+});
 elements.incidentShowEntry.addEventListener("click", showIncidentEntry);
 elements.incidentShowLive.addEventListener("click", showIncidentLivePosition);
 elements.incidentShowRoute.addEventListener("click", () => void showIncidentRoute());
@@ -5779,6 +6403,7 @@ elements.storageRefresh.addEventListener("click", () => {
 });
 elements.operatorEditorClose.addEventListener("click", () => {
   elements.operatorEditor.classList.add("hidden");
+  setOperatorCreateFormOpen(false, { reset: true });
 });
 elements.themeToggle.addEventListener("click", () => {
   setTheme(currentTheme === "dark" ? "light" : "dark");
@@ -5793,6 +6418,14 @@ elements.securityRefresh.addEventListener("click", () => void loadSecurityCenter
 elements.securityApplyFilters.addEventListener("click", () => void loadSecurityCenter());
 elements.securityExportCsv.addEventListener("click", () => downloadSecurityEvents("csv"));
 elements.securityExportJson.addEventListener("click", () => downloadSecurityEvents("json"));
+elements.operatorCreateToggle.addEventListener("click", () => {
+  setOperatorCreateFormOpen(elements.operatorCreateForm.classList.contains("hidden"));
+});
+elements.accountCreateCancel.addEventListener("click", () => {
+  setOperatorCreateFormOpen(false, { reset: true });
+});
+document.addEventListener("click", handlePasswordVisibilityClick);
+resetPasswordVisibility(document);
 elements.operatorCreateForm.addEventListener("submit", createOperatorAccount);
 elements.zoneUndoPoint.addEventListener("click", undoZonePoint);
 elements.zoneClearPoints.addEventListener("click", clearZonePoints);

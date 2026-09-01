@@ -89,6 +89,10 @@ from app.security_store import (
     revoke_managed_session,
     revoke_operator_sessions,
 )
+from app.sensor_alert_store import (
+    acknowledge_sensor_alert,
+    list_sensor_alerts,
+)
 from app.sensor_store import (
     delete_sensor,
     get_sensor_health_history,
@@ -143,7 +147,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.21.0",
+    version="0.22.0",
     lifespan=lifespan,
 )
 
@@ -1198,6 +1202,77 @@ def post_alert_close(
     }
 
 
+@app.get(
+    "/api/v1/sensor-alerts",
+    tags=["sensor-alerts"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_alerts(
+    include_closed: bool = Query(default=False),
+    closed_only: bool = Query(default=False),
+    closed_from: datetime | None = Query(default=None),
+    closed_before: datetime | None = Query(default=None),
+    alert_id: UUID | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, object]:
+    if (closed_from is not None or closed_before is not None) and not closed_only:
+        raise HTTPException(
+            status_code=422,
+            detail="closed date filters require closed_only=true",
+        )
+    for field_name, value in (
+        ("closed_from", closed_from),
+        ("closed_before", closed_before),
+    ):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field_name} must include a UTC offset",
+            )
+    if (
+        closed_from is not None
+        and closed_before is not None
+        and closed_from >= closed_before
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="closed_from must be earlier than closed_before",
+        )
+    try:
+        alerts = list_sensor_alerts(
+            include_closed=include_closed,
+            closed_only=closed_only,
+            closed_from=closed_from,
+            closed_before=closed_before,
+            alert_id=alert_id,
+            limit=limit,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor alert list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "alerts": alerts}
+
+
+@app.post(
+    "/api/v1/sensor-alerts/{alert_id}/acknowledge",
+    tags=["sensor-alerts"],
+    dependencies=[Depends(require_operator_write)],
+)
+def post_sensor_alert_acknowledgement(
+    alert_id: UUID,
+    payload: AlertAction,
+    principal: OperatorPrincipal = Depends(require_operator_write),
+) -> dict[str, object]:
+    try:
+        alert = acknowledge_sensor_alert(alert_id, principal.actor)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor alert acknowledgement failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if alert is None:
+        raise HTTPException(status_code=409, detail="sensor alert is not active")
+    return {"time": utc_now(), "alert": alert}
+
+
 @app.get("/api/v1/operators", tags=["operators"])
 def get_operator_accounts(
     _: OperatorPrincipal = Depends(require_administrator),
@@ -1331,6 +1406,17 @@ AuditEventType = Literal[
     "sensor_deleted",
     "sensor_token_issued",
     "sensor_token_rotated",
+    "sensor_online",
+    "sensor_degraded",
+    "sensor_offline",
+    "sensor_health_changed",
+    "sensor_recovered",
+    "sensor_maintenance_started",
+    "sensor_maintenance_ended",
+    "sensor_alert_opened",
+    "sensor_alert_acknowledged",
+    "sensor_alert_reason_changed",
+    "sensor_alert_closed",
     "operator_created",
     "operator_updated",
     "operator_enabled",
@@ -1354,6 +1440,7 @@ def get_audit_events(
     category: AuditCategory = Query(default="all"),
     event_type: AuditEventType | None = Query(default=None),
     alert_id: UUID | None = Query(default=None),
+    sensor_alert_id: UUID | None = Query(default=None),
     zone_id: UUID | None = Query(default=None),
     track_id: UUID | None = Query(default=None),
     sensor_id: UUID | None = Query(default=None),
@@ -1366,6 +1453,7 @@ def get_audit_events(
             category=category,
             event_type=event_type,
             alert_id=alert_id,
+            sensor_alert_id=sensor_alert_id,
             zone_id=zone_id,
             track_id=track_id,
             sensor_id=sensor_id,
@@ -1396,6 +1484,7 @@ def export_audit_events(
     category: AuditCategory = Query(default="all"),
     event_type: AuditEventType | None = Query(default=None),
     alert_id: UUID | None = Query(default=None),
+    sensor_alert_id: UUID | None = Query(default=None),
     zone_id: UUID | None = Query(default=None),
     track_id: UUID | None = Query(default=None),
     sensor_id: UUID | None = Query(default=None),
@@ -1407,6 +1496,7 @@ def export_audit_events(
             category=category,
             event_type=event_type,
             alert_id=alert_id,
+            sensor_alert_id=sensor_alert_id,
             zone_id=zone_id,
             track_id=track_id,
             sensor_id=sensor_id,
@@ -1445,6 +1535,10 @@ def export_audit_events(
         "alert_state",
         "alert_presence_state",
         "alert_severity",
+        "sensor_alert_id",
+        "sensor_alert_state",
+        "sensor_alert_severity",
+        "sensor_alert_reason",
         "zone_id",
         "zone_name",
         "track_id",

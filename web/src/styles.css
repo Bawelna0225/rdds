@@ -2399,6 +2399,60 @@ button.entity-card.selected {
   }
 }
 
+.operator-create-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.operator-create-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.password-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.password-input-row .password-visibility-button {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  white-space: nowrap;
+}
+
+.password-visibility-button svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.operator-password-reset-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(128, 128, 128, 0.28);
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.06);
+}
+
+.operator-password-reset-form.hidden {
+  display: none;
+}
+
+.operator-password-reset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .operator-editor .entity-list {
   display: grid;
   gap: 8px;
@@ -3664,4 +3718,62 @@ html[data-theme="light"] .toast {
   .sensor-overview-toolbar {
     grid-template-columns: 1fr;
   }
+}
+
+.sensor-alert-group {
+  border: 1px solid var(--border);
+  background: rgba(18, 25, 34, 0.66);
+}
+
+.sensor-alert-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.sensor-alert-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sensor-alert-group > summary::after {
+  content: "›";
+  color: var(--muted);
+  font-size: 16px;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.sensor-alert-group[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.sensor-alert-group > summary span {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.sensor-alert-group > summary strong {
+  flex: 0 0 auto;
+  color: var(--amber);
+  font-size: 10px;
+}
+
+.sensor-alert-group-list {
+  display: grid;
+  gap: 6px;
+  padding: 0 6px 6px;
+}
+
+.sensor-alert-card .entity-meta span:first-child {
+  color: var(--amber);
+}
+
+html[data-theme="light"] .sensor-alert-group {
+  background: rgba(242, 246, 250, 0.94);
 }

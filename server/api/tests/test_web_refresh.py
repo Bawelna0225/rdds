@@ -19,6 +19,9 @@ SENSOR_DIAGNOSTICS_MIGRATION = (
 SENSOR_STREAM_QUALITY_MIGRATION = (
     PROJECT_ROOT / "database" / "migrations" / "017_sensor_stream_quality.sql"
 )
+SENSOR_ALERT_MIGRATION = (
+    PROJECT_ROOT / "database" / "migrations" / "018_sensor_alerts.sql"
+)
 SKYSPY_EMULATOR = PROJECT_ROOT / "skyspy-emulator" / "main.py"
 COMPOSE_SOURCE = PROJECT_ROOT / "compose.yaml"
 
@@ -41,6 +44,7 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         cls.sensor_stream_quality_migration = (
             SENSOR_STREAM_QUALITY_MIGRATION.read_text(encoding="utf-8")
         )
+        cls.sensor_alert_migration = SENSOR_ALERT_MIGRATION.read_text(encoding="utf-8")
         cls.skyspy_emulator = SKYSPY_EMULATOR.read_text(encoding="utf-8")
         cls.compose_source = COMPOSE_SOURCE.read_text(encoding="utf-8")
         match = re.search(
@@ -58,6 +62,7 @@ class WebRefreshBoundaryTests(unittest.TestCase):
             '/api/v1/tracks?include_ended=false',
             '/api/v1/tracks/trails?seconds=',
             '/api/v1/alerts?include_closed=false',
+            '/api/v1/sensor-alerts?include_closed=false',
         )
         for path in expected_live_paths:
             with self.subTest(path=path):
@@ -79,6 +84,7 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         for function_name in (
             "loadArchivedTracks",
             "loadClosedAlerts",
+            "loadClosedSensorAlerts",
             "loadZones",
             "loadAuditEvents",
         ):
@@ -597,6 +603,39 @@ class WebRefreshBoundaryTests(unittest.TestCase):
         self.assertIn(".sidebar-section + .sidebar-section", self.styles)
         self.assertIn("border-top: 1px solid rgba(67, 213, 255, 0.34)", self.styles)
 
+    def test_operator_create_form_is_on_demand_and_password_visibility_is_reusable(self) -> None:
+        self.assertIn('id="operator-create-toggle"', self.index)
+        self.assertIn('id="operator-create-form" class="sensor-form hidden"', self.index)
+        self.assertIn('id="account-create-cancel"', self.index)
+        self.assertIn('id="account-password-toggle"', self.index)
+        self.assertIn("function setOperatorCreateFormOpen", self.source)
+        self.assertIn("function setPasswordVisible", self.source)
+        self.assertIn("function setAccountPasswordVisible", self.source)
+        self.assertIn(
+            "setPasswordVisible(elements.accountPassword, elements.accountPasswordToggle, visible)",
+            self.source,
+        )
+        self.assertIn('setOperatorCreateFormOpen(false, { reset: true });', self.source)
+        self.assertIn(".password-input-row {", self.styles)
+
+    def test_password_visibility_uses_icon_controls_across_password_flows(self) -> None:
+        for field_id in (
+            "login-password",
+            "current-password",
+            "new-password",
+            "account-password",
+        ):
+            with self.subTest(field=field_id):
+                self.assertIn(f'data-password-target="{field_id}"', self.index)
+        self.assertIn('aria-label="Pokaż hasło"', self.index)
+        self.assertIn("data-password-toggle", self.index)
+        self.assertIn("PASSWORD_EYE_ICON", self.source)
+        self.assertIn("PASSWORD_EYE_OFF_ICON", self.source)
+        self.assertIn("function setPasswordVisible", self.source)
+        self.assertIn("operator-password-reset-form", self.source)
+        self.assertIn("operator-password-reset-actions", self.styles)
+        self.assertNotIn("const temporaryPassword = window.prompt(", self.source)
+
     def test_account_menu_keeps_audio_training_out_of_primary_tabs(self) -> None:
         for tab_name in ("admin", "account"):
             with self.subTest(tab=tab_name):
@@ -641,6 +680,43 @@ class WebRefreshBoundaryTests(unittest.TestCase):
             self.source,
         )
         self.assertIn("function handleOperatorTabKeydown(event)", self.source)
+
+
+    def test_sensor_infrastructure_alerts_are_deduplicated_and_live(self) -> None:
+        self.assertIn("CREATE TABLE IF NOT EXISTS sensor_alerts", self.sensor_alert_migration)
+        self.assertIn("uq_sensor_alerts_open_sensor", self.sensor_alert_migration)
+        self.assertIn("sensor_alert_opened", self.sensor_alert_migration)
+        self.assertIn("sensor_alert_reason_changed", self.sensor_alert_migration)
+        self.assertIn("sensor_alert_closed", self.sensor_alert_migration)
+        self.assertIn('data-section-key="sensor-alerts"', self.index)
+        self.assertIn('id="sensor-alert-list"', self.index)
+        self.assertIn("function renderSensorAlertList", self.source)
+        self.assertIn("function processSensorAlerts", self.source)
+        self.assertIn("sensor-alert-group", self.source)
+        self.assertIn("groupAlerts.length < 3", self.source)
+        self.assertIn("openSensorAlertGroups", self.source)
+        self.assertIn("group.open = openSensorAlertGroups.has(reason)", self.source)
+        self.assertIn("if (alerts.length > 0) revealSensorAlertsSection()", self.source)
+        self.assertIn('/api/v1/sensor-alerts?include_closed=false', self.live_refresh)
+        self.assertNotIn('closed_only=true', self.live_refresh)
+
+    def test_sensor_alert_archive_and_history_are_on_demand(self) -> None:
+        self.assertIn('data-section-key="closed-sensor-alerts"', self.index)
+        self.assertIn("async function loadClosedSensorAlerts", self.source)
+        self.assertIn('/api/v1/sensor-alerts?closed_only=true&limit=500', self.source)
+        self.assertIn("async function refreshSelectedSensorAlertTimeline", self.source)
+        self.assertIn("sensor_alert_id=", self.source)
+        self.assertIn('id="sensor-alert-open-sensor"', self.index)
+        self.assertIn("focusSensorInSidebar(selectedSensorAlertSnapshot.sensor_id)", self.source)
+        self.assertIn("async function refreshSelectedSensorAlertSnapshot", self.source)
+        self.assertIn("include_closed=true&alert_id=", self.source)
+        self.assertIn('selectedSensorAlertSnapshot?.state === "closed"', self.source)
+
+    def test_sensor_alerts_are_acknowledged_but_close_automatically(self) -> None:
+        self.assertIn("runSensorAlertAction", self.source)
+        self.assertIn("/acknowledge`,", self.source)
+        self.assertNotIn("/api/v1/sensor-alerts/${encodeURIComponent(alert.id)}/close", self.source)
+        self.assertIn("state IN ('active', 'acknowledged')", self.sensor_alert_migration)
 
 
 if __name__ == "__main__":

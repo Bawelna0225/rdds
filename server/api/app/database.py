@@ -682,6 +682,18 @@ def system_summary() -> dict[str, int]:
                     SELECT COUNT(*)
                     FROM intrusion_alerts
                     WHERE state IN ('active', 'acknowledged')
+                ) AS open_intrusion_alerts,
+                (
+                    SELECT COUNT(*)
+                    FROM sensor_alerts
+                    WHERE state IN ('active', 'acknowledged')
+                ) AS open_sensor_alerts,
+                (
+                    SELECT COUNT(*) FROM intrusion_alerts
+                    WHERE state IN ('active', 'acknowledged')
+                ) + (
+                    SELECT COUNT(*) FROM sensor_alerts
+                    WHERE state IN ('active', 'acknowledged')
                 ) AS open_alerts
             """
         )

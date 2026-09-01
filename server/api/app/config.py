@@ -47,6 +47,8 @@ class Settings:
     sensor_quality_min_input_lines: int
     sensor_quality_max_ignored_percent: float
     sensor_reconnect_warning_count: int
+    sensor_alert_offline_after_seconds: int
+    sensor_alert_degraded_after_seconds: int
     track_poll_seconds: float
     track_stale_after_seconds: int
     track_ended_after_seconds: int
@@ -114,6 +116,12 @@ def load_settings() -> Settings:
         ),
         sensor_reconnect_warning_count=int(
             os.getenv("RDDS_SENSOR_RECONNECT_WARNING_COUNT", "3")
+        ),
+        sensor_alert_offline_after_seconds=int(
+            os.getenv("RDDS_SENSOR_ALERT_OFFLINE_AFTER_SECONDS", "60")
+        ),
+        sensor_alert_degraded_after_seconds=int(
+            os.getenv("RDDS_SENSOR_ALERT_DEGRADED_AFTER_SECONDS", "120")
         ),
         track_poll_seconds=float(os.getenv("RDDS_TRACK_POLL_SECONDS", "1")),
         track_stale_after_seconds=int(
@@ -231,6 +239,14 @@ def load_settings() -> Settings:
     if not 1 <= settings.sensor_reconnect_warning_count <= 10000:
         raise RuntimeError(
             "RDDS_SENSOR_RECONNECT_WARNING_COUNT must be between 1 and 10000"
+        )
+    if not 10 <= settings.sensor_alert_offline_after_seconds <= 86400:
+        raise RuntimeError(
+            "RDDS_SENSOR_ALERT_OFFLINE_AFTER_SECONDS must be between 10 and 86400"
+        )
+    if not 10 <= settings.sensor_alert_degraded_after_seconds <= 86400:
+        raise RuntimeError(
+            "RDDS_SENSOR_ALERT_DEGRADED_AFTER_SECONDS must be between 10 and 86400"
         )
     if settings.maintenance_interval_seconds < 300:
         raise RuntimeError(

@@ -1,8 +1,15 @@
 import os
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+OPERATOR_USERNAME_REUSE_MIGRATION = (
+    PROJECT_ROOT / "database" / "migrations" / "019_operator_username_reuse.sql"
+)
+
 
 REQUIRED_ENVIRONMENT = {
     "RDDS_DB_HOST": "database",
@@ -59,6 +66,17 @@ def fake_connection_for(cursor: FakeCursor):
         yield FakeConnection(cursor)
 
     return fake_connection
+
+
+class OperatorAccountLifecycleTests(unittest.TestCase):
+    def test_deleted_username_can_be_reused_without_losing_history(self) -> None:
+        migration = OPERATOR_USERNAME_REUSE_MIGRATION.read_text(encoding="utf-8")
+
+        self.assertIn("DROP INDEX IF EXISTS uq_operator_accounts_username", migration)
+        self.assertIn("CREATE UNIQUE INDEX uq_operator_accounts_username", migration)
+        self.assertIn("ON operator_accounts (username)", migration)
+        self.assertIn("WHERE deleted_at IS NULL", migration)
+        self.assertNotIn("DELETE FROM operator_accounts", migration)
 
 
 class LoginSecurityEventTests(unittest.TestCase):

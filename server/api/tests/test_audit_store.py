@@ -77,6 +77,34 @@ class AuditFilterTests(unittest.TestCase):
                     )
                 )
 
+    def test_sensor_alert_filter_is_parameterized(self) -> None:
+        cursor = FakeCursor()
+
+        @contextmanager
+        def fake_connection():
+            yield FakeConnection(cursor)
+
+        sensor_alert_id = uuid4()
+        with patch.object(audit_store, "connection", fake_connection):
+            events, total = audit_store.list_audit_events(
+                sensor_alert_id=sensor_alert_id
+            )
+
+        self.assertEqual([], events)
+        self.assertEqual(0, total)
+        self.assertTrue(
+            all(
+                "event.sensor_alert_id = %(sensor_alert_id)s" in query
+                for query in cursor.queries
+            )
+        )
+        self.assertTrue(
+            all(
+                parameters["sensor_alert_id"] == sensor_alert_id
+                for parameters in cursor.parameters
+            )
+        )
+
     def test_track_filter_is_parameterized(self) -> None:
         cursor = FakeCursor()
 

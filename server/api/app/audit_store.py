@@ -17,6 +17,7 @@ def list_audit_events(
     category: AuditCategory = "all",
     event_type: str | None = None,
     alert_id: UUID | None = None,
+    sensor_alert_id: UUID | None = None,
     zone_id: UUID | None = None,
     track_id: UUID | None = None,
     sensor_id: UUID | None = None,
@@ -33,7 +34,10 @@ def list_audit_events(
     if category == "detections":
         conditions.append("event.event_type LIKE 'track_%%'")
     elif category == "alerts":
-        conditions.append("event.event_type LIKE 'alert_%%'")
+        conditions.append(
+            "(event.event_type LIKE 'alert_%%' OR "
+            "event.event_type LIKE 'sensor_alert_%%')"
+        )
     elif category == "zones":
         conditions.append("event.event_type LIKE 'zone_%%'")
     elif category == "sensors":
@@ -47,6 +51,9 @@ def list_audit_events(
     if alert_id is not None:
         conditions.append("event.alert_id = %(alert_id)s")
         parameters["alert_id"] = alert_id
+    if sensor_alert_id is not None:
+        conditions.append("event.sensor_alert_id = %(sensor_alert_id)s")
+        parameters["sensor_alert_id"] = sensor_alert_id
     if zone_id is not None:
         conditions.append("event.zone_id = %(zone_id)s")
         parameters["zone_id"] = zone_id
@@ -85,6 +92,7 @@ def list_audit_events(
                 event.actor,
                 event.details,
                 event.alert_id,
+                event.sensor_alert_id,
                 event.zone_id,
                 event.track_id,
                 event.sensor_id,
@@ -95,6 +103,12 @@ def list_audit_events(
                 alert.first_detected_at,
                 alert.last_detected_at,
                 alert.detection_count,
+                sensor_alert.state AS sensor_alert_state,
+                sensor_alert.severity AS sensor_alert_severity,
+                sensor_alert.reason AS sensor_alert_reason,
+                sensor_alert.condition_started_at AS sensor_alert_condition_started_at,
+                sensor_alert.opened_at AS sensor_alert_opened_at,
+                sensor_alert.closed_at AS sensor_alert_closed_at,
                 COALESCE(alert.entry_zone_name, zone.name) AS zone_name,
                 COALESCE(alert.entry_track_key, track.track_key) AS track_key,
                 COALESCE(alert.entry_basic_id, track.last_basic_id) AS basic_id,
@@ -107,6 +121,8 @@ def list_audit_events(
                 , operator_account.role AS account_role
             FROM audit_events AS event
             LEFT JOIN intrusion_alerts AS alert ON alert.id = event.alert_id
+            LEFT JOIN sensor_alerts AS sensor_alert
+                ON sensor_alert.id = event.sensor_alert_id
             LEFT JOIN protected_zones AS zone ON zone.id = event.zone_id
             LEFT JOIN tracks AS track ON track.id = event.track_id
             LEFT JOIN sensors AS sensor ON sensor.id = event.sensor_id
