@@ -569,6 +569,10 @@
               <div class="sensor-overview-stat stat-issues">
                 <span>Nowe usterki 24 h</span><strong id="sensor-overview-issues">0</strong>
               </div>
+              <div class="sensor-overview-stat stat-configuration">
+                <span>Niezgodne konfiguracje</span>
+                <strong id="sensor-overview-configuration">0</strong>
+              </div>
             </div>
 
             <div class="sensor-overview-toolbar">
@@ -586,6 +590,7 @@
                 <select id="sensor-overview-filter">
                   <option value="all">Wszystkie sensory</option>
                   <option value="issues">Wymagające uwagi</option>
+                  <option value="configuration">Niezgodna konfiguracja</option>
                   <option value="online">Sprawne</option>
                   <option value="maintenance">Konserwacja i wyłączone</option>
                 </select>
@@ -596,6 +601,7 @@
                   <option value="priority">Priorytet operacyjny</option>
                   <option value="name">Nazwa</option>
                   <option value="issues">Usterki w 24 h</option>
+                  <option value="configuration">Zgodność konfiguracji</option>
                   <option value="heartbeat">Ostatni heartbeat</option>
                 </select>
               </label>
@@ -610,6 +616,7 @@
                 <span>Rozłączenia</span>
                 <span>Kolejka</span>
                 <span>Heartbeat</span>
+                <span>Konfiguracja</span>
                 <span>Usterki 24 h</span>
               </div>
               <div id="sensor-overview-list" class="sensor-overview-list"></div>
@@ -810,6 +817,92 @@
               <div class="panel-actions">
                 <button id="sensor-save" type="submit">Zarejestruj</button>
                 <button id="sensor-cancel" type="button" class="danger-button">Anuluj</button>
+              </div>
+            </form>
+          </section>
+
+
+          <section
+            id="sensor-configuration-editor"
+            class="sensor-editor sensor-configuration-editor hidden"
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="sensor-configuration-title"
+          >
+            <form id="sensor-configuration-form" class="sensor-form">
+              <p class="eyebrow">Konfiguracja floty</p>
+              <h2 id="sensor-configuration-title">Konfiguracja agenta</h2>
+              <p id="sensor-configuration-help" class="panel-help">
+                Pobieranie bieżącej konfiguracji…
+              </p>
+              <div class="sensor-configuration-summary" aria-live="polite">
+                <div>
+                  <span>Stan zgodności</span>
+                  <strong id="sensor-configuration-compliance">—</strong>
+                </div>
+                <div>
+                  <span>Rewizje</span>
+                  <strong id="sensor-configuration-revisions">—</strong>
+                </div>
+              </div>
+              <p id="sensor-configuration-error" class="sensor-configuration-error hidden"></p>
+              <label>
+                Interwał heartbeat (sekundy)
+                <input
+                  id="sensor-configuration-heartbeat"
+                  type="number"
+                  min="2"
+                  max="3600"
+                  step="0.1"
+                  required
+                />
+                <small>Jak często agent raportuje stan. Zakres: 2–3600 s.</small>
+              </label>
+              <label>
+                Ponowne połączenie (sekundy)
+                <input
+                  id="sensor-configuration-reconnect"
+                  type="number"
+                  min="0.5"
+                  max="300"
+                  step="0.1"
+                  required
+                />
+                <small>Odstęp przed ponownym połączeniem ze źródłem. Zakres: 0,5–300 s.</small>
+              </label>
+              <label>
+                Limit czasu żądania (sekundy)
+                <input
+                  id="sensor-configuration-timeout"
+                  type="number"
+                  min="1"
+                  max="120"
+                  step="0.1"
+                  required
+                />
+                <small>Limit połączeń agenta z API. Zakres: 1–120 s.</small>
+              </label>
+              <label>
+                Tempo odtwarzania kolejki (wiadomości/s)
+                <input
+                  id="sensor-configuration-replay-rate"
+                  type="number"
+                  min="0.1"
+                  max="100"
+                  step="0.1"
+                  required
+                />
+                <small>Kontroluje opróżnianie kolejki po odzyskaniu łączności. Zakres: 0,1–100.</small>
+              </label>
+              <div class="panel-actions">
+                <button id="sensor-configuration-save" type="submit">Zapisz konfigurację</button>
+                <button
+                  id="sensor-configuration-cancel"
+                  type="button"
+                  class="danger-button"
+                >
+                  Anuluj
+                </button>
               </div>
             </form>
           </section>

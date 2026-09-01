@@ -164,12 +164,133 @@ def _heartbeat_source_quality(
     )
 
 
+def _record_sensor_configuration_report(
+    cursor: Any,
+    sensor_uuid: UUID,
+    payload: HeartbeatEnvelope,
+) -> None:
+    report = payload.configuration_report
+    if report is None:
+        return
+
+    cursor.execute(
+        """
+        INSERT INTO sensor_configuration_state (sensor_id)
+        VALUES (%s)
+        ON CONFLICT (sensor_id) DO NOTHING
+        """,
+        (sensor_uuid,),
+    )
+    cursor.execute(
+        """
+        SELECT
+            desired_revision,
+            applied_revision,
+            applied_config,
+            apply_status,
+            apply_error,
+            reported_at
+        FROM sensor_configuration_state
+        WHERE sensor_id = %s
+        FOR UPDATE
+        """,
+        (sensor_uuid,),
+    )
+    state = cursor.fetchone()
+    if state is None:
+        raise RuntimeError("Sensor configuration state disappeared during heartbeat")
+
+    # A queued heartbeat for an older desired revision must never overwrite a
+    # newer administrator change. Older agent timestamps are ignored as well.
+    if int(state["desired_revision"]) != report.desired_revision:
+        return
+    if (
+        state["reported_at"] is not None
+        and payload.sensor.timestamp < state["reported_at"]
+    ):
+        return
+
+    applied_config = (
+        None
+        if report.applied_config is None
+        else report.applied_config.model_dump(mode="json")
+    )
+    changed = any(
+        (
+            state["applied_revision"] != report.applied_revision,
+            state["applied_config"] != applied_config,
+            state["apply_status"] != report.apply_status,
+            state["apply_error"] != report.apply_error,
+        )
+    )
+
+    cursor.execute(
+        """
+        UPDATE sensor_configuration_state
+        SET
+            applied_revision = %(applied_revision)s,
+            applied_config = %(applied_config)s,
+            apply_status = %(apply_status)s,
+            apply_error = %(apply_error)s,
+            reported_at = %(reported_at)s
+        WHERE sensor_id = %(sensor_id)s
+          AND desired_revision = %(desired_revision)s
+        """,
+        {
+            "sensor_id": sensor_uuid,
+            "desired_revision": report.desired_revision,
+            "applied_revision": report.applied_revision,
+            "applied_config": (
+                None if applied_config is None else Jsonb(applied_config)
+            ),
+            "apply_status": report.apply_status,
+            "apply_error": report.apply_error,
+            "reported_at": payload.sensor.timestamp,
+        },
+    )
+
+    if not changed:
+        return
+
+    event_type = (
+        "sensor_configuration_applied"
+        if report.apply_status == "applied"
+        else "sensor_configuration_failed"
+    )
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            occurred_at,
+            event_type,
+            actor,
+            sensor_id,
+            details
+        )
+        VALUES (NOW(), %(event_type)s, %(actor)s, %(sensor_id)s, %(details)s)
+        """,
+        {
+            "event_type": event_type,
+            "actor": f"sensor:{payload.sensor.sensor_id}"[:160],
+            "sensor_id": sensor_uuid,
+            "details": Jsonb(
+                {
+                    "desired_revision": report.desired_revision,
+                    "applied_revision": report.applied_revision,
+                    "apply_status": report.apply_status,
+                    "apply_error": report.apply_error,
+                }
+            ),
+        },
+    )
+
+
 def insert_heartbeat(
     payload: HeartbeatEnvelope,
     raw_message: dict[str, Any],
 ) -> tuple[UUID, int | None]:
     with connection() as conn, conn.cursor() as cursor:
         sensor_uuid = _upsert_sensor(cursor, payload.sensor)
+        _record_sensor_configuration_report(cursor, sensor_uuid, payload)
         source_quality = _heartbeat_source_quality(cursor, sensor_uuid, payload)
         cursor.execute(
             """

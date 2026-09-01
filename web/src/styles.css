@@ -565,6 +565,55 @@ button {
   margin-top: 10px;
 }
 
+.sensor-configuration-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sensor-configuration-summary > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.sensor-configuration-summary span,
+.sensor-configuration-summary strong {
+  display: block;
+}
+
+.sensor-configuration-summary span {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sensor-configuration-summary strong {
+  margin-top: 5px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sensor-configuration-error {
+  margin: 10px 0 0;
+  padding: 8px 9px;
+  border: 1px solid rgba(255, 86, 112, 0.45);
+  color: var(--red);
+  background: rgba(255, 86, 112, 0.08);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sensor-configuration-editor .sensor-form label small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
 .operator-login-form,
 .zone-form,
 .sensor-form {
@@ -1316,6 +1365,28 @@ button.entity-card.selected {
   overflow-wrap: anywhere;
 }
 
+.sensor-meta-configuration {
+  flex-basis: 100%;
+  font-weight: 600;
+}
+
+.configuration-compliant {
+  color: var(--green) !important;
+}
+
+.configuration-pending,
+.configuration-unreported {
+  color: var(--amber) !important;
+}
+
+.configuration-error {
+  color: var(--red) !important;
+}
+
+.configuration-unmanaged {
+  color: var(--muted) !important;
+}
+
 .sensor-meta-heartbeat {
   text-align: right;
   white-space: nowrap;
@@ -2000,7 +2071,7 @@ button.entity-card.selected {
 
 .sensor-overview-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2032,6 +2103,7 @@ button.entity-card.selected {
 .sensor-overview-stat.stat-offline { border-left-color: var(--red); }
 .sensor-overview-stat.stat-maintenance { border-left-color: var(--purple); }
 .sensor-overview-stat.stat-issues { border-left-color: var(--cyan); }
+.sensor-overview-stat.stat-configuration { border-left-color: var(--amber); }
 
 .sensor-overview-toolbar {
   display: grid;
@@ -2074,7 +2146,7 @@ button.entity-card.selected {
 
 .sensor-overview-columns,
 .sensor-overview-row {
-  min-width: 980px;
+  min-width: 1120px;
   display: grid;
   grid-template-columns:
     minmax(150px, 1.25fr)
@@ -2084,6 +2156,7 @@ button.entity-card.selected {
     minmax(85px, 0.65fr)
     minmax(110px, 0.75fr)
     minmax(115px, 0.85fr)
+    minmax(150px, 1fr)
     minmax(110px, 0.75fr);
   gap: 0;
 }
@@ -3248,6 +3321,7 @@ html[data-theme="light"] .summary-card-action:focus-visible {
 }
 
 html[data-theme="light"] .operator-quick-volume,
+html[data-theme="light"] .sensor-configuration-summary > div,
 html[data-theme="light"] .storage-panel,
 html[data-theme="light"] .alarm-training-tools,
 html[data-theme="light"] .alarm-audio-settings,

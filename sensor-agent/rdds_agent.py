@@ -8,7 +8,7 @@ import re
 import signal
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,9 +24,11 @@ except ImportError:  # Allows parser/outbox unit tests without pyserial on the h
 
 LOG = logging.getLogger("rdds-sensor-agent")
 PROTOCOL_VERSION = "rdds/1.0"
-AGENT_VERSION = "0.22.0"
+AGENT_VERSION = "0.23.0"
 OBSERVATION_PATH = "/api/v1/ingest/observation"
 HEARTBEAT_PATH = "/api/v1/ingest/heartbeat"
+CONFIGURATION_PATH = "/api/v1/agent/configuration"
+CONFIGURATION_POLL_SECONDS = 30.0
 RETRYABLE_HTTP_CODES = {401, 403, 408, 425, 429}
 VALID_TRANSPORTS = {"ble", "wifi_nan", "wifi_beacon", "simulator", "unknown"}
 DETECTION_KEYS = {
@@ -493,6 +495,51 @@ def delivery_error_reason(error: str) -> str:
     return "delivery_failed"
 
 
+MANAGED_CONFIGURATION_RANGES: dict[str, tuple[float, float]] = {
+    "heartbeat_seconds": (2.0, 3600.0),
+    "reconnect_seconds": (0.5, 300.0),
+    "request_timeout_seconds": (1.0, 120.0),
+    "replay_messages_per_second": (0.1, 100.0),
+}
+
+
+def managed_configuration_snapshot(config: Config) -> dict[str, float]:
+    return {
+        name: float(getattr(config, name))
+        for name in MANAGED_CONFIGURATION_RANGES
+    }
+
+
+def validate_managed_configuration(raw: Any) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        raise ConfigurationError("managed configuration must be a JSON object")
+    expected = set(MANAGED_CONFIGURATION_RANGES)
+    received = set(raw)
+    missing = sorted(expected - received)
+    unknown = sorted(received - expected)
+    if missing:
+        raise ConfigurationError(
+            "managed configuration is missing: " + ", ".join(missing)
+        )
+    if unknown:
+        raise ConfigurationError(
+            "managed configuration contains unknown fields: " + ", ".join(unknown)
+        )
+
+    validated: dict[str, float] = {}
+    for name, (minimum, maximum) in MANAGED_CONFIGURATION_RANGES.items():
+        value = raw[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigurationError(f"{name} must be numeric")
+        number = float(value)
+        if not math.isfinite(number) or not minimum <= number <= maximum:
+            raise ConfigurationError(
+                f"{name} must be between {minimum:g} and {maximum:g}"
+            )
+        validated[name] = number
+    return validated
+
+
 class SensorAgent:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -521,6 +568,12 @@ class SensorAgent:
         self.last_delivery_success_at: str | None = None
         self.last_delivery_error_at: str | None = None
         self.last_delivery_error_reason: str | None = None
+        self.next_configuration_poll_monotonic = 0.0
+        self.configuration_desired_revision = 0
+        self.configuration_applied_revision = 0
+        self.configuration_applied_config = managed_configuration_snapshot(config)
+        self.configuration_apply_status = "applied"
+        self.configuration_apply_error: str | None = None
 
     def stop(self, signum: int | None = None, _frame: Any = None) -> None:
         if signum is not None:
@@ -542,6 +595,103 @@ class SensorAgent:
         if self.config.sensor_position is not None:
             context["position"] = self.config.sensor_position
         return context
+
+    def configuration_report(self) -> dict[str, Any]:
+        return {
+            "desired_revision": self.configuration_desired_revision,
+            "applied_revision": self.configuration_applied_revision,
+            "applied_config": self.configuration_applied_config,
+            "apply_status": self.configuration_apply_status,
+            "apply_error": self.configuration_apply_error,
+        }
+
+    def poll_configuration(self) -> bool:
+        request = Request(
+            f"{self.config.api_url}{CONFIGURATION_PATH}",
+            method="GET",
+            headers={
+                "Accept": "application/json",
+                "X-RDDS-Ingest-Token": self.config.ingest_token,
+            },
+        )
+        try:
+            with urlopen(
+                request,
+                timeout=self.config.request_timeout_seconds,
+            ) as response:
+                body = response.read(65537)
+            if len(body) > 65536:
+                raise ConfigurationError("configuration response is too large")
+            response_payload = json.loads(body.decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            LOG.warning("configuration fetch failed with HTTP %d: %s", exc.code, detail)
+            return False
+        except (URLError, TimeoutError, OSError) as exc:
+            LOG.warning("configuration fetch failed: %s", exc)
+            return False
+        except (UnicodeDecodeError, json.JSONDecodeError, ConfigurationError) as exc:
+            LOG.error("invalid configuration response: %s", exc)
+            return False
+
+        if not isinstance(response_payload, dict):
+            LOG.error("invalid configuration response: expected a JSON object")
+            return False
+        if response_payload.get("sensor_id") != self.config.sensor_id:
+            LOG.error("invalid configuration response: sensor identity mismatch")
+            return False
+        desired_revision = response_payload.get("desired_revision")
+        if (
+            isinstance(desired_revision, bool)
+            or not isinstance(desired_revision, int)
+            or desired_revision < 0
+        ):
+            LOG.error("invalid configuration response: desired_revision is invalid")
+            return False
+        if desired_revision < self.configuration_desired_revision:
+            LOG.warning(
+                "ignored configuration revision rollback from %d to %d",
+                self.configuration_desired_revision,
+                desired_revision,
+            )
+            return False
+        if (
+            desired_revision == self.configuration_desired_revision
+            and self.configuration_apply_status == "applied"
+        ):
+            return True
+
+        self.configuration_desired_revision = desired_revision
+        if desired_revision == 0:
+            self.configuration_applied_revision = 0
+            self.configuration_applied_config = managed_configuration_snapshot(
+                self.config
+            )
+            self.configuration_apply_status = "applied"
+            self.configuration_apply_error = None
+            return True
+
+        try:
+            managed = validate_managed_configuration(
+                response_payload.get("configuration")
+            )
+        except ConfigurationError as exc:
+            self.configuration_apply_status = "error"
+            self.configuration_apply_error = str(exc)[:500]
+            LOG.error(
+                "configuration revision %d rejected: %s",
+                desired_revision,
+                exc,
+            )
+            return False
+
+        self.config = replace(self.config, **managed)
+        self.configuration_applied_revision = desired_revision
+        self.configuration_applied_config = managed
+        self.configuration_apply_status = "applied"
+        self.configuration_apply_error = None
+        LOG.info("applied managed configuration revision %d", desired_revision)
+        return True
 
     def enqueue_heartbeat(self) -> int:
         payload = {
@@ -574,6 +724,7 @@ class SensorAgent:
                 "last_delivery_error_at": self.last_delivery_error_at,
                 "last_delivery_error_reason": self.last_delivery_error_reason,
             },
+            "configuration_report": self.configuration_report(),
         }
         return self.outbox.replace_pending(HEARTBEAT_PATH, payload)
 
@@ -810,6 +961,11 @@ class SensorAgent:
         try:
             while self.running:
                 now = time.monotonic()
+                if now >= self.next_configuration_poll_monotonic:
+                    self.poll_configuration()
+                    self.next_configuration_poll_monotonic = (
+                        time.monotonic() + CONFIGURATION_POLL_SECONDS
+                    )
                 self.read_source_once()
                 if (
                     self.last_heartbeat_monotonic == 0.0

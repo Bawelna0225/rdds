@@ -1,4 +1,5 @@
 import hashlib
+import json
 import secrets
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -6,7 +7,12 @@ from uuid import UUID
 
 from app.config import settings
 from app.database import connection
-from app.models import SensorMaintenance, SensorRegistration, SensorUpdate
+from app.models import (
+    SensorMaintenance,
+    SensorManagedConfiguration,
+    SensorRegistration,
+    SensorUpdate,
+)
 
 LegacySensorAccess = Literal["allowed", "disabled", "individual_required"]
 
@@ -230,6 +236,20 @@ SENSOR_COLUMNS = """
     sensor.updated_by,
     sensor.created_at,
     sensor.updated_at,
+    configuration.desired_revision AS configuration_desired_revision,
+    configuration.applied_revision AS configuration_applied_revision,
+    configuration.apply_status AS configuration_apply_status,
+    configuration.apply_error AS configuration_apply_error,
+    configuration.reported_at AS configuration_reported_at,
+    CASE
+        WHEN configuration.sensor_id IS NULL
+          OR configuration.desired_revision = 0 THEN 'unmanaged'
+        WHEN configuration.apply_status = 'error' THEN 'error'
+        WHEN configuration.applied_revision = configuration.desired_revision
+          AND configuration.apply_status = 'applied' THEN 'compliant'
+        WHEN configuration.applied_revision IS NULL THEN 'unreported'
+        ELSE 'pending'
+    END AS configuration_compliance,
     CASE
         WHEN credential.id IS NULL THEN 'legacy'
         ELSE 'individual'
@@ -281,6 +301,8 @@ SENSOR_JOINS = """
         ORDER BY active_credential.created_at DESC
         LIMIT 1
     ) AS credential ON TRUE
+    LEFT JOIN sensor_configuration_state AS configuration
+        ON configuration.sensor_id = sensor.id
     LEFT JOIN LATERAL (
         SELECT
             latest_heartbeat.uptime_seconds,
@@ -589,6 +611,15 @@ def register_sensor(
 
         cursor.execute(
             """
+            INSERT INTO sensor_configuration_state (sensor_id)
+            VALUES (%s)
+            ON CONFLICT (sensor_id) DO NOTHING
+            """,
+            (created["id"],),
+        )
+
+        cursor.execute(
+            """
             INSERT INTO sensor_credentials (
                 sensor_id,
                 token_hash,
@@ -604,6 +635,173 @@ def register_sensor(
             raise RuntimeError("Registered sensor could not be read")
 
     return sensor, token
+
+
+
+def get_sensor_configuration(sensor_id: UUID) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                sensor.id AS sensor_id,
+                sensor.sensor_key,
+                sensor.display_name,
+                configuration.desired_revision,
+                configuration.desired_config,
+                configuration.desired_updated_at,
+                configuration.desired_updated_by,
+                configuration.applied_revision,
+                configuration.applied_config,
+                configuration.apply_status,
+                configuration.apply_error,
+                configuration.reported_at,
+                CASE
+                    WHEN configuration.sensor_id IS NULL
+                      OR configuration.desired_revision = 0 THEN 'unmanaged'
+                    WHEN configuration.apply_status = 'error' THEN 'error'
+                    WHEN configuration.applied_revision = configuration.desired_revision
+                      AND configuration.apply_status = 'applied'
+                    THEN 'compliant'
+                    WHEN configuration.applied_revision IS NULL THEN 'unreported'
+                    ELSE 'pending'
+                END AS compliance
+            FROM sensors AS sensor
+            LEFT JOIN sensor_configuration_state AS configuration
+                ON configuration.sensor_id = sensor.id
+            WHERE sensor.id = %s
+              AND sensor.deleted_at IS NULL
+            """,
+            (sensor_id,),
+        )
+        row = cursor.fetchone()
+        return None if row is None else dict(row)
+
+
+def get_sensor_configuration_by_key(sensor_key: str) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                sensor.id AS sensor_id,
+                sensor.sensor_key,
+                configuration.desired_revision,
+                configuration.desired_config
+            FROM sensors AS sensor
+            LEFT JOIN sensor_configuration_state AS configuration
+                ON configuration.sensor_id = sensor.id
+            WHERE sensor.sensor_key = %s
+              AND sensor.deleted_at IS NULL
+            """,
+            (sensor_key,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        if result["desired_revision"] is None:
+            result["desired_revision"] = 0
+            result["desired_config"] = {}
+        return result
+
+
+def update_sensor_configuration(
+    sensor_id: UUID,
+    payload: SensorManagedConfiguration,
+    actor: str,
+) -> dict[str, Any] | None:
+    desired_config = json.dumps(
+        payload.model_dump(mode="json"),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM sensors
+            WHERE id = %s
+              AND deleted_at IS NULL
+            FOR UPDATE
+            """,
+            (sensor_id,),
+        )
+        if cursor.fetchone() is None:
+            return None
+
+        cursor.execute(
+            """
+            INSERT INTO sensor_configuration_state (
+                sensor_id,
+                desired_revision,
+                desired_config,
+                desired_updated_at,
+                desired_updated_by,
+                apply_status,
+                apply_error
+            )
+            VALUES (
+                %(sensor_id)s,
+                1,
+                %(desired_config)s::jsonb,
+                NOW(),
+                %(actor)s,
+                'unreported',
+                NULL
+            )
+            ON CONFLICT (sensor_id) DO UPDATE
+            SET
+                desired_revision =
+                    sensor_configuration_state.desired_revision + 1,
+                desired_config = EXCLUDED.desired_config,
+                desired_updated_at = NOW(),
+                desired_updated_by = EXCLUDED.desired_updated_by,
+                apply_status = CASE
+                    WHEN sensor_configuration_state.applied_revision IS NULL
+                    THEN 'unreported'
+                    ELSE 'pending'
+                END,
+                apply_error = NULL
+            RETURNING desired_revision
+            """,
+            {
+                "sensor_id": sensor_id,
+                "desired_config": desired_config,
+                "actor": actor,
+            },
+        )
+        changed = cursor.fetchone()
+        if changed is None:
+            raise RuntimeError("Sensor configuration update returned no row")
+
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                occurred_at,
+                event_type,
+                actor,
+                sensor_id,
+                details
+            )
+            VALUES (
+                NOW(),
+                'sensor_configuration_changed',
+                %(actor)s,
+                %(sensor_id)s,
+                jsonb_build_object(
+                    'desired_revision', %(desired_revision)s,
+                    'desired_config', %(desired_config)s::jsonb
+                )
+            )
+            """,
+            {
+                "actor": actor,
+                "sensor_id": sensor_id,
+                "desired_revision": changed["desired_revision"],
+                "desired_config": desired_config,
+            },
+        )
+
+    return get_sensor_configuration(sensor_id)
 
 
 def set_sensor_enabled(

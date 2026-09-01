@@ -64,6 +64,7 @@ from app.models import (
     SensorState,
     SensorTokenRotation,
     SensorUpdate,
+    SensorManagedConfiguration,
 )
 from app.operations_store import get_database_storage, get_maintenance_status
 from app.security import (
@@ -104,6 +105,9 @@ from app.sensor_store import (
     set_sensor_enabled,
     set_sensor_maintenance,
     update_sensor,
+    get_sensor_configuration,
+    get_sensor_configuration_by_key,
+    update_sensor_configuration,
 )
 from app.track_store import get_live_track_trails, get_track_history, list_tracks
 
@@ -147,7 +151,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.22.1",
+    version="0.23.0",
     lifespan=lifespan,
 )
 
@@ -658,6 +662,74 @@ def get_sensor_health_overview() -> dict[str, object]:
         "time": utc_now(),
         "window_hours": 24,
         "sensors": sensors,
+    }
+
+
+
+@app.get(
+    "/api/v1/sensors/{sensor_id}/configuration",
+    tags=["sensors"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_configuration_view(sensor_id: UUID) -> dict[str, object]:
+    try:
+        configuration = get_sensor_configuration(sensor_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if configuration is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+    return {"time": utc_now(), "configuration": configuration}
+
+
+@app.put(
+    "/api/v1/sensors/{sensor_id}/configuration",
+    tags=["sensors"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def put_sensor_configuration(
+    sensor_id: UUID,
+    payload: SensorManagedConfiguration,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        configuration = update_sensor_configuration(
+            sensor_id=sensor_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if configuration is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+    return {"time": utc_now(), "configuration": configuration}
+
+
+@app.get(
+    "/api/v1/agent/configuration",
+    tags=["agent"],
+)
+def get_agent_configuration(
+    principal: IngestPrincipal = Depends(require_ingest_token),
+) -> dict[str, object]:
+    if principal.mode != "sensor" or principal.sensor_key is None:
+        raise HTTPException(
+            status_code=403,
+            detail="individual sensor credential required",
+        )
+    try:
+        configuration = get_sensor_configuration_by_key(principal.sensor_key)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Agent configuration query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if configuration is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+    return {
+        "time": utc_now(),
+        "sensor_id": configuration["sensor_key"],
+        "desired_revision": configuration["desired_revision"],
+        "configuration": configuration["desired_config"],
     }
 
 

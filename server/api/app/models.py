@@ -79,11 +79,51 @@ class HeartbeatStatus(StrictModel):
         return value
 
 
+class SensorManagedConfiguration(StrictModel):
+    heartbeat_seconds: float = Field(ge=2.0, le=3600.0)
+    reconnect_seconds: float = Field(ge=0.5, le=300.0)
+    request_timeout_seconds: float = Field(ge=1.0, le=120.0)
+    replay_messages_per_second: float = Field(ge=0.1, le=100.0)
+
+
+class SensorConfigurationReport(StrictModel):
+    desired_revision: int = Field(ge=0)
+    applied_revision: int | None = Field(default=None, ge=0)
+    applied_config: SensorManagedConfiguration | None = None
+    apply_status: Literal["applied", "error"]
+    apply_error: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_configuration_report(self) -> "SensorConfigurationReport":
+        if (self.applied_revision is None) != (self.applied_config is None):
+            raise ValueError(
+                "applied_revision and applied_config must be reported together"
+            )
+        if (
+            self.applied_revision is not None
+            and self.applied_revision > self.desired_revision
+        ):
+            raise ValueError("applied_revision cannot exceed desired_revision")
+        if self.apply_status == "applied":
+            if self.applied_revision != self.desired_revision:
+                raise ValueError(
+                    "an applied report must match the desired revision"
+                )
+            if self.applied_config is None:
+                raise ValueError("an applied report requires applied_config")
+            if self.apply_error is not None:
+                raise ValueError("an applied report cannot contain apply_error")
+        elif not (self.apply_error or "").strip():
+            raise ValueError("an error report requires apply_error")
+        return self
+
+
 class HeartbeatEnvelope(StrictModel):
     protocol_version: Literal["rdds/1.0"]
     message_type: Literal["heartbeat"]
     sensor: SensorContext
     status: HeartbeatStatus
+    configuration_report: SensorConfigurationReport | None = None
 
 
 class RadioObservation(StrictModel):
@@ -137,6 +177,7 @@ class IngestResult(StrictModel):
     duplicate: bool
     record_id: int | None
     sensor_uuid: UUID
+
 
 
 class SensorRegistration(StrictModel):

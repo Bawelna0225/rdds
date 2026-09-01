@@ -120,6 +120,48 @@ const sensorHealthReasonLabels = {
   disabled: "sensor wyłączony administracyjnie",
 };
 
+const sensorConfigurationComplianceLabels = {
+  unmanaged: "niezarządzana",
+  unreported: "brak raportu",
+  pending: "oczekuje na zastosowanie",
+  compliant: "zgodna",
+  error: "błąd zastosowania",
+};
+
+const SENSOR_CONFIGURATION_FIELDS = {
+  heartbeat_seconds: {
+    element: "sensorConfigurationHeartbeat",
+    label: "Interwał heartbeat",
+    min: 2,
+    max: 3600,
+  },
+  reconnect_seconds: {
+    element: "sensorConfigurationReconnect",
+    label: "Ponowne połączenie",
+    min: 0.5,
+    max: 300,
+  },
+  request_timeout_seconds: {
+    element: "sensorConfigurationTimeout",
+    label: "Limit czasu żądania",
+    min: 1,
+    max: 120,
+  },
+  replay_messages_per_second: {
+    element: "sensorConfigurationReplayRate",
+    label: "Tempo odtwarzania kolejki",
+    min: 0.1,
+    max: 100,
+  },
+};
+
+const SENSOR_CONFIGURATION_DEFAULTS = {
+  heartbeat_seconds: 10,
+  reconnect_seconds: 3,
+  request_timeout_seconds: 5,
+  replay_messages_per_second: 2,
+};
+
 const sourceKindLabels = {
   serial: "port szeregowy USB",
   socket: "strumień TCP emulatora",
@@ -202,6 +244,9 @@ const auditEventLabels = {
   sensor_alert_acknowledged: "Potwierdzono alarm sensora",
   sensor_alert_reason_changed: "Zmieniła się przyczyna alarmu sensora",
   sensor_alert_closed: "Zamknięto alarm sensora",
+  sensor_configuration_changed: "Zmieniono konfigurację sensora",
+  sensor_configuration_applied: "Sensor zastosował konfigurację",
+  sensor_configuration_failed: "Sensor odrzucił konfigurację",
   operator_created: "Utworzono konto",
   operator_updated: "Zmieniono konto",
   operator_enabled: "Włączono konto",
@@ -370,6 +415,7 @@ const elements = {
   sensorOverviewOffline: document.querySelector("#sensor-overview-offline"),
   sensorOverviewMaintenance: document.querySelector("#sensor-overview-maintenance"),
   sensorOverviewIssues: document.querySelector("#sensor-overview-issues"),
+  sensorOverviewConfiguration: document.querySelector("#sensor-overview-configuration"),
   sensorOverviewList: document.querySelector("#sensor-overview-list"),
   selectionPanel: document.querySelector("#selection-panel"),
   selectionEyebrow: document.querySelector("#selection-eyebrow"),
@@ -436,6 +482,19 @@ const elements = {
   sensorLongitude: document.querySelector("#sensor-longitude"),
   sensorSave: document.querySelector("#sensor-save"),
   sensorCancel: document.querySelector("#sensor-cancel"),
+  sensorConfigurationEditor: document.querySelector("#sensor-configuration-editor"),
+  sensorConfigurationForm: document.querySelector("#sensor-configuration-form"),
+  sensorConfigurationTitle: document.querySelector("#sensor-configuration-title"),
+  sensorConfigurationHelp: document.querySelector("#sensor-configuration-help"),
+  sensorConfigurationCompliance: document.querySelector("#sensor-configuration-compliance"),
+  sensorConfigurationRevisions: document.querySelector("#sensor-configuration-revisions"),
+  sensorConfigurationError: document.querySelector("#sensor-configuration-error"),
+  sensorConfigurationHeartbeat: document.querySelector("#sensor-configuration-heartbeat"),
+  sensorConfigurationReconnect: document.querySelector("#sensor-configuration-reconnect"),
+  sensorConfigurationTimeout: document.querySelector("#sensor-configuration-timeout"),
+  sensorConfigurationReplayRate: document.querySelector("#sensor-configuration-replay-rate"),
+  sensorConfigurationSave: document.querySelector("#sensor-configuration-save"),
+  sensorConfigurationCancel: document.querySelector("#sensor-configuration-cancel"),
   sensorTokenPanel: document.querySelector("#sensor-token-panel"),
   sensorTokenTitle: document.querySelector("#sensor-token-title"),
   sensorTokenValue: document.querySelector("#sensor-token-value"),
@@ -564,6 +623,8 @@ let drawingPoints = [];
 let drawingLayer = null;
 let editingZoneId = null;
 let editingSensorId = null;
+let editingSensorConfigurationId = null;
+let sensorConfigurationRequestSequence = 0;
 let toastTimeout = null;
 
 function isCoordinate(value) {
@@ -714,6 +775,73 @@ function stateLabel(state) {
 
 function sensorHealthReasonLabel(reason) {
   return sensorHealthReasonLabels[reason] ?? reason ?? "brak danych diagnostycznych";
+}
+
+function normalizedRevision(value, fallback = 0) {
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : fallback;
+}
+
+function sensorConfigurationState(sensor) {
+  const desiredRevision = normalizedRevision(
+    sensor?.configuration_desired_revision
+      ?? sensor?.desired_revision
+      ?? sensor?.configuration?.desired_revision,
+  );
+  const appliedValue = sensor?.configuration_applied_revision
+    ?? sensor?.applied_revision
+    ?? sensor?.configuration?.applied_revision;
+  const appliedRevision = appliedValue === null || appliedValue === undefined
+    ? null
+    : normalizedRevision(appliedValue, null);
+  const applyStatus = sensor?.configuration_apply_status
+    ?? sensor?.apply_status
+    ?? sensor?.configuration?.apply_status
+    ?? "unreported";
+  let compliance = sensor?.configuration_compliance
+    ?? sensor?.compliance
+    ?? sensor?.configuration?.compliance;
+
+  if (!sensorConfigurationComplianceLabels[compliance]) {
+    if (desiredRevision === 0) compliance = "unmanaged";
+    else if (applyStatus === "error") compliance = "error";
+    else if (appliedRevision === desiredRevision && applyStatus === "applied") {
+      compliance = "compliant";
+    } else if (appliedRevision === null) compliance = "unreported";
+    else compliance = "pending";
+  }
+
+  return {
+    desiredRevision,
+    appliedRevision,
+    applyStatus,
+    compliance,
+    applyError: sensor?.configuration_apply_error
+      ?? sensor?.apply_error
+      ?? sensor?.configuration?.apply_error
+      ?? null,
+  };
+}
+
+function sensorConfigurationComplianceLabel(compliance) {
+  return sensorConfigurationComplianceLabels[compliance] ?? compliance ?? "—";
+}
+
+function sensorConfigurationRevisionLabel(configuration) {
+  const applied = configuration.appliedRevision === null
+    ? "—"
+    : configuration.appliedRevision;
+  return `oczekiwana ${configuration.desiredRevision} / zastosowana ${applied}`;
+}
+
+function sensorConfigurationPriority(sensor) {
+  return ({
+    error: 0,
+    pending: 1,
+    unreported: 2,
+    unmanaged: 3,
+    compliant: 4,
+  })[sensorConfigurationState(sensor).compliance] ?? 2;
 }
 
 function sourceConnectionLabel(value) {
@@ -2272,6 +2400,7 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   cancelZoneDrawing();
   cancelSensorRegistration();
   closeSensorToken();
+  closeSensorConfigurationEditor();
   closeSensorOverview({ restoreFocus: false });
   elements.operatorEditor.classList.add("hidden");
   elements.securityEditor.classList.add("hidden");
@@ -3335,7 +3464,14 @@ function renderSensorList(sensors) {
     const health = document.createElement("span");
     health.className = "sensor-health-reason";
     health.textContent = `Tor detekcji: ${sensorHealthReasonLabel(sensor.health_reason)}`;
-    meta.append(identifier, credential, time, health);
+    const configurationState = sensorConfigurationState(sensor);
+    const configuration = document.createElement("span");
+    configuration.className =
+      `sensor-meta-configuration configuration-${configurationState.compliance}`;
+    configuration.textContent =
+      `Konfiguracja: ${sensorConfigurationComplianceLabel(configurationState.compliance)} · `
+      + sensorConfigurationRevisionLabel(configurationState);
+    meta.append(identifier, credential, time, health, configuration);
 
     main.append(titleRow, meta);
     card.append(main);
@@ -3347,6 +3483,12 @@ function renderSensorList(sensors) {
       edit.type = "button";
       edit.textContent = "Edytuj";
       edit.addEventListener("click", () => startSensorEditing(sensor));
+      const configure = document.createElement("button");
+      configure.type = "button";
+      configure.textContent = "Konfiguracja";
+      configure.addEventListener("click", () => {
+        void openSensorConfigurationEditor(sensor);
+      });
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = sensor.status === "disabled" ? "" : "danger-button";
@@ -3373,7 +3515,7 @@ function renderSensorList(sensors) {
       remove.className = "danger-button";
       remove.textContent = "Usuń";
       remove.addEventListener("click", () => runSensorDeletion(sensor, remove));
-      actions.append(edit, toggle, maintenance, rotate, remove);
+      actions.append(edit, configure, toggle, maintenance, rotate, remove);
       card.append(actions);
     }
 
@@ -3453,6 +3595,11 @@ function filteredSensorOverviewRows() {
     const matchesQuery = !query || [sensor.display_name, sensor.sensor_id]
       .some((value) => String(value ?? "").toLocaleLowerCase("pl-PL").includes(query));
     if (!matchesQuery) return false;
+    if (filter === "configuration") {
+      return ["error", "pending", "unreported"].includes(
+        sensorConfigurationState(sensor).compliance,
+      );
+    }
     if (filter === "issues") {
       return ["offline", "degraded", "provisioning"].includes(sensor.status);
     }
@@ -3472,6 +3619,10 @@ function filteredSensorOverviewRows() {
     if (sort === "issues") {
       return Number(right.issue_starts_24h || 0) - Number(left.issue_starts_24h || 0)
         || sensorOverviewPriority(left) - sensorOverviewPriority(right)
+        || byName(left, right);
+    }
+    if (sort === "configuration") {
+      return sensorConfigurationPriority(left) - sensorConfigurationPriority(right)
         || byName(left, right);
     }
     if (sort === "heartbeat") {
@@ -3519,6 +3670,11 @@ function renderSensorOverview() {
   elements.sensorOverviewIssues.textContent = String(
     sensors.reduce((total, sensor) => total + Number(sensor.issue_starts_24h || 0), 0),
   );
+  elements.sensorOverviewConfiguration.textContent = String(
+    sensors.filter((sensor) => ["error", "pending", "unreported"].includes(
+      sensorConfigurationState(sensor).compliance,
+    )).length,
+  );
 
   const visibleRows = filteredSensorOverviewRows();
   elements.sensorOverviewList.replaceChildren();
@@ -3555,6 +3711,10 @@ function renderSensorOverview() {
         "oczekujące / błędy",
       ),
       sensorOverviewCell(formatRelativeAge(sensor.last_heartbeat_at), formatCompactDateTime(sensor.last_heartbeat_at)),
+      sensorOverviewCell(
+        sensorConfigurationComplianceLabel(sensorConfigurationState(sensor).compliance),
+        sensorConfigurationRevisionLabel(sensorConfigurationState(sensor)),
+      ),
       sensorOverviewCell(String(issueStarts), `${healthChanges} zmian · ${recoveries} powrotów`),
     );
     row.addEventListener("click", () => {
@@ -3603,6 +3763,7 @@ function openSensorOverview() {
   if (
     !elements.zoneEditor.classList.contains("hidden")
     || !elements.sensorEditor.classList.contains("hidden")
+    || !elements.sensorConfigurationEditor.classList.contains("hidden")
     || !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     showToast("Zakończ lub anuluj bieżącą edycję przed otwarciem zestawienia.", true);
@@ -3706,6 +3867,7 @@ function focusSensorInSidebar(sensorId, { scroll = true } = {}) {
   if (
     !elements.zoneEditor.classList.contains("hidden")
     || !elements.sensorEditor.classList.contains("hidden")
+    || !elements.sensorConfigurationEditor.classList.contains("hidden")
     || !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     return;
@@ -4150,6 +4312,7 @@ function renderSelection(track) {
 }
 
 function renderSensorSelection(sensor) {
+  const configuration = sensorConfigurationState(sensor);
   elements.selectionPanel.classList.remove("hidden");
   elements.selectionEyebrow.textContent = "Wybrany sensor";
   elements.selectionTitle.textContent = sensor.display_name || sensor.sensor_id;
@@ -4178,6 +4341,16 @@ function renderSensorSelection(sensor) {
               detailItem("Planowane zakończenie", formatDateTime(sensor.maintenance_until)),
             ]
           : []),
+      ],
+    ),
+    sensorDetailSection(
+      "Konfiguracja agenta",
+      "agent-configuration",
+      [
+        detailItem("Stan zgodności", sensorConfigurationComplianceLabel(configuration.compliance)),
+        detailItem("Rewizje", sensorConfigurationRevisionLabel(configuration)),
+        detailItem("Stan zastosowania", configuration.applyStatus),
+        detailItem("Błąd zastosowania", configuration.applyError),
       ],
     ),
     sensorDetailSection(
@@ -5324,6 +5497,7 @@ function selectTrack(trackId) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
     !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorConfigurationEditor.classList.contains("hidden") ||
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     return;
@@ -5376,6 +5550,7 @@ function selectAlert(alert) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
     !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorConfigurationEditor.classList.contains("hidden") ||
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     return;
@@ -5415,6 +5590,7 @@ function selectSensorAlert(alert) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
     !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorConfigurationEditor.classList.contains("hidden") ||
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) return;
   selectedTrackId = null;
@@ -5446,6 +5622,7 @@ function selectSensor(sensorId) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
     !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorConfigurationEditor.classList.contains("hidden") ||
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     return;
@@ -5546,6 +5723,7 @@ function selectAuditEvent(event) {
   if (
     !elements.zoneEditor.classList.contains("hidden") ||
     !elements.sensorEditor.classList.contains("hidden") ||
+    !elements.sensorConfigurationEditor.classList.contains("hidden") ||
     !elements.sensorTokenPanel.classList.contains("hidden")
   ) {
     return;
@@ -5798,6 +5976,176 @@ function cancelZoneDrawing() {
   elements.zoneUndoPoint.disabled = true;
 }
 
+function setSensorConfigurationFormDisabled(disabled) {
+  for (const definition of Object.values(SENSOR_CONFIGURATION_FIELDS)) {
+    elements[definition.element].disabled = disabled;
+  }
+  elements.sensorConfigurationSave.disabled = disabled;
+  elements.sensorConfigurationSave.setAttribute("aria-busy", String(disabled));
+}
+
+function hasCompleteSensorConfiguration(configuration) {
+  return Object.keys(SENSOR_CONFIGURATION_FIELDS).every((field) => {
+    const value = Number(configuration?.[field]);
+    return Number.isFinite(value);
+  });
+}
+
+function populateSensorConfigurationForm(configuration) {
+  for (const [field, definition] of Object.entries(SENSOR_CONFIGURATION_FIELDS)) {
+    elements[definition.element].value = String(configuration[field]);
+  }
+}
+
+function renderSensorConfigurationEditorState(configuration) {
+  const state = sensorConfigurationState(configuration);
+  elements.sensorConfigurationCompliance.textContent =
+    sensorConfigurationComplianceLabel(state.compliance);
+  elements.sensorConfigurationCompliance.className =
+    `configuration-value configuration-${state.compliance}`;
+  elements.sensorConfigurationRevisions.textContent =
+    sensorConfigurationRevisionLabel(state);
+  elements.sensorConfigurationError.textContent = state.applyError || "";
+  elements.sensorConfigurationError.classList.toggle("hidden", !state.applyError);
+}
+
+function closeSensorConfigurationEditor() {
+  sensorConfigurationRequestSequence += 1;
+  editingSensorConfigurationId = null;
+  elements.sensorConfigurationEditor.classList.add("hidden");
+  elements.sensorConfigurationForm.reset();
+  elements.sensorConfigurationError.classList.add("hidden");
+  elements.sensorConfigurationError.textContent = "";
+  setSensorConfigurationFormDisabled(false);
+}
+
+async function openSensorConfigurationEditor(sensor) {
+  if (!canAdminister()) {
+    showToast("Ta operacja wymaga roli administrator.", true);
+    return;
+  }
+
+  cancelZoneDrawing();
+  cancelSensorRegistration();
+  closeSensorToken();
+  closeSensorOverview({ restoreFocus: false });
+  clearSelection();
+  setOperatorMenuOpen(false);
+  editingSensorConfigurationId = sensor.id;
+  const requestSequence = ++sensorConfigurationRequestSequence;
+  elements.sensorConfigurationForm.reset();
+  elements.sensorConfigurationTitle.textContent =
+    `Konfiguracja: ${sensor.display_name || sensor.sensor_id}`;
+  elements.sensorConfigurationHelp.textContent = "Pobieranie bieżącej konfiguracji…";
+  elements.sensorConfigurationCompliance.textContent = "—";
+  elements.sensorConfigurationCompliance.className = "configuration-value";
+  elements.sensorConfigurationRevisions.textContent = "—";
+  elements.sensorConfigurationError.classList.add("hidden");
+  elements.sensorConfigurationEditor.classList.remove("hidden");
+  setSensorConfigurationFormDisabled(true);
+
+  try {
+    const response = await requestJson(
+      `/api/v1/sensors/${encodeURIComponent(sensor.id)}/configuration`,
+    );
+    if (
+      requestSequence !== sensorConfigurationRequestSequence
+      || String(editingSensorConfigurationId) !== String(sensor.id)
+    ) return;
+    const configuration = response.configuration;
+    if (!configuration || typeof configuration !== "object") {
+      throw new ApiError("API zwróciło nieprawidłową konfigurację", 502);
+    }
+    const desired = configuration.desired_config;
+    const applied = configuration.applied_config;
+    let values = SENSOR_CONFIGURATION_DEFAULTS;
+    let source = "bezpieczne wartości początkowe";
+    if (hasCompleteSensorConfiguration(desired)) {
+      values = desired;
+      source = "konfiguracja oczekiwana przez serwer";
+    } else if (hasCompleteSensorConfiguration(applied)) {
+      values = applied;
+      source = "ostatnia konfiguracja zgłoszona przez agenta";
+    }
+    populateSensorConfigurationForm(values);
+    renderSensorConfigurationEditorState(configuration);
+    elements.sensorConfigurationHelp.textContent =
+      `Pola wczytano z: ${source}. Zapis utworzy nową rewizję konfiguracji.`;
+    setSensorConfigurationFormDisabled(false);
+    elements.sensorConfigurationHeartbeat.focus();
+  } catch (error) {
+    if (requestSequence !== sensorConfigurationRequestSequence) return;
+    elements.sensorConfigurationHelp.textContent =
+      `Nie udało się pobrać konfiguracji: ${error.message}`;
+    elements.sensorConfigurationError.textContent = error.message;
+    elements.sensorConfigurationError.classList.remove("hidden");
+  }
+}
+
+function readSensorConfigurationForm() {
+  const payload = {};
+  for (const [field, definition] of Object.entries(SENSOR_CONFIGURATION_FIELDS)) {
+    const value = Number(elements[definition.element].value);
+    if (!Number.isFinite(value) || value < definition.min || value > definition.max) {
+      throw new Error(
+        `${definition.label}: podaj wartość od ${definition.min} do ${definition.max}.`,
+      );
+    }
+    payload[field] = value;
+  }
+  return payload;
+}
+
+async function saveSensorConfiguration(event) {
+  event.preventDefault();
+  if (!canAdminister() || !editingSensorConfigurationId) {
+    showToast("Ta operacja wymaga roli administrator.", true);
+    return;
+  }
+
+  let payload;
+  try {
+    payload = readSensorConfigurationForm();
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+
+  const sensor = currentSensors.find(
+    (candidate) => String(candidate.id) === String(editingSensorConfigurationId),
+  );
+  const displayName = sensor?.display_name || sensor?.sensor_id || "wybranego sensora";
+  if (!window.confirm(
+    `Zapisać nową konfigurację dla „${displayName}”? `
+      + "Agent pobierze ją automatycznie i zgłosi wynik zastosowania.",
+  )) return;
+
+  const sensorId = editingSensorConfigurationId;
+  setSensorConfigurationFormDisabled(true);
+  elements.sensorConfigurationHelp.textContent = "Zapisywanie nowej rewizji…";
+  try {
+    const response = await adminRequest(
+      `/api/v1/sensors/${encodeURIComponent(sensorId)}/configuration`,
+      "PUT",
+      payload,
+    );
+    const revision = response.configuration?.desired_revision;
+    closeSensorConfigurationEditor();
+    showToast(
+      `Zapisano konfigurację sensora „${displayName}”${
+        revision === undefined ? "" : ` jako rewizję ${revision}`
+      }. Oczekiwanie na raport agenta.`,
+    );
+    await refresh();
+  } catch (error) {
+    elements.sensorConfigurationHelp.textContent =
+      `Zapis konfiguracji nie powiódł się: ${error.message}`;
+    elements.sensorConfigurationError.textContent = error.message;
+    elements.sensorConfigurationError.classList.remove("hidden");
+    setSensorConfigurationFormDisabled(false);
+  }
+}
+
 function startSensorRegistration() {
   if (!canAdminister()) {
     showToast("Ta operacja wymaga roli administrator.", true);
@@ -5806,6 +6154,7 @@ function startSensorRegistration() {
 
   cancelZoneDrawing();
   closeSensorToken();
+  closeSensorConfigurationEditor();
   clearSelection();
   setOperatorMenuOpen(false);
   editingSensorId = null;
@@ -5831,6 +6180,7 @@ function startSensorEditing(sensor) {
 
   cancelZoneDrawing();
   closeSensorToken();
+  closeSensorConfigurationEditor();
   clearSelection();
   setOperatorMenuOpen(false);
   editingSensorId = sensor.id;
@@ -5859,6 +6209,7 @@ function cancelSensorRegistration() {
 
 function showSensorToken(sensor, credential) {
   cancelSensorRegistration();
+  closeSensorConfigurationEditor();
   clearSelection();
   elements.sensorTokenTitle.textContent = `Token: ${sensor.display_name}`;
   elements.sensorTokenValue.textContent = credential.ingest_token;
@@ -6438,6 +6789,8 @@ elements.zoneBackToDrawing.addEventListener("click", returnToZoneDrawing);
 elements.zoneCancelForm.addEventListener("click", cancelZoneDrawing);
 elements.sensorForm.addEventListener("submit", saveSensorRegistration);
 elements.sensorCancel.addEventListener("click", cancelSensorRegistration);
+elements.sensorConfigurationForm.addEventListener("submit", saveSensorConfiguration);
+elements.sensorConfigurationCancel.addEventListener("click", closeSensorConfigurationEditor);
 elements.sensorTokenCopy.addEventListener("click", copySensorToken);
 elements.sensorTokenClose.addEventListener("click", closeSensorToken);
 map.on("click", handleMapDrawingClick);
@@ -6459,6 +6812,11 @@ document.addEventListener("keydown", (event) => {
     !elements.sensorEditor.classList.contains("hidden")
   ) {
     cancelSensorRegistration();
+  } else if (
+    event.key === "Escape" &&
+    !elements.sensorConfigurationEditor.classList.contains("hidden")
+  ) {
+    closeSensorConfigurationEditor();
   } else if (
     event.key === "Escape" &&
     !elements.sensorTokenPanel.classList.contains("hidden")
