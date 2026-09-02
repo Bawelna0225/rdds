@@ -47,13 +47,22 @@ from app.configuration_profile_store import (
 )
 from app.configuration_rollout_store import (
     RolloutConflict,
+    RolloutReadinessConflict,
+    RolloutRecoveryConflict,
     advance_sensor_configuration_rollout,
     cancel_sensor_configuration_rollout,
     create_sensor_configuration_rollout,
     get_sensor_configuration_rollout,
     list_sensor_configuration_rollouts,
+    monitor_active_sensor_configuration_rollouts,
     rollback_sensor_configuration_rollout,
+    resume_sensor_configuration_rollout,
     start_sensor_configuration_rollout,
+)
+from app.fleet_readiness_store import (
+    FleetReadinessPolicyConflict,
+    get_sensor_fleet_readiness,
+    update_sensor_fleet_readiness_policy,
 )
 from app.database import (
     insert_heartbeat,
@@ -88,6 +97,7 @@ from app.models import (
     SensorConfigurationProfileVersionCreate,
     SensorConfigurationRolloutAction,
     SensorConfigurationRolloutCreate,
+    SensorFleetReadinessPolicyUpdate,
 )
 from app.operations_store import get_database_storage, get_maintenance_status
 from app.security import (
@@ -158,6 +168,17 @@ async def sensor_status_monitor() -> None:
                 logger.info("Updated %s sensor health state(s)", changed)
         except psycopg.Error:
             logger.exception("Sensor status monitor could not reach the database")
+        try:
+            paused = await asyncio.to_thread(
+                monitor_active_sensor_configuration_rollouts
+            )
+            if paused:
+                logger.warning(
+                    "Automatically paused %s unsafe configuration rollout(s)",
+                    paused,
+                )
+        except (psycopg.Error, RuntimeError):
+            logger.exception("Configuration rollout monitor failed")
 
 
 @asynccontextmanager
@@ -174,7 +195,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.24.0",
+    version="0.25.0",
     lifespan=lifespan,
 )
 
@@ -688,6 +709,42 @@ def get_sensor_health_overview() -> dict[str, object]:
     }
 
 
+@app.get(
+    "/api/v1/sensor-fleet/readiness",
+    tags=["sensor-fleet"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_fleet_readiness_view() -> dict[str, object]:
+    try:
+        readiness_payload = get_sensor_fleet_readiness()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor fleet readiness query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), **readiness_payload}
+
+
+@app.put(
+    "/api/v1/sensor-fleet/readiness-policy",
+    tags=["sensor-fleet"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def put_sensor_fleet_readiness_policy(
+    payload: SensorFleetReadinessPolicyUpdate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        policy = update_sensor_fleet_readiness_policy(
+            payload=payload,
+            actor=principal.actor,
+        )
+    except FleetReadinessPolicyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor fleet readiness policy update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "policy": policy}
+
+
 
 
 @app.get(
@@ -775,6 +832,11 @@ def post_sensor_configuration_rollout_start(
             payload=payload,
             actor=principal.actor,
         )
+    except RolloutReadinessConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=jsonable_encoder(exc.api_detail()),
+        ) from exc
     except RolloutConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (psycopg.Error, RuntimeError) as exc:
@@ -801,10 +863,46 @@ def post_sensor_configuration_rollout_advance(
             payload=payload,
             actor=principal.actor,
         )
+    except RolloutReadinessConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=jsonable_encoder(exc.api_detail()),
+        ) from exc
     except RolloutConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (psycopg.Error, RuntimeError) as exc:
         logger.exception("Sensor configuration rollout advance failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if rollout is None:
+        raise HTTPException(status_code=404, detail="configuration rollout not found")
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.post(
+    "/api/v1/sensor-configuration-rollouts/{rollout_id}/resume",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_configuration_rollout_resume(
+    rollout_id: UUID,
+    payload: SensorConfigurationRolloutAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        rollout = resume_sensor_configuration_rollout(
+            rollout_id=rollout_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except RolloutRecoveryConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=jsonable_encoder(exc.api_detail()),
+        ) from exc
+    except RolloutConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout resume failed")
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     if rollout is None:
         raise HTTPException(status_code=404, detail="configuration rollout not found")
@@ -1848,6 +1946,23 @@ AuditEventType = Literal[
     "operator_session_revoked",
     "operator_sessions_revoked",
     "operator_security_exported",
+    "sensor_configuration_changed",
+    "sensor_configuration_applied",
+    "sensor_configuration_failed",
+    "sensor_configuration_profile_created",
+    "sensor_configuration_profile_updated",
+    "sensor_configuration_profile_version_created",
+    "sensor_configuration_profile_assigned",
+    "sensor_configuration_profile_unassigned",
+    "sensor_configuration_rollout_created",
+    "sensor_configuration_rollout_started",
+    "sensor_configuration_rollout_batch_deployed",
+    "sensor_configuration_rollout_completed",
+    "sensor_configuration_rollout_cancelled",
+    "sensor_configuration_rollout_rolled_back",
+    "sensor_configuration_rollout_paused",
+    "sensor_configuration_rollout_resumed",
+    "sensor_fleet_readiness_policy_changed",
 ]
 
 

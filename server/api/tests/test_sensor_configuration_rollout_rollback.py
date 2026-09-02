@@ -34,11 +34,12 @@ class ConfigurationRolloutRollbackMigrationTests(unittest.TestCase):
 
 
 class ConfigurationRolloutRollbackStoreTests(unittest.TestCase):
-    def test_only_terminal_rollouts_can_be_rolled_back(self) -> None:
+    def test_terminal_or_paused_rollouts_can_be_rolled_back(self) -> None:
         self.assertIn(
-            'if rollout["status"] not in {"completed", "cancelled"}:',
+            'if rollout["status"] not in {"paused", "completed", "cancelled"}:',
             STORE,
         )
+        self.assertIn('if rollout["status"] == "paused":', STORE)
         self.assertIn("configuration rollout was already rolled back", STORE)
 
     def test_rollback_is_all_or_nothing_and_locks_targets(self) -> None:

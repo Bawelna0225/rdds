@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 from app.database import connection
+from app.fleet_readiness_store import assess_sensor_fleet_readiness
 from app.models import (
     SensorConfigurationRolloutAction,
     SensorConfigurationRolloutCreate,
@@ -13,6 +15,53 @@ from app.models import (
 
 class RolloutConflict(RuntimeError):
     pass
+
+
+class RolloutReadinessConflict(RolloutConflict):
+    def __init__(
+        self,
+        *,
+        policy_revision: int,
+        blockers: list[dict[str, Any]],
+    ) -> None:
+        self.policy_revision = policy_revision
+        self.blockers = blockers
+        summary = ", ".join(
+            f"{item['sensor_key']}={item['readiness_status']}"
+            for item in blockers
+        )
+        super().__init__(f"next rollout batch is not ready: {summary}")
+
+    def api_detail(self) -> dict[str, Any]:
+        return {
+            "code": "rollout_readiness_blocked",
+            "message": str(self),
+            "policy_revision": self.policy_revision,
+            "blockers": self.blockers,
+        }
+
+
+class RolloutRecoveryConflict(RolloutConflict):
+    def __init__(
+        self,
+        *,
+        policy_revision: int,
+        blockers: list[dict[str, Any]],
+    ) -> None:
+        self.policy_revision = policy_revision
+        self.blockers = blockers
+        summary = ", ".join(
+            f"{item['sensor_key']}={item['code']}" for item in blockers
+        )
+        super().__init__(f"paused rollout is not safe to resume: {summary}")
+
+    def api_detail(self) -> dict[str, Any]:
+        return {
+            "code": "rollout_resume_blocked",
+            "message": str(self),
+            "policy_revision": self.policy_revision,
+            "blockers": self.blockers,
+        }
 
 
 ROLLOUT_SELECT = """
@@ -33,6 +82,11 @@ ROLLOUT_SELECT = """
     rollout.completed_at,
     rollout.cancelled_at,
     rollout.cancelled_by,
+    rollout.paused_at,
+    rollout.paused_by,
+    rollout.pause_reason,
+    rollout.pause_policy_revision,
+    rollout.resume_count,
     rollout.rolled_back_at,
     rollout.rolled_back_by,
     rollout.rollback_note,
@@ -252,26 +306,239 @@ def _read_rollout_targets(
     return targets
 
 
+def _readiness_assessment(
+    cursor: Any,
+    targets: list[dict[str, Any]],
+    *,
+    lock: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    policy, sensors = assess_sensor_fleet_readiness(
+        cursor,
+        sensor_ids=[target["sensor_id"] for target in targets],
+        lock=lock,
+    )
+    by_id = {sensor["id"]: sensor for sensor in sensors}
+    assessments: list[dict[str, Any]] = []
+    for target in targets:
+        sensor = by_id.get(target["sensor_id"])
+        if sensor is None:
+            assessments.append(
+                {
+                    "sensor_id": target["sensor_id"],
+                    "sensor_key": target["sensor_key"],
+                    "sequence": target["sequence"],
+                    "readiness_status": "blocked",
+                    "rollout_eligible": False,
+                    "reasons": [
+                        {"code": "sensor_missing", "severity": "blocked"}
+                    ],
+                }
+            )
+            continue
+        assessments.append(
+            {
+                "sensor_id": target["sensor_id"],
+                "sensor_key": target["sensor_key"],
+                "sequence": target["sequence"],
+                "readiness_status": sensor["readiness_status"],
+                "rollout_eligible": sensor["rollout_eligible"],
+                "reasons": sensor["reasons"],
+            }
+        )
+    return policy, assessments
+
+
+def _next_batch_readiness(
+    cursor: Any,
+    targets: list[dict[str, Any]],
+    *,
+    lock: bool,
+) -> dict[str, Any]:
+    policy, assessments = _readiness_assessment(cursor, targets, lock=lock)
+    return _readiness_result(policy, assessments)
+
+
+def _readiness_result(
+    policy: dict[str, Any],
+    assessments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    blockers = [item for item in assessments if not item["rollout_eligible"]]
+    return {
+        "policy_revision": policy["revision"],
+        "eligible": not blockers,
+        "target_count": len(assessments),
+        "targets": assessments,
+        "blockers": blockers,
+    }
+
+
+def _rollout_recovery_result(
+    policy: dict[str, Any],
+    targets: list[dict[str, Any]],
+    assessments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    assessment_by_id = {item["sensor_id"]: item for item in assessments}
+    timeout_seconds = int(policy["rollout_application_timeout_seconds"])
+    now = datetime.now(timezone.utc)
+    blockers: list[dict[str, Any]] = []
+    for target in targets:
+        if target["desired_revision"] is None or target["rolled_back_at"] is not None:
+            continue
+        assessment = assessment_by_id.get(target["sensor_id"])
+        base = {
+            "sensor_id": target["sensor_id"],
+            "sensor_key": target["sensor_key"],
+            "sequence": target["sequence"],
+            "desired_revision": target["desired_revision"],
+        }
+        if target["current_desired_revision"] != target["desired_revision"]:
+            blockers.append(
+                {
+                    **base,
+                    "code": "configuration_superseded",
+                    "readiness_status": (
+                        None if assessment is None
+                        else assessment["readiness_status"]
+                    ),
+                    "reasons": [] if assessment is None else assessment["reasons"],
+                }
+            )
+            continue
+        if target["current_apply_status"] == "error":
+            blockers.append(
+                {
+                    **base,
+                    "code": "configuration_error",
+                    "apply_error": target["current_apply_error"],
+                    "readiness_status": (
+                        None if assessment is None
+                        else assessment["readiness_status"]
+                    ),
+                    "reasons": [] if assessment is None else assessment["reasons"],
+                }
+            )
+            continue
+
+        applied = (
+            target["current_applied_revision"] == target["desired_revision"]
+            and target["current_apply_status"] == "applied"
+        )
+        reasons = [] if assessment is None else assessment["reasons"]
+        non_configuration_reasons = [
+            reason for reason in reasons
+            if not str(reason.get("code", "")).startswith("configuration_")
+        ]
+        if non_configuration_reasons:
+            blockers.append(
+                {
+                    **base,
+                    "code": "sensor_not_ready",
+                    "readiness_status": (
+                        None if assessment is None
+                        else assessment["readiness_status"]
+                    ),
+                    "reasons": non_configuration_reasons,
+                }
+            )
+            continue
+        if applied:
+            if assessment is None or not assessment["rollout_eligible"]:
+                blockers.append(
+                    {
+                        **base,
+                        "code": "sensor_not_ready",
+                        "readiness_status": (
+                            "blocked" if assessment is None
+                            else assessment["readiness_status"]
+                        ),
+                        "reasons": reasons,
+                    }
+                )
+            continue
+
+        deployed_at = target["deployed_at"]
+        elapsed_seconds = 0
+        if deployed_at is not None:
+            elapsed_seconds = max(0, int((now - deployed_at).total_seconds()))
+        if elapsed_seconds >= timeout_seconds:
+            blockers.append(
+                {
+                    **base,
+                    "code": "configuration_application_timeout",
+                    "elapsed_seconds": elapsed_seconds,
+                    "timeout_seconds": timeout_seconds,
+                    "readiness_status": (
+                        None if assessment is None
+                        else assessment["readiness_status"]
+                    ),
+                    "reasons": reasons,
+                }
+            )
+
+    return {
+        "policy_revision": policy["revision"],
+        "application_timeout_seconds": timeout_seconds,
+        "safe_to_resume": not blockers,
+        "blockers": blockers,
+    }
+
+
 def _read_rollout_details(cursor: Any, rollout_id: UUID) -> dict[str, Any] | None:
     rollout = _read_rollout_base(cursor, rollout_id)
     if rollout is None:
         return None
     targets = _read_rollout_targets(cursor, rollout_id, rollout["status"])
     rollout["targets"] = targets
-    rollout["can_start"] = rollout["status"] == "draft"
+    readiness_policy, target_readiness = _readiness_assessment(
+        cursor,
+        targets,
+        lock=False,
+    )
+    readiness_by_id = {item["sensor_id"]: item for item in target_readiness}
+    for target in targets:
+        readiness = readiness_by_id[target["sensor_id"]]
+        target["readiness_status"] = readiness["readiness_status"]
+        target["rollout_eligible"] = readiness["rollout_eligible"]
+        target["readiness_reasons"] = readiness["reasons"]
+    rollout["recovery"] = _rollout_recovery_result(
+        readiness_policy,
+        targets,
+        target_readiness,
+    )
+    next_targets = [
+        target for target in targets
+        if target["desired_revision"] is None
+    ][:rollout["batch_size"]]
+    next_target_ids = {target["sensor_id"] for target in next_targets}
+    rollout["next_batch_readiness"] = _readiness_result(
+        readiness_policy,
+        [
+            item for item in target_readiness
+            if item["sensor_id"] in next_target_ids
+        ],
+    )
+    next_batch_eligible = rollout["next_batch_readiness"]["eligible"]
+    rollout["can_start"] = (
+        rollout["status"] == "draft" and next_batch_eligible
+    )
     rollout["can_advance"] = (
         rollout["status"] == "active"
         and all(
             target["target_status"] in {"pending", "compliant"}
             for target in targets
         )
+        and next_batch_eligible
     )
-    rollout["can_cancel"] = rollout["status"] in {"draft", "active"}
+    rollout["can_resume"] = (
+        rollout["status"] == "paused"
+        and rollout["recovery"]["safe_to_resume"]
+    )
+    rollout["can_cancel"] = rollout["status"] in {"draft", "active", "paused"}
     deployed_targets = [
         target for target in targets if target["desired_revision"] is not None
     ]
     rollout["can_rollback"] = (
-        rollout["status"] in {"completed", "cancelled"}
+        rollout["status"] in {"paused", "completed", "cancelled"}
         and rollout["rolled_back_at"] is None
         and bool(deployed_targets)
         and all(
@@ -296,7 +563,7 @@ def list_sensor_configuration_rollouts(
             """
             SELECT COUNT(*)::bigint AS total
             FROM sensor_configuration_rollouts
-            WHERE (%s OR status IN ('draft', 'active'))
+            WHERE (%s OR status IN ('draft', 'active', 'paused'))
             """,
             (include_terminal,),
         )
@@ -307,7 +574,10 @@ def list_sensor_configuration_rollouts(
             SELECT {ROLLOUT_SELECT}
             FROM sensor_configuration_rollouts AS rollout
             {ROLLOUT_JOINS}
-            WHERE (%(include_terminal)s OR rollout.status IN ('draft', 'active'))
+            WHERE (
+                %(include_terminal)s
+                OR rollout.status IN ('draft', 'active', 'paused')
+            )
             ORDER BY rollout.created_at DESC, rollout.id DESC
             LIMIT %(limit)s
             OFFSET %(offset)s
@@ -387,7 +657,7 @@ def create_sensor_configuration_rollout(
             JOIN sensor_configuration_rollouts AS rollout
               ON rollout.id = target.rollout_id
             WHERE target.sensor_id = ANY(%s::uuid[])
-              AND rollout.status IN ('draft', 'active')
+              AND rollout.status IN ('draft', 'active', 'paused')
             LIMIT 1
             """,
             (sensor_ids,),
@@ -543,7 +813,7 @@ def _deploy_next_batch(
           AND target.desired_revision IS NULL
         ORDER BY target.sequence
         LIMIT %(batch_size)s
-        FOR UPDATE OF target, sensor
+        FOR UPDATE OF target
         """,
         {
             "rollout_id": rollout["id"],
@@ -551,6 +821,12 @@ def _deploy_next_batch(
         },
     )
     targets = cursor.fetchall()
+    readiness = _next_batch_readiness(cursor, targets, lock=True)
+    if not readiness["eligible"]:
+        raise RolloutReadinessConflict(
+            policy_revision=int(readiness["policy_revision"]),
+            blockers=readiness["blockers"],
+        )
     deployed: list[dict[str, Any]] = []
     desired_config_json = _json(rollout["configuration"])
     for target in targets:
@@ -780,6 +1056,133 @@ def start_sensor_configuration_rollout(
         return _read_rollout_details(cursor, rollout_id)
 
 
+def monitor_active_sensor_configuration_rollouts() -> int:
+    """Pause unsafe active rollouts; never deploy or resume automatically."""
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM sensor_configuration_rollouts
+            WHERE status = 'active'
+            ORDER BY started_at, id
+            """
+        )
+        rollout_ids = [row["id"] for row in cursor.fetchall()]
+
+    paused_count = 0
+    for rollout_id in rollout_ids:
+        with connection() as conn, conn.cursor() as cursor:
+            rollout = _get_locked_rollout(cursor, rollout_id)
+            if rollout is None or rollout["status"] != "active":
+                continue
+            targets = _read_rollout_targets(cursor, rollout_id, "active")
+            policy, assessments = _readiness_assessment(
+                cursor,
+                targets,
+                lock=True,
+            )
+            targets = _read_rollout_targets(cursor, rollout_id, "active")
+            recovery = _rollout_recovery_result(policy, targets, assessments)
+            if recovery["safe_to_resume"]:
+                continue
+
+            pause_reason = {
+                "code": "automatic_safety_pause",
+                **recovery,
+            }
+            actor = "system:rollout-monitor"
+            cursor.execute(
+                """
+                UPDATE sensor_configuration_rollouts
+                SET
+                    status = 'paused',
+                    paused_at = NOW(),
+                    paused_by = %(actor)s,
+                    pause_reason = %(pause_reason)s::jsonb,
+                    pause_policy_revision = %(policy_revision)s,
+                    updated_at = NOW()
+                WHERE id = %(rollout_id)s
+                  AND status = 'active'
+                """,
+                {
+                    "rollout_id": rollout_id,
+                    "actor": actor,
+                    "pause_reason": _json(pause_reason),
+                    "policy_revision": policy["revision"],
+                },
+            )
+            if cursor.rowcount != 1:
+                continue
+            _audit(
+                cursor,
+                event_type="sensor_configuration_rollout_paused",
+                actor=actor,
+                details={
+                    "rollout_id": rollout_id,
+                    "profile_id": rollout["profile_id"],
+                    "profile_version": rollout["profile_version"],
+                    "pause_reason": pause_reason,
+                },
+            )
+            paused_count += 1
+    return paused_count
+
+
+def resume_sensor_configuration_rollout(
+    *,
+    rollout_id: UUID,
+    payload: SensorConfigurationRolloutAction,
+    actor: str,
+) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        rollout = _get_locked_rollout(cursor, rollout_id)
+        if rollout is None:
+            return None
+        if rollout["status"] != "paused":
+            raise RolloutConflict("only a paused rollout can be resumed")
+
+        targets = _read_rollout_targets(cursor, rollout_id, "paused")
+        policy, assessments = _readiness_assessment(cursor, targets, lock=True)
+        targets = _read_rollout_targets(cursor, rollout_id, "paused")
+        recovery = _rollout_recovery_result(policy, targets, assessments)
+        if not recovery["safe_to_resume"]:
+            raise RolloutRecoveryConflict(
+                policy_revision=int(policy["revision"]),
+                blockers=recovery["blockers"],
+            )
+
+        previous_pause = rollout["pause_reason"]
+        cursor.execute(
+            """
+            UPDATE sensor_configuration_rollouts
+            SET
+                status = 'active',
+                paused_at = NULL,
+                paused_by = NULL,
+                pause_reason = NULL,
+                pause_policy_revision = NULL,
+                resume_count = resume_count + 1,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (rollout_id,),
+        )
+        _audit(
+            cursor,
+            event_type="sensor_configuration_rollout_resumed",
+            actor=actor,
+            details={
+                "rollout_id": rollout_id,
+                "profile_id": rollout["profile_id"],
+                "profile_version": rollout["profile_version"],
+                "previous_pause_reason": previous_pause,
+                "policy_revision": policy["revision"],
+                "change_note": payload.change_note,
+            },
+        )
+        return _read_rollout_details(cursor, rollout_id)
+
+
 def advance_sensor_configuration_rollout(
     *,
     rollout_id: UUID,
@@ -852,8 +1255,10 @@ def cancel_sensor_configuration_rollout(
         rollout = _get_locked_rollout(cursor, rollout_id)
         if rollout is None:
             return None
-        if rollout["status"] not in {"draft", "active"}:
-            raise RolloutConflict("only a draft or active rollout can be cancelled")
+        if rollout["status"] not in {"draft", "active", "paused"}:
+            raise RolloutConflict(
+                "only a draft, active, or paused rollout can be cancelled"
+            )
         cursor.execute(
             """
             SELECT
@@ -874,6 +1279,10 @@ def cancel_sensor_configuration_rollout(
                 status = 'cancelled',
                 cancelled_at = NOW(),
                 cancelled_by = %(actor)s,
+                paused_at = NULL,
+                paused_by = NULL,
+                pause_reason = NULL,
+                pause_policy_revision = NULL,
                 updated_at = NOW()
             WHERE id = %(rollout_id)s
             """,
@@ -890,6 +1299,7 @@ def cancel_sensor_configuration_rollout(
                 "deployed_count": 0 if counts is None else counts["deployed_count"],
                 "undeployed_count": 0 if counts is None else counts["undeployed_count"],
                 "deployed_targets_rolled_back": False,
+                "was_paused": rollout["status"] == "paused",
                 "change_note": payload.change_note,
             },
         )
@@ -921,12 +1331,44 @@ def rollback_sensor_configuration_rollout(
         rollout = _get_locked_rollout(cursor, rollout_id)
         if rollout is None:
             return None
-        if rollout["status"] not in {"completed", "cancelled"}:
+        if rollout["status"] not in {"paused", "completed", "cancelled"}:
             raise RolloutConflict(
-                "only a completed or cancelled rollout can be rolled back"
+                "only a paused, completed, or cancelled rollout can be rolled back"
             )
         if rollout["rolled_back_at"] is not None:
             raise RolloutConflict("configuration rollout was already rolled back")
+
+        if rollout["status"] == "paused":
+            cursor.execute(
+                """
+                UPDATE sensor_configuration_rollouts
+                SET
+                    status = 'cancelled',
+                    cancelled_at = NOW(),
+                    cancelled_by = %(actor)s,
+                    paused_at = NULL,
+                    paused_by = NULL,
+                    pause_reason = NULL,
+                    pause_policy_revision = NULL,
+                    updated_at = NOW()
+                WHERE id = %(rollout_id)s
+                """,
+                {"rollout_id": rollout_id, "actor": actor},
+            )
+            _audit(
+                cursor,
+                event_type="sensor_configuration_rollout_cancelled",
+                actor=actor,
+                details={
+                    "rollout_id": rollout_id,
+                    "profile_id": rollout["profile_id"],
+                    "profile_version": rollout["profile_version"],
+                    "deployed_targets_rolled_back": True,
+                    "was_paused": True,
+                    "reason": "rollback_from_paused",
+                    "change_note": payload.change_note,
+                },
+            )
 
         cursor.execute(
             """

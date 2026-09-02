@@ -180,11 +180,11 @@ class SensorConfigurationFleetUiTests(unittest.TestCase):
         self.assertIn("width: min(1120px", STYLES)
         self.assertIn("@media (max-width: 900px)", STYLES)
 
-    def test_release_version_is_0240(self) -> None:
+    def test_release_version_is_0250(self) -> None:
         package = json.loads((ROOT / "web/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["version"], "0.24.0")
+        self.assertEqual(package["version"], "0.25.0")
         api_main = (ROOT / "server/api/app/main.py").read_text(encoding="utf-8")
-        self.assertIn('version="0.24.0"', api_main)
+        self.assertIn('version="0.25.0"', api_main)
 
 
 if __name__ == "__main__":

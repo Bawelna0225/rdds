@@ -131,6 +131,7 @@ const sensorConfigurationComplianceLabels = {
 const configurationRolloutStatusLabels = {
   draft: "draft",
   active: "aktywny",
+  paused: "wstrzymany",
   completed: "zakończony",
   cancelled: "anulowany",
 };
@@ -146,6 +147,38 @@ const configurationRolloutTargetStatusLabels = {
   rolled_back: "przywrócony",
   rollback_error: "błąd rollbacku",
   rollback_superseded: "rollback nadpisany",
+};
+
+const fleetReadinessStatusLabels = {
+  ready: "gotowy",
+  attention: "wymaga uwagi",
+  blocked: "zablokowany",
+  excluded: "poza oceną",
+};
+
+const fleetReadinessReasonLabels = {
+  sensor_missing: "sensor nie jest już dostępny",
+  sensor_disabled: "sensor wyłączony administracyjnie",
+  sensor_maintenance: "sensor w trybie konserwacji",
+  sensor_offline: "sensor offline",
+  sensor_degraded: "ograniczony stan sensora",
+  sensor_not_online: "sensor nie jest online",
+  heartbeat_missing: "brak heartbeat agenta",
+  agent_version_unknown: "brak prawidłowej wersji agenta",
+  agent_version_below_minimum: "wersja agenta poniżej minimum",
+  agent_version_below_recommended: "wersja agenta poniżej zalecanej",
+  source_disconnected: "brak połączenia ze źródłem",
+  configuration_unmanaged: "konfiguracja niezarządzana",
+  configuration_unreported: "brak raportu konfiguracji",
+  configuration_pending: "konfiguracja oczekuje na zastosowanie",
+  configuration_error: "błąd zastosowania konfiguracji",
+};
+
+const rolloutRecoveryReasonLabels = {
+  configuration_superseded: "rewizja rolloutu została nadpisana",
+  configuration_error: "agent zgłosił błąd konfiguracji",
+  configuration_application_timeout: "przekroczono czas zastosowania konfiguracji",
+  sensor_not_ready: "sensor utracił gotowość operacyjną",
 };
 
 const SENSOR_CONFIGURATION_FIELDS = {
@@ -277,7 +310,10 @@ const auditEventLabels = {
   sensor_configuration_rollout_batch_deployed: "Wdrożono partię rollout'u",
   sensor_configuration_rollout_completed: "Zakończono rollout konfiguracji",
   sensor_configuration_rollout_cancelled: "Anulowano rollout konfiguracji",
+  sensor_configuration_rollout_paused: "Automatycznie wstrzymano rollout konfiguracji",
+  sensor_configuration_rollout_resumed: "Wznowiono rollout konfiguracji",
   sensor_configuration_rollout_rolled_back: "Przywrócono konfigurację sprzed rollout'u",
+  sensor_fleet_readiness_policy_changed: "Zmieniono politykę gotowości floty",
   operator_created: "Utworzono konto",
   operator_updated: "Zmieniono konto",
   operator_enabled: "Włączono konto",
@@ -367,6 +403,20 @@ const elements = {
   fleetConfigurationMessage: document.querySelector("#fleet-configuration-message"),
   fleetTabButtons: document.querySelectorAll("[data-fleet-tab]"),
   fleetTabPanels: document.querySelectorAll("[data-fleet-panel]"),
+  fleetReadinessGenerated: document.querySelector("#fleet-readiness-generated"),
+  fleetReadinessSummary: document.querySelector("#fleet-readiness-summary"),
+  fleetReadinessSensorList: document.querySelector("#fleet-readiness-sensor-list"),
+  fleetReadinessVersionList: document.querySelector("#fleet-readiness-version-list"),
+  fleetReadinessPolicyForm: document.querySelector("#fleet-readiness-policy-form"),
+  fleetPolicyMinimumVersion: document.querySelector("#fleet-policy-minimum-version"),
+  fleetPolicyRecommendedVersion: document.querySelector("#fleet-policy-recommended-version"),
+  fleetPolicyApplicationTimeout: document.querySelector("#fleet-policy-application-timeout"),
+  fleetPolicyRequireSource: document.querySelector("#fleet-policy-require-source"),
+  fleetPolicyRequireConfiguration: document.querySelector("#fleet-policy-require-configuration"),
+  fleetPolicyChangeNote: document.querySelector("#fleet-policy-change-note"),
+  fleetReadinessPolicySave: document.querySelector("#fleet-readiness-policy-save"),
+  fleetReadinessPolicyRevision: document.querySelector("#fleet-readiness-policy-revision"),
+  fleetReadinessPolicyMeta: document.querySelector("#fleet-readiness-policy-meta"),
   profileCreateToggle: document.querySelector("#configuration-profile-create-toggle"),
   profileCreateForm: document.querySelector("#configuration-profile-create-form"),
   profileCreateCancel: document.querySelector("#configuration-profile-create-cancel"),
@@ -403,11 +453,13 @@ const elements = {
   rolloutDetailTitle: document.querySelector("#configuration-rollout-detail-title"),
   rolloutDetailStatus: document.querySelector("#configuration-rollout-detail-status"),
   rolloutSummary: document.querySelector("#configuration-rollout-summary"),
+  rolloutReadinessGate: document.querySelector("#configuration-rollout-readiness-gate"),
   rolloutTargets: document.querySelector("#configuration-rollout-targets"),
   rolloutActions: document.querySelector("#configuration-rollout-actions"),
   rolloutActionNote: document.querySelector("#configuration-rollout-action-note"),
   rolloutStart: document.querySelector("#configuration-rollout-start"),
   rolloutAdvance: document.querySelector("#configuration-rollout-advance"),
+  rolloutResume: document.querySelector("#configuration-rollout-resume"),
   rolloutCancel: document.querySelector("#configuration-rollout-cancel"),
   rolloutRollback: document.querySelector("#configuration-rollout-rollback"),
   storagePanel: document.querySelector("#storage-panel"),
@@ -710,6 +762,7 @@ let sensorConfigurationRequestSequence = 0;
 let fleetProfiles = [];
 let fleetProfileVersions = [];
 let fleetRollouts = [];
+let fleetReadiness = null;
 let fleetSelectedProfileId = null;
 let fleetSelectedRolloutId = null;
 let fleetSelectedRollout = null;
@@ -1330,9 +1383,10 @@ function setConnection(online, message) {
 }
 
 class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, detail = null) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -1357,13 +1411,19 @@ async function requestJson(
   });
   if (!response.ok) {
     let detail = response.statusText;
+    let responseDetail = null;
     try {
       const payload = await response.json();
-      detail = payload.detail ?? detail;
+      responseDetail = payload.detail ?? null;
+      if (responseDetail && typeof responseDetail === "object") {
+        detail = responseDetail.message ?? responseDetail.code ?? detail;
+      } else {
+        detail = responseDetail ?? detail;
+      }
     } catch {
       // The status code remains sufficient when the response is not JSON.
     }
-    throw new ApiError(`${response.status}: ${detail}`, response.status);
+    throw new ApiError(`${response.status}: ${detail}`, response.status, responseDetail);
   }
   return response.json();
 }
@@ -6082,7 +6142,7 @@ function setFleetConfigurationMessage(message, error = false) {
 }
 
 function setFleetTab(tab) {
-  if (!['profiles', 'rollouts'].includes(tab)) return;
+  if (!["profiles", "rollouts", "readiness"].includes(tab)) return;
   fleetActiveTab = tab;
   for (const button of elements.fleetTabButtons) {
     const active = button.dataset.fleetTab === tab;
@@ -6092,6 +6152,187 @@ function setFleetTab(tab) {
   }
   for (const panel of elements.fleetTabPanels) {
     panel.classList.toggle("hidden", panel.dataset.fleetPanel !== tab);
+  }
+}
+
+function renderFleetReadiness() {
+  const payload = fleetReadiness;
+  elements.fleetReadinessSummary.replaceChildren();
+  elements.fleetReadinessSensorList.replaceChildren();
+  elements.fleetReadinessVersionList.replaceChildren();
+  if (!payload) {
+    elements.fleetReadinessGenerated.textContent = "—";
+    elements.fleetReadinessSensorList.classList.add("empty-state");
+    elements.fleetReadinessSensorList.textContent = "Brak danych o gotowości floty.";
+    elements.fleetReadinessVersionList.classList.add("empty-state");
+    elements.fleetReadinessVersionList.textContent = "Brak danych o wersjach.";
+    return;
+  }
+
+  const summary = payload.summary ?? {};
+  appendFleetMetric(elements.fleetReadinessSummary, "Gotowe", summary.ready_count ?? 0);
+  appendFleetMetric(
+    elements.fleetReadinessSummary,
+    "Wymagają uwagi",
+    summary.attention_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.fleetReadinessSummary,
+    "Zablokowane",
+    summary.blocked_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.fleetReadinessSummary,
+    "Poza oceną",
+    summary.excluded_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.fleetReadinessSummary,
+    "Kwalifikują się",
+    summary.rollout_eligible_count ?? 0,
+  );
+  elements.fleetReadinessGenerated.textContent =
+    `Ocena: ${formatDateTime(payload.generated_at)}`;
+
+  const policy = payload.policy ?? {};
+  elements.fleetPolicyMinimumVersion.value = policy.minimum_agent_version ?? "";
+  elements.fleetPolicyRecommendedVersion.value = policy.recommended_agent_version ?? "";
+  elements.fleetPolicyApplicationTimeout.value =
+    policy.rollout_application_timeout_seconds ?? 120;
+  elements.fleetPolicyRequireSource.checked = Boolean(policy.require_source_connected);
+  elements.fleetPolicyRequireConfiguration.checked = Boolean(
+    policy.require_configuration_compliance,
+  );
+  elements.fleetPolicyChangeNote.value = "";
+  elements.fleetReadinessPolicyRevision.textContent = `rewizja ${policy.revision ?? "—"}`;
+  elements.fleetReadinessPolicyMeta.textContent =
+    `Zmiana: ${formatDateTime(policy.updated_at)} · ${policy.updated_by ?? "—"}`;
+
+  const versions = Array.isArray(payload.version_distribution)
+    ? payload.version_distribution
+    : [];
+  elements.fleetReadinessVersionList.classList.toggle("empty-state", versions.length === 0);
+  if (versions.length === 0) {
+    elements.fleetReadinessVersionList.textContent = "Brak ocenianych agentów.";
+  } else {
+    for (const version of versions) {
+      const row = document.createElement("div");
+      row.className = "fleet-version-row";
+      row.append(
+        fleetText("strong", "", version.agent_version),
+        fleetText("span", "fleet-status", version.sensor_count),
+      );
+      elements.fleetReadinessVersionList.append(row);
+    }
+  }
+
+  const sensors = Array.isArray(payload.sensors) ? payload.sensors : [];
+  const order = { blocked: 0, attention: 1, ready: 2, excluded: 3 };
+  sensors.sort((left, right) => {
+    const stateDifference = (order[left.readiness_status] ?? 9)
+      - (order[right.readiness_status] ?? 9);
+    if (stateDifference !== 0) return stateDifference;
+    return String(left.sensor_key).localeCompare(String(right.sensor_key), "pl");
+  });
+  elements.fleetReadinessSensorList.classList.toggle("empty-state", sensors.length === 0);
+  if (sensors.length === 0) {
+    elements.fleetReadinessSensorList.textContent = "Brak sensorów.";
+    return;
+  }
+  for (const sensor of sensors) {
+    const row = document.createElement("article");
+    row.className = `fleet-readiness-row readiness-${sensor.readiness_status}`;
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", sensor.display_name || sensor.sensor_key),
+      fleetText(
+        "span",
+        `fleet-status readiness-${sensor.readiness_status}`,
+        fleetReadinessStatusLabels[sensor.readiness_status] ?? sensor.readiness_status,
+      ),
+    );
+    const metadata = fleetText(
+      "span",
+      "fleet-card-meta",
+      `${sensor.sensor_key} · agent ${sensor.agent_version || "brak wersji"} · `
+        + `konfiguracja ${sensorConfigurationComplianceLabels[
+          sensor.configuration_compliance
+        ] ?? sensor.configuration_compliance}`,
+    );
+    const reasons = Array.isArray(sensor.reasons) ? sensor.reasons : [];
+    const reasonText = reasons.length === 0
+      ? "Brak powodów ograniczających gotowość."
+      : reasons.map(
+        (item) => fleetReadinessReasonLabels[item.code] ?? item.code,
+      ).join(" · ");
+    row.append(heading, metadata, fleetText("p", "fleet-card-note", reasonText));
+    elements.fleetReadinessSensorList.append(row);
+  }
+}
+
+function parseFleetAgentVersion(value) {
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(value)) return null;
+  return value.split(".").map((part) => Number(part));
+}
+
+function compareFleetAgentVersions(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+async function updateFleetReadinessPolicy(event) {
+  event.preventDefault();
+  if (!canAdminister() || !fleetReadiness?.policy) return;
+  const minimum = elements.fleetPolicyMinimumVersion.value.trim();
+  const recommended = elements.fleetPolicyRecommendedVersion.value.trim();
+  const minimumParts = parseFleetAgentVersion(minimum);
+  const recommendedParts = parseFleetAgentVersion(recommended);
+  const applicationTimeout = Number(elements.fleetPolicyApplicationTimeout.value);
+  if (!minimumParts || !recommendedParts) {
+    showToast("Wersje muszą mieć format liczbowy x.y.z.", true);
+    return;
+  }
+  if (compareFleetAgentVersions(recommendedParts, minimumParts) < 0) {
+    showToast("Wersja zalecana nie może być starsza od minimalnej.", true);
+    return;
+  }
+  if (
+    !Number.isSafeInteger(applicationTimeout)
+    || applicationTimeout < 30
+    || applicationTimeout > 3600
+  ) {
+    showToast("Timeout zastosowania musi wynosić od 30 do 3600 sekund.", true);
+    return;
+  }
+  const changeNote = elements.fleetPolicyChangeNote.value.trim();
+  if (changeNote.length < 3) {
+    showToast("Podaj powód zmiany polityki.", true);
+    elements.fleetPolicyChangeNote.focus();
+    return;
+  }
+  if (!window.confirm("Zapisać nową rewizję polityki gotowości floty?")) return;
+
+  elements.fleetReadinessPolicySave.disabled = true;
+  try {
+    await adminRequest("/api/v1/sensor-fleet/readiness-policy", "PUT", {
+      expected_revision: fleetReadiness.policy.revision,
+      minimum_agent_version: minimum,
+      recommended_agent_version: recommended,
+      require_source_connected: elements.fleetPolicyRequireSource.checked,
+      require_configuration_compliance:
+        elements.fleetPolicyRequireConfiguration.checked,
+      rollout_application_timeout_seconds: applicationTimeout,
+      change_note: changeNote,
+    });
+    showToast("Zapisano politykę gotowości floty.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Nie udało się zapisać polityki: ${error.message}`, true);
+  } finally {
+    elements.fleetReadinessPolicySave.disabled = false;
   }
 }
 
@@ -6291,8 +6532,11 @@ function renderRolloutSensorTargets() {
     return;
   }
   for (const sensor of sensors) {
+    const readiness = fleetReadiness?.sensors?.find(
+      (item) => String(item.id) === String(sensor.id),
+    );
     const label = document.createElement("label");
-    label.className = "fleet-sensor-target";
+    label.className = `fleet-sensor-target readiness-${readiness?.readiness_status ?? "unknown"}`;
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = sensor.id;
@@ -6300,7 +6544,12 @@ function renderRolloutSensorTargets() {
     const text = document.createElement("span");
     text.append(
       fleetText("strong", "", sensor.display_name || sensor.sensor_id),
-      fleetText("small", "", `${sensor.sensor_id} · ${stateLabel(sensor.status)}`),
+      fleetText(
+        "small",
+        "",
+        `${sensor.sensor_id} · ${stateLabel(sensor.status)} · gotowość: `
+          + `${fleetReadinessStatusLabels[readiness?.readiness_status] ?? "brak oceny"}`,
+      ),
     );
     label.append(input, text);
     elements.rolloutCreateSensors.append(label);
@@ -6348,6 +6597,67 @@ function renderSelectedFleetRollout() {
   );
   appendFleetMetric(elements.rolloutSummary, "Partia", rollout.batch_size);
 
+  const readinessGate = rollout.next_batch_readiness ?? null;
+  const recovery = rollout.recovery ?? null;
+  const nextBatchTargets = Array.isArray(readinessGate?.targets)
+    ? readinessGate.targets
+    : [];
+  const readinessBlocked = nextBatchTargets.length > 0 && !readinessGate.eligible;
+  elements.rolloutReadinessGate.classList.toggle(
+    "hidden",
+    !["draft", "active", "paused"].includes(rollout.status),
+  );
+  elements.rolloutReadinessGate.classList.toggle(
+    "blocked",
+    readinessBlocked || rollout.status === "paused",
+  );
+  if (rollout.status === "paused") {
+    const blockers = Array.isArray(recovery?.blockers) ? recovery.blockers : [];
+    const describeBlockers = (items) => items.map((item) => {
+      const label = rolloutRecoveryReasonLabels[item.code] ?? item.code;
+      const reasons = Array.isArray(item.reasons)
+        ? item.reasons.map(
+          (reason) => fleetReadinessReasonLabels[reason.code] ?? reason.code,
+        ).join(", ")
+        : "";
+      return `${item.sensor_key}: ${label}${reasons ? ` (${reasons})` : ""}`;
+    });
+    const blockerText = describeBlockers(blockers);
+    const originalBlockers = Array.isArray(rollout.pause_reason?.blockers)
+      ? describeBlockers(rollout.pause_reason.blockers)
+      : [];
+    if (recovery?.safe_to_resume) {
+      elements.rolloutReadinessGate.textContent =
+        `Rollout został automatycznie wstrzymany ${formatDateTime(rollout.paused_at)}. `
+        + `${originalBlockers.length > 0 ? `Powód: ${originalBlockers.join(" · ")}. ` : ""}`
+        + "Przyczyna ustąpiła; administrator może go jawnie wznowić.";
+    } else {
+      elements.rolloutReadinessGate.textContent =
+        `Automatyczna pauza ${formatDateTime(rollout.paused_at)} · polityka rewizja `
+        + `${rollout.pause_policy_revision ?? recovery?.policy_revision ?? "—"}: `
+        + `${blockerText.join(" · ") || "oczekiwanie na ponowną ocenę"}.`;
+    }
+  } else if (["draft", "active"].includes(rollout.status)) {
+    if (nextBatchTargets.length === 0) {
+      elements.rolloutReadinessGate.textContent =
+        "Wszystkie partie zostały wdrożone. Zakończenie wymaga zgodności wdrożonych sensorów.";
+    } else if (readinessGate.eligible) {
+      elements.rolloutReadinessGate.textContent =
+        `Następna partia (${nextBatchTargets.length}) spełnia politykę gotowości `
+        + `rewizja ${readinessGate.policy_revision}.`;
+    } else {
+      const blockers = readinessGate.blockers.map((item) => {
+        const reasons = item.reasons.map(
+          (reason) => fleetReadinessReasonLabels[reason.code] ?? reason.code,
+        ).join(", ");
+        return `${item.sensor_key}: ${reasons}`;
+      });
+      elements.rolloutReadinessGate.textContent =
+        `Następna partia jest zablokowana przez politykę rewizja `
+        + `${readinessGate.policy_revision}: ${blockers.join(" · ")}.`;
+    }
+  }
+
   elements.rolloutTargets.replaceChildren();
   const targets = Array.isArray(rollout.targets) ? rollout.targets : [];
   for (const target of targets) {
@@ -6366,22 +6676,42 @@ function renderSelectedFleetRollout() {
     const revision = target.desired_revision === null
       ? "rewizja jeszcze nieprzydzielona"
       : `rewizja ${target.desired_revision}`;
-    row.append(heading, fleetText("span", "fleet-card-meta", `${target.sensor_key} · ${revision}`));
+    const readiness = fleetReadinessStatusLabels[target.readiness_status]
+      ?? target.readiness_status
+      ?? "brak oceny";
+    row.append(
+      heading,
+      fleetText(
+        "span",
+        "fleet-card-meta",
+        `${target.sensor_key} · ${revision} · gotowość: ${readiness}`,
+      ),
+    );
     elements.rolloutTargets.append(row);
   }
 
-  const actionable = rollout.status === "draft" || rollout.status === "active"
+  const actionable = ["draft", "active", "paused"].includes(rollout.status)
     || rollout.can_rollback;
   elements.rolloutActions.classList.toggle("hidden", !actionable);
   elements.rolloutStart.classList.toggle("hidden", rollout.status !== "draft");
   elements.rolloutAdvance.classList.toggle("hidden", rollout.status !== "active");
+  elements.rolloutResume.classList.toggle("hidden", rollout.status !== "paused");
   elements.rolloutCancel.classList.toggle("hidden", !rollout.can_cancel);
   elements.rolloutRollback.classList.toggle("hidden", !rollout.can_rollback);
   elements.rolloutStart.disabled = !rollout.can_start;
   elements.rolloutAdvance.disabled = !rollout.can_advance;
-  elements.rolloutAdvance.title = rollout.can_advance
-    ? "Wdróż następną partię albo zakończ rollout"
-    : "Poprzednia partia musi być w pełni zgodna";
+  elements.rolloutResume.disabled = !rollout.can_resume;
+  elements.rolloutStart.title = readinessBlocked
+    ? "Następna partia nie spełnia polityki gotowości"
+    : "Wdróż pierwszą partię";
+  elements.rolloutAdvance.title = readinessBlocked
+    ? "Następna partia nie spełnia polityki gotowości"
+    : rollout.can_advance
+      ? "Wdróż następną partię albo zakończ rollout"
+      : "Poprzednia partia musi być w pełni zgodna";
+  elements.rolloutResume.title = rollout.can_resume
+    ? "Wznów rollout bez automatycznego wdrażania kolejnej partii"
+    : "Najpierw usuń przyczynę automatycznej pauzy";
   elements.rolloutRollback.disabled = !rollout.can_rollback;
 }
 
@@ -6451,11 +6781,12 @@ async function selectFleetRollout(rolloutId) {
 
 async function loadFleetConfigurationConsole() {
   const sequence = ++fleetLoadSequence;
-  setFleetConfigurationMessage("Pobieranie profili i rolloutów…");
+  setFleetConfigurationMessage("Pobieranie gotowości, profili i rolloutów…");
   elements.fleetConfigurationRefresh.disabled = true;
   try {
     const includeTerminal = elements.rolloutShowTerminal.checked ? "true" : "false";
-    const [profilesPayload, rolloutsPayload] = await Promise.all([
+    const [readinessPayload, profilesPayload, rolloutsPayload] = await Promise.all([
+      fetchJson("/api/v1/sensor-fleet/readiness"),
       fetchJson("/api/v1/sensor-configuration-profiles?include_disabled=true&limit=500&offset=0"),
       fetchJson(
         "/api/v1/sensor-configuration-rollouts"
@@ -6463,6 +6794,7 @@ async function loadFleetConfigurationConsole() {
       ),
     ]);
     if (sequence !== fleetLoadSequence) return;
+    fleetReadiness = readinessPayload;
     fleetProfiles = Array.isArray(profilesPayload.profiles) ? profilesPayload.profiles : [];
     fleetRollouts = Array.isArray(rolloutsPayload.rollouts) ? rolloutsPayload.rollouts : [];
 
@@ -6474,6 +6806,7 @@ async function loadFleetConfigurationConsole() {
       fleetSelectedRolloutId = fleetRollouts[0]?.id ?? null;
       fleetSelectedRollout = null;
     }
+    renderFleetReadiness();
     renderFleetProfiles();
     renderRolloutSensorTargets();
     renderFleetRollouts();
@@ -6484,7 +6817,10 @@ async function loadFleetConfigurationConsole() {
     await Promise.all(details);
     if (sequence !== fleetLoadSequence) return;
     setFleetConfigurationMessage(
-      `Profile: ${fleetProfiles.length} · rollouty: ${fleetRollouts.length}. `
+      `Gotowe: ${fleetReadiness.summary?.ready_count ?? 0} · `
+        + `zablokowane: ${fleetReadiness.summary?.blocked_count ?? 0} · `
+        + `poza oceną: ${fleetReadiness.summary?.excluded_count ?? 0} · `
+        + `profile: ${fleetProfiles.length} · rollouty: ${fleetRollouts.length}. `
         + "Utworzenie rollout'u zapisuje tylko draft.",
     );
   } catch (error) {
@@ -6699,6 +7035,7 @@ async function runFleetRolloutAction(action) {
   const prompts = {
     start: "Uruchomić pierwszą partię? Wybrane sensory otrzymają nową rewizję konfiguracji.",
     advance: "Wdrożyć następną partię lub zakończyć rollout, jeśli wszystkie sensory są już wdrożone?",
+    resume: "Wznowić rollout? Kolejna partia nie zostanie wdrożona automatycznie.",
     cancel: "Anulować rollout? Już wdrożone konfiguracje nie zostaną automatycznie cofnięte.",
     rollback: "Przywrócić migawki konfiguracji sprzed rollout'u? Każdy sensor otrzyma nową rewizję i musi ponownie potwierdzić jej zastosowanie.",
   };
@@ -6706,6 +7043,7 @@ async function runFleetRolloutAction(action) {
   const button = {
     start: elements.rolloutStart,
     advance: elements.rolloutAdvance,
+    resume: elements.rolloutResume,
     cancel: elements.rolloutCancel,
     rollback: elements.rolloutRollback,
   }[action];
@@ -6727,15 +7065,41 @@ async function runFleetRolloutAction(action) {
         ? "Uruchomiono pierwszą partię rollout'u."
         : action === "advance"
           ? "Zaktualizowano stan rollout'u."
+          : action === "resume"
+            ? "Wznowiono rollout. Kolejna partia nadal wymaga decyzji operatora."
           : action === "cancel"
             ? "Anulowano rollout bez automatycznego cofania wdrożeń."
             : "Wysłano bezpieczny rollback. Oczekiwanie na raporty agentów.",
     );
     await Promise.all([loadFleetConfigurationConsole(), refresh()]);
   } catch (error) {
-    showToast(`Operacja rollout'u nie powiodła się: ${error.message}`, true);
+    if (
+      error.detail?.code === "rollout_readiness_blocked"
+      || error.detail?.code === "rollout_resume_blocked"
+    ) {
+      const blockers = Array.isArray(error.detail.blockers)
+        ? error.detail.blockers.map((item) => item.sensor_key).join(", ")
+        : "nieznany sensor";
+      await loadFleetConfigurationConsole();
+      const operation = error.detail.code === "rollout_resume_blocked"
+        ? "Wznowienie"
+        : "Wdrożenie";
+      setFleetConfigurationMessage(
+        `${operation} zatrzymane przez politykę gotowości rewizja `
+          + `${error.detail.policy_revision}: ${blockers}.`,
+        true,
+      );
+      showToast(
+        error.detail.code === "rollout_resume_blocked"
+          ? `Wznowienie zablokowane: ${blockers}.`
+          : `Partia zablokowana przez gotowość: ${blockers}.`,
+        true,
+      );
+    } else {
+      showToast(`Operacja rollout'u nie powiodła się: ${error.message}`, true);
+    }
   } finally {
-    button.disabled = false;
+    renderSelectedFleetRollout();
   }
 }
 
@@ -7528,6 +7892,10 @@ elements.fleetConfigurationRefresh.addEventListener("click", () => {
 for (const button of elements.fleetTabButtons) {
   button.addEventListener("click", () => setFleetTab(button.dataset.fleetTab));
 }
+elements.fleetReadinessPolicyForm.addEventListener(
+  "submit",
+  updateFleetReadinessPolicy,
+);
 elements.profileCreateToggle.addEventListener("click", () => {
   setProfileCreateFormOpen(elements.profileCreateForm.classList.contains("hidden"));
 });
@@ -7551,6 +7919,7 @@ elements.rolloutShowTerminal.addEventListener("change", () => {
 });
 elements.rolloutStart.addEventListener("click", () => void runFleetRolloutAction("start"));
 elements.rolloutAdvance.addEventListener("click", () => void runFleetRolloutAction("advance"));
+elements.rolloutResume.addEventListener("click", () => void runFleetRolloutAction("resume"));
 elements.rolloutCancel.addEventListener("click", () => void runFleetRolloutAction("cancel"));
 elements.rolloutRollback.addEventListener("click", () => void runFleetRolloutAction("rollback"));
 elements.drawZone.addEventListener("click", startZoneDrawing);

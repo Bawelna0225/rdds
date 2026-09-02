@@ -923,7 +923,7 @@
             <div class="fleet-configuration-header">
               <div>
                 <p class="eyebrow">Administracja flotą</p>
-                <h2 id="fleet-configuration-title">Profile i rollouty konfiguracji</h2>
+                <h2 id="fleet-configuration-title">Gotowość, profile i rollouty konfiguracji</h2>
               </div>
               <div class="fleet-header-actions">
                 <button id="fleet-configuration-refresh" type="button" class="secondary-button">
@@ -936,7 +936,7 @@
             </div>
 
             <p id="fleet-configuration-message" class="panel-help" aria-live="polite">
-              Wybierz profile lub rollouty.
+              Wybierz gotowość, profile lub rollouty.
             </p>
 
             <div class="fleet-tabs" role="tablist" aria-label="Konfiguracja floty">
@@ -963,7 +963,88 @@
               >
                 Rollouty
               </button>
+              <button
+                id="fleet-tab-readiness"
+                type="button"
+                class="fleet-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="fleet-panel-readiness"
+                data-fleet-tab="readiness"
+                tabindex="-1"
+              >
+                Gotowość
+              </button>
             </div>
+
+            <section id="fleet-panel-readiness" class="fleet-panel hidden" data-fleet-panel="readiness">
+              <div class="fleet-toolbar">
+                <div>
+                  <strong>Gotowość operacyjna floty</strong>
+                  <span>Polityka gotowości jest egzekwowana przed każdą partią rolloutu.</span>
+                </div>
+                <span id="fleet-readiness-generated" class="fleet-card-meta">—</span>
+              </div>
+
+              <div id="fleet-readiness-summary" class="fleet-summary fleet-readiness-summary"></div>
+
+              <div class="fleet-readiness-columns">
+                <section class="fleet-detail">
+                  <h3>Sensory</h3>
+                  <div id="fleet-readiness-sensor-list" class="fleet-readiness-list empty-state">
+                    Wczytywanie gotowości…
+                  </div>
+                </section>
+
+                <div class="fleet-readiness-side">
+                  <section class="fleet-detail">
+                    <h3>Wersje aktywnych agentów</h3>
+                    <div id="fleet-readiness-version-list" class="fleet-version-distribution empty-state">
+                      Brak danych o wersjach.
+                    </div>
+                  </section>
+
+                  <form id="fleet-readiness-policy-form" class="fleet-form compact">
+                    <div class="fleet-detail-heading">
+                      <h3>Polityka oceny</h3>
+                      <span id="fleet-readiness-policy-revision" class="fleet-status">—</span>
+                    </div>
+                    <div class="fleet-form-grid">
+                      <label>
+                        Minimalna wersja agenta
+                        <input id="fleet-policy-minimum-version" type="text"
+                          pattern="[0-9]+\.[0-9]+\.[0-9]+" maxlength="32" required />
+                      </label>
+                      <label>
+                        Zalecana wersja agenta
+                        <input id="fleet-policy-recommended-version" type="text"
+                          pattern="[0-9]+\.[0-9]+\.[0-9]+" maxlength="32" required />
+                      </label>
+                      <label>
+                        Timeout zastosowania konfiguracji (s)
+                        <input id="fleet-policy-application-timeout" type="number"
+                          min="30" max="3600" step="1" required />
+                      </label>
+                    </div>
+                    <label class="toggle-row">
+                      <input id="fleet-policy-require-source" type="checkbox" />
+                      <span>Wymagaj połączenia ze źródłem</span>
+                    </label>
+                    <label class="toggle-row">
+                      <input id="fleet-policy-require-configuration" type="checkbox" />
+                      <span>Wymagaj zgodnej konfiguracji</span>
+                    </label>
+                    <label>
+                      Powód zmiany polityki
+                      <input id="fleet-policy-change-note" type="text"
+                        minlength="3" maxlength="500" required />
+                    </label>
+                    <button id="fleet-readiness-policy-save" type="submit">Zapisz politykę</button>
+                    <span id="fleet-readiness-policy-meta" class="fleet-card-meta">—</span>
+                  </form>
+                </div>
+              </div>
+            </section>
 
             <section id="fleet-panel-profiles" class="fleet-panel" data-fleet-panel="profiles">
               <div class="fleet-toolbar">
@@ -1123,6 +1204,8 @@
                       <span id="configuration-rollout-detail-status" class="fleet-status">—</span>
                     </div>
                     <div id="configuration-rollout-summary" class="fleet-summary"></div>
+                    <p id="configuration-rollout-readiness-gate"
+                      class="fleet-rollout-readiness-gate hidden"></p>
                     <div id="configuration-rollout-targets" class="fleet-target-list"></div>
                     <div id="configuration-rollout-actions" class="fleet-rollout-actions hidden">
                       <label>
@@ -1132,6 +1215,7 @@
                       <div class="panel-actions">
                         <button id="configuration-rollout-start" type="button">Start pierwszej partii</button>
                         <button id="configuration-rollout-advance" type="button">Wdróż następną / zakończ</button>
+                        <button id="configuration-rollout-resume" type="button">Wznów rollout</button>
                         <button id="configuration-rollout-cancel" type="button" class="danger-button">Anuluj rollout</button>
                         <button id="configuration-rollout-rollback" type="button" class="danger-button">Przywróć poprzednią konfigurację</button>
                       </div>

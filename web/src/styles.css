@@ -4015,6 +4015,7 @@ html[data-theme="light"] .sensor-alert-group {
 }
 
 .fleet-status.rollout-active,
+.fleet-status.rollout-paused,
 .target-awaiting_application .fleet-status,
 .target-rollback_pending .fleet-status {
   color: var(--amber);
@@ -4156,6 +4157,99 @@ html[data-theme="light"] .sensor-alert-group {
   border-top: 1px solid var(--border);
 }
 
+.fleet-rollout-readiness-gate {
+  margin: 8px 0 0;
+  padding: 9px;
+  color: var(--green);
+  border: 1px solid rgba(53, 230, 154, 0.32);
+  background: rgba(53, 230, 154, 0.06);
+  font-size: 10px;
+}
+
+.fleet-rollout-readiness-gate.blocked {
+  color: var(--red);
+  border-color: rgba(255, 77, 94, 0.38);
+  background: rgba(255, 77, 94, 0.07);
+}
+
+/* RDDS Stage 25A: fleet readiness inventory and policy. */
+.fleet-readiness-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+}
+
+.fleet-readiness-columns {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.45fr) minmax(300px, 0.8fr);
+  gap: 12px;
+}
+
+.fleet-readiness-side,
+.fleet-readiness-list,
+.fleet-version-distribution {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.fleet-readiness-row,
+.fleet-version-row {
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: rgba(18, 25, 34, 0.62);
+}
+
+.fleet-readiness-row.readiness-ready {
+  border-left: 3px solid var(--green);
+}
+
+.fleet-readiness-row.readiness-attention {
+  border-left: 3px solid var(--amber);
+}
+
+.fleet-readiness-row.readiness-blocked {
+  border-left: 3px solid var(--red);
+}
+
+.fleet-readiness-row.readiness-excluded {
+  border-left: 3px solid var(--muted);
+  opacity: 0.78;
+}
+
+.fleet-status.readiness-ready {
+  color: var(--green);
+  border-color: rgba(67, 225, 164, 0.42);
+}
+
+.fleet-status.readiness-attention {
+  color: var(--amber);
+  border-color: rgba(255, 184, 77, 0.42);
+}
+
+.fleet-status.readiness-blocked {
+  color: var(--red);
+  border-color: rgba(255, 86, 112, 0.42);
+}
+
+.fleet-status.readiness-excluded {
+  color: var(--muted);
+}
+
+.fleet-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fleet-sensor-target.readiness-blocked {
+  border-color: rgba(255, 86, 112, 0.32);
+}
+
+.fleet-sensor-target.readiness-attention {
+  border-color: rgba(255, 184, 77, 0.32);
+}
+
 .fleet-configuration-message.error {
   color: var(--red);
 }
@@ -4166,12 +4260,15 @@ html[data-theme="light"] .fleet-configuration-header {
 
 html[data-theme="light"] .fleet-card,
 html[data-theme="light"] .fleet-version-card,
-html[data-theme="light"] .fleet-target {
+html[data-theme="light"] .fleet-target,
+html[data-theme="light"] .fleet-readiness-row,
+html[data-theme="light"] .fleet-version-row {
   background: rgba(255, 255, 255, 0.86);
 }
 
 @media (max-width: 900px) {
-  .fleet-columns {
+  .fleet-columns,
+  .fleet-readiness-columns {
     grid-template-columns: 1fr;
   }
 
@@ -4197,6 +4294,7 @@ html[data-theme="light"] .fleet-target {
   .fleet-form-grid,
   .fleet-configuration-fields,
   .fleet-summary,
+  .fleet-readiness-summary,
   .fleet-sensor-targets {
     grid-template-columns: 1fr;
   }

@@ -182,6 +182,51 @@ class SensorConfigurationRolloutAction(StrictModel):
         return stripped
 
 
+class SensorFleetReadinessPolicyUpdate(StrictModel):
+    expected_revision: int = Field(ge=1)
+    minimum_agent_version: str = Field(
+        min_length=5,
+        max_length=32,
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$",
+    )
+    recommended_agent_version: str = Field(
+        min_length=5,
+        max_length=32,
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$",
+    )
+    require_source_connected: bool = True
+    require_configuration_compliance: bool = True
+    rollout_application_timeout_seconds: int | None = Field(
+        default=None,
+        ge=30,
+        le=3600,
+    )
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+    @model_validator(mode="after")
+    def recommended_version_cannot_be_older(
+        self,
+    ) -> "SensorFleetReadinessPolicyUpdate":
+        minimum = tuple(int(part) for part in self.minimum_agent_version.split("."))
+        recommended = tuple(
+            int(part) for part in self.recommended_agent_version.split(".")
+        )
+        if recommended < minimum:
+            raise ValueError(
+                "recommended_agent_version cannot be older than "
+                "minimum_agent_version"
+            )
+        return self
+
+
 class SensorConfigurationReport(StrictModel):
     desired_revision: int = Field(ge=0)
     applied_revision: int | None = Field(default=None, ge=0)
