@@ -655,6 +655,12 @@ def get_sensor_configuration(sensor_id: UUID) -> dict[str, Any] | None:
                 configuration.apply_status,
                 configuration.apply_error,
                 configuration.reported_at,
+                assignment.profile_id AS assigned_profile_id,
+                assigned_profile.profile_key AS assigned_profile_key,
+                assignment.profile_version AS assigned_profile_version,
+                assignment.rollout_id AS assigned_rollout_id,
+                assignment.assigned_at,
+                assignment.assigned_by,
                 CASE
                     WHEN configuration.sensor_id IS NULL
                       OR configuration.desired_revision = 0 THEN 'unmanaged'
@@ -668,6 +674,10 @@ def get_sensor_configuration(sensor_id: UUID) -> dict[str, Any] | None:
             FROM sensors AS sensor
             LEFT JOIN sensor_configuration_state AS configuration
                 ON configuration.sensor_id = sensor.id
+            LEFT JOIN sensor_configuration_profile_assignments AS assignment
+                ON assignment.sensor_id = sensor.id
+            LEFT JOIN sensor_configuration_profiles AS assigned_profile
+                ON assigned_profile.id = assignment.profile_id
             WHERE sensor.id = %s
               AND sensor.deleted_at IS NULL
             """,
@@ -727,6 +737,49 @@ def update_sensor_configuration(
         )
         if cursor.fetchone() is None:
             return None
+
+        cursor.execute(
+            """
+            DELETE FROM sensor_configuration_profile_assignments
+            WHERE sensor_id = %s
+            RETURNING profile_id, profile_version, rollout_id, desired_revision
+            """,
+            (sensor_id,),
+        )
+        removed_assignment = cursor.fetchone()
+        if removed_assignment is not None:
+            cursor.execute(
+                """
+                INSERT INTO audit_events (
+                    occurred_at,
+                    event_type,
+                    actor,
+                    sensor_id,
+                    details
+                )
+                VALUES (
+                    NOW(),
+                    'sensor_configuration_profile_unassigned',
+                    %(actor)s,
+                    %(sensor_id)s,
+                    jsonb_build_object(
+                        'profile_id', %(profile_id)s::uuid,
+                        'profile_version', %(profile_version)s::bigint,
+                        'rollout_id', %(rollout_id)s::uuid,
+                        'desired_revision', %(desired_revision)s::bigint,
+                        'reason', 'manual_configuration_update'
+                    )
+                )
+                """,
+                {
+                    "actor": actor,
+                    "sensor_id": sensor_id,
+                    "profile_id": removed_assignment["profile_id"],
+                    "profile_version": removed_assignment["profile_version"],
+                    "rollout_id": removed_assignment["rollout_id"],
+                    "desired_revision": removed_assignment["desired_revision"],
+                },
+            )
 
         cursor.execute(
             """

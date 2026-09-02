@@ -141,6 +141,7 @@
                   <button id="register-sensor" type="button">Dodaj sensor</button>
                   <button id="manage-operators" type="button">Konta RDDS</button>
                   <button id="manage-security" type="button">Bezpieczeństwo kont</button>
+                  <button id="fleet-configuration-open" type="button">Konfiguracja floty</button>
                 </div>
 
                 <section
@@ -844,6 +845,10 @@
                   <span>Rewizje</span>
                   <strong id="sensor-configuration-revisions">—</strong>
                 </div>
+                <div>
+                  <span>Źródło konfiguracji</span>
+                  <strong id="sensor-configuration-profile">Konfiguracja ręczna</strong>
+                </div>
               </div>
               <p id="sensor-configuration-error" class="sensor-configuration-error hidden"></p>
               <label>
@@ -905,6 +910,236 @@
                 </button>
               </div>
             </form>
+          </section>
+
+
+          <section
+            id="fleet-configuration-editor"
+            class="sensor-editor fleet-configuration-editor hidden"
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="fleet-configuration-title"
+          >
+            <div class="fleet-configuration-header">
+              <div>
+                <p class="eyebrow">Administracja flotą</p>
+                <h2 id="fleet-configuration-title">Profile i rollouty konfiguracji</h2>
+              </div>
+              <div class="fleet-header-actions">
+                <button id="fleet-configuration-refresh" type="button" class="secondary-button">
+                  Odśwież
+                </button>
+                <button id="fleet-configuration-close" type="button" class="secondary-button">
+                  Zamknij
+                </button>
+              </div>
+            </div>
+
+            <p id="fleet-configuration-message" class="panel-help" aria-live="polite">
+              Wybierz profile lub rollouty.
+            </p>
+
+            <div class="fleet-tabs" role="tablist" aria-label="Konfiguracja floty">
+              <button
+                id="fleet-tab-profiles"
+                type="button"
+                class="fleet-tab active"
+                role="tab"
+                aria-selected="true"
+                aria-controls="fleet-panel-profiles"
+                data-fleet-tab="profiles"
+              >
+                Profile
+              </button>
+              <button
+                id="fleet-tab-rollouts"
+                type="button"
+                class="fleet-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="fleet-panel-rollouts"
+                data-fleet-tab="rollouts"
+                tabindex="-1"
+              >
+                Rollouty
+              </button>
+            </div>
+
+            <section id="fleet-panel-profiles" class="fleet-panel" data-fleet-panel="profiles">
+              <div class="fleet-toolbar">
+                <div>
+                  <strong>Profile konfiguracji</strong>
+                  <span>Wersje profilu są niemodyfikowalne.</span>
+                </div>
+                <button id="configuration-profile-create-toggle" type="button">
+                  Nowy profil
+                </button>
+              </div>
+
+              <form id="configuration-profile-create-form" class="fleet-form hidden">
+                <h3>Nowy profil</h3>
+                <div class="fleet-form-grid">
+                  <label>
+                    Klucz profilu
+                    <input id="profile-create-key" type="text" minlength="3" maxlength="64"
+                      pattern="[a-z0-9][a-z0-9._-]{2,63}" placeholder="production-default" required />
+                  </label>
+                  <label>
+                    Nazwa wyświetlana
+                    <input id="profile-create-name" type="text" maxlength="160" required />
+                  </label>
+                </div>
+                <label>
+                  Opis
+                  <textarea id="profile-create-description" maxlength="1000" rows="2"></textarea>
+                </label>
+                <fieldset class="fleet-configuration-fields">
+                  <legend>Wersja początkowa</legend>
+                  <label>Heartbeat (s)<input id="profile-create-heartbeat" type="number" min="2" max="3600" step="0.1" value="10" required /></label>
+                  <label>Reconnect (s)<input id="profile-create-reconnect" type="number" min="0.5" max="300" step="0.1" value="3" required /></label>
+                  <label>Timeout API (s)<input id="profile-create-timeout" type="number" min="1" max="120" step="0.1" value="5" required /></label>
+                  <label>Replay (wiad./s)<input id="profile-create-replay" type="number" min="0.1" max="100" step="0.1" value="2" required /></label>
+                </fieldset>
+                <label>
+                  Powód utworzenia
+                  <input id="profile-create-note" type="text" minlength="3" maxlength="500" required />
+                </label>
+                <div class="panel-actions">
+                  <button id="configuration-profile-create" type="submit">Utwórz profil</button>
+                  <button id="configuration-profile-create-cancel" type="button" class="secondary-button">Anuluj</button>
+                </div>
+              </form>
+
+              <div class="fleet-columns">
+                <div>
+                  <div id="configuration-profile-list" class="fleet-list empty-state">
+                    Wczytywanie profili…
+                  </div>
+                </div>
+                <div id="configuration-profile-detail" class="fleet-detail">
+                  <p id="configuration-profile-detail-empty" class="empty-state">
+                    Wybierz profil, aby zobaczyć metadane i historię wersji.
+                  </p>
+                  <div id="configuration-profile-detail-content" class="hidden">
+                    <div class="fleet-detail-heading">
+                      <div>
+                        <span id="configuration-profile-detail-key">—</span>
+                        <h3 id="configuration-profile-detail-name">—</h3>
+                      </div>
+                      <span id="configuration-profile-detail-status" class="fleet-status">—</span>
+                    </div>
+
+                    <form id="configuration-profile-metadata-form" class="fleet-form compact">
+                      <div class="fleet-form-grid">
+                        <label>Nazwa<input id="profile-metadata-name" type="text" maxlength="160" required /></label>
+                        <label class="toggle-row"><input id="profile-metadata-enabled" type="checkbox" /><span>Profil aktywny</span></label>
+                      </div>
+                      <label>Opis<textarea id="profile-metadata-description" maxlength="1000" rows="2"></textarea></label>
+                      <button type="submit">Zapisz metadane</button>
+                    </form>
+
+                    <form id="configuration-profile-version-form" class="fleet-form compact">
+                      <h3>Utwórz nową wersję</h3>
+                      <fieldset class="fleet-configuration-fields">
+                        <legend>Dozwolone ustawienia agenta</legend>
+                        <label>Heartbeat (s)<input id="profile-version-heartbeat" type="number" min="2" max="3600" step="0.1" required /></label>
+                        <label>Reconnect (s)<input id="profile-version-reconnect" type="number" min="0.5" max="300" step="0.1" required /></label>
+                        <label>Timeout API (s)<input id="profile-version-timeout" type="number" min="1" max="120" step="0.1" required /></label>
+                        <label>Replay (wiad./s)<input id="profile-version-replay" type="number" min="0.1" max="100" step="0.1" required /></label>
+                      </fieldset>
+                      <label>Opis zmiany<input id="profile-version-note" type="text" minlength="3" maxlength="500" required /></label>
+                      <button type="submit">Dodaj niemodyfikowalną wersję</button>
+                    </form>
+
+                    <h3>Historia wersji</h3>
+                    <div id="configuration-profile-version-list" class="fleet-list compact empty-state">
+                      Wczytywanie wersji…
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="fleet-panel-rollouts" class="fleet-panel hidden" data-fleet-panel="rollouts">
+              <div class="fleet-toolbar">
+                <label class="toggle-row">
+                  <input id="configuration-rollout-show-terminal" type="checkbox" />
+                  <span>Pokaż zakończone i anulowane</span>
+                </label>
+                <button id="configuration-rollout-create-toggle" type="button">Nowy rollout</button>
+              </div>
+
+              <form id="configuration-rollout-create-form" class="fleet-form hidden">
+                <h3>Nowy rollout — najpierw powstanie draft</h3>
+                <div class="fleet-form-grid">
+                  <label>
+                    Profil
+                    <select id="rollout-create-profile" required></select>
+                  </label>
+                  <label>
+                    Wersja profilu
+                    <input id="rollout-create-version" type="number" min="1" step="1" required />
+                  </label>
+                  <label>
+                    Wielkość partii
+                    <input id="rollout-create-batch-size" type="number" min="1" max="25" step="1" value="1" required />
+                  </label>
+                  <label>
+                    Powód rollout'u
+                    <input id="rollout-create-note" type="text" minlength="3" maxlength="500" required />
+                  </label>
+                </div>
+                <fieldset>
+                  <legend>Sensory docelowe (maks. 100)</legend>
+                  <div id="rollout-create-sensors" class="fleet-sensor-targets empty-state">
+                    Brak sensorów do wyboru.
+                  </div>
+                </fieldset>
+                <p class="fleet-safety-note">
+                  Utworzenie rollout'u nie zmienia konfiguracji. Wdrożenie rozpoczyna osobna operacja Start.
+                </p>
+                <div class="panel-actions">
+                  <button type="submit">Utwórz draft</button>
+                  <button id="configuration-rollout-create-cancel" type="button" class="secondary-button">Anuluj</button>
+                </div>
+              </form>
+
+              <div class="fleet-columns">
+                <div>
+                  <div id="configuration-rollout-list" class="fleet-list empty-state">
+                    Wczytywanie rolloutów…
+                  </div>
+                </div>
+                <div id="configuration-rollout-detail" class="fleet-detail">
+                  <p id="configuration-rollout-detail-empty" class="empty-state">
+                    Wybierz rollout, aby zobaczyć partie i sensory.
+                  </p>
+                  <div id="configuration-rollout-detail-content" class="hidden">
+                    <div class="fleet-detail-heading">
+                      <div>
+                        <span id="configuration-rollout-detail-profile">—</span>
+                        <h3 id="configuration-rollout-detail-title">—</h3>
+                      </div>
+                      <span id="configuration-rollout-detail-status" class="fleet-status">—</span>
+                    </div>
+                    <div id="configuration-rollout-summary" class="fleet-summary"></div>
+                    <div id="configuration-rollout-targets" class="fleet-target-list"></div>
+                    <div id="configuration-rollout-actions" class="fleet-rollout-actions hidden">
+                      <label>
+                        Notatka operatora
+                        <input id="configuration-rollout-action-note" type="text" minlength="3" maxlength="500" />
+                      </label>
+                      <div class="panel-actions">
+                        <button id="configuration-rollout-start" type="button">Start pierwszej partii</button>
+                        <button id="configuration-rollout-advance" type="button">Wdróż następną / zakończ</button>
+                        <button id="configuration-rollout-cancel" type="button" class="danger-button">Anuluj rollout</button>
+                        <button id="configuration-rollout-rollback" type="button" class="danger-button">Przywróć poprzednią konfigurację</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </section>
 
           <section id="sensor-token-panel" class="sensor-token-panel hidden">

@@ -3851,3 +3851,353 @@ html[data-theme="light"] .toast {
 html[data-theme="light"] .sensor-alert-group {
   background: rgba(242, 246, 250, 0.94);
 }
+
+
+/* RDDS Stage 24C: configuration profiles and controlled rollouts. */
+.fleet-configuration-editor {
+  width: min(1120px, calc(100% - 28px));
+  border-color: rgba(67, 213, 255, 0.48);
+}
+
+.fleet-configuration-header,
+.fleet-toolbar,
+.fleet-detail-heading,
+.fleet-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fleet-configuration-header {
+  position: sticky;
+  z-index: 2;
+  top: -16px;
+  margin: -16px -16px 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(10, 13, 18, 0.97);
+  backdrop-filter: blur(10px);
+}
+
+.fleet-header-actions,
+.fleet-tabs,
+.fleet-rollout-actions .panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fleet-tabs {
+  margin: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.fleet-tab {
+  min-width: 120px;
+  border-color: transparent;
+  border-bottom-color: transparent;
+  background: transparent;
+}
+
+.fleet-tab.active {
+  color: var(--cyan);
+  border-color: rgba(67, 213, 255, 0.45);
+  background: rgba(67, 213, 255, 0.1);
+}
+
+.fleet-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.fleet-toolbar {
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.fleet-toolbar > div span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.fleet-columns {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(420px, 1.5fr);
+  gap: 12px;
+  min-height: 390px;
+}
+
+.fleet-list,
+.fleet-target-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.fleet-list:not(.compact) {
+  max-height: 66vh;
+  overflow-y: auto;
+}
+
+.fleet-detail {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.035);
+}
+
+.fleet-detail h3,
+.fleet-form h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.fleet-card {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  padding: 10px;
+  color: var(--text);
+  text-align: left;
+  border: 1px solid var(--border);
+  background: rgba(18, 25, 34, 0.72);
+}
+
+.fleet-card:hover,
+.fleet-card.selected {
+  border-color: rgba(67, 213, 255, 0.55);
+  background: rgba(67, 213, 255, 0.09);
+}
+
+.fleet-card-heading {
+  align-items: center;
+}
+
+.fleet-card-key,
+.fleet-card-meta,
+.fleet-card-note,
+.fleet-configuration-values {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.fleet-card-note,
+.fleet-configuration-values {
+  margin: 2px 0;
+}
+
+.fleet-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 7px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.fleet-status.status-active,
+.fleet-status.rollout-completed,
+.target-compliant .fleet-status,
+.target-rolled_back .fleet-status {
+  color: var(--green);
+  border-color: rgba(67, 225, 164, 0.42);
+}
+
+.fleet-status.rollout-active,
+.target-awaiting_application .fleet-status,
+.target-rollback_pending .fleet-status {
+  color: var(--amber);
+  border-color: rgba(255, 184, 77, 0.42);
+}
+
+.fleet-status.rollout-draft {
+  color: var(--cyan);
+  border-color: rgba(67, 213, 255, 0.42);
+}
+
+.fleet-status.rollout-cancelled,
+.target-error .fleet-status,
+.target-superseded .fleet-status,
+.target-rollback_error .fleet-status,
+.target-rollback_superseded .fleet-status {
+  color: var(--red);
+  border-color: rgba(255, 86, 112, 0.42);
+}
+
+.fleet-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(67, 213, 255, 0.3);
+  background: rgba(67, 213, 255, 0.045);
+}
+
+.fleet-form.compact {
+  margin: 12px 0;
+  padding: 10px;
+}
+
+.fleet-form label,
+.fleet-rollout-actions label {
+  display: grid;
+  gap: 5px;
+}
+
+.fleet-form-grid,
+.fleet-configuration-fields,
+.fleet-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fleet-configuration-fields,
+.fleet-form fieldset {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+}
+
+.fleet-configuration-fields legend,
+.fleet-form fieldset legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.fleet-version-card,
+.fleet-target {
+  padding: 9px;
+  border: 1px solid var(--border);
+  background: rgba(18, 25, 34, 0.62);
+}
+
+.fleet-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 12px 0;
+}
+
+.fleet-summary > div {
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.fleet-summary span,
+.fleet-summary strong {
+  display: block;
+}
+
+.fleet-summary span {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.fleet-summary strong {
+  margin-top: 4px;
+}
+
+.fleet-sensor-targets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.fleet-sensor-target {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.fleet-sensor-target span,
+.fleet-sensor-target strong,
+.fleet-sensor-target small {
+  display: block;
+  min-width: 0;
+}
+
+.fleet-sensor-target small {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.fleet-safety-note {
+  margin: 0;
+  padding: 9px;
+  color: var(--cyan);
+  border: 1px solid rgba(67, 213, 255, 0.32);
+  background: rgba(67, 213, 255, 0.06);
+  font-size: 10px;
+}
+
+.fleet-rollout-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.fleet-configuration-message.error {
+  color: var(--red);
+}
+
+html[data-theme="light"] .fleet-configuration-header {
+  background: rgba(248, 250, 252, 0.98);
+}
+
+html[data-theme="light"] .fleet-card,
+html[data-theme="light"] .fleet-version-card,
+html[data-theme="light"] .fleet-target {
+  background: rgba(255, 255, 255, 0.86);
+}
+
+@media (max-width: 900px) {
+  .fleet-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .fleet-list:not(.compact) {
+    max-height: 260px;
+  }
+}
+
+@media (max-width: 620px) {
+  .fleet-configuration-editor {
+    right: 8px;
+    top: 8px;
+    width: calc(100% - 16px);
+    max-height: calc(100% - 16px);
+  }
+
+  .fleet-configuration-header,
+  .fleet-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fleet-form-grid,
+  .fleet-configuration-fields,
+  .fleet-summary,
+  .fleet-sensor-targets {
+    grid-template-columns: 1fr;
+  }
+}

@@ -86,6 +86,102 @@ class SensorManagedConfiguration(StrictModel):
     replay_messages_per_second: float = Field(ge=0.1, le=100.0)
 
 
+class SensorConfigurationProfileCreate(StrictModel):
+    profile_key: str = Field(
+        min_length=3,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9._-]{2,63}$",
+    )
+    display_name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    configuration: SensorManagedConfiguration
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("display_name", "change_note")
+    @classmethod
+    def required_text_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value cannot be blank")
+        return stripped
+
+    @field_validator("description")
+    @classmethod
+    def normalize_optional_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class SensorConfigurationProfileUpdate(StrictModel):
+    display_name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
+    enabled: bool
+
+    @field_validator("display_name")
+    @classmethod
+    def display_name_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("display_name cannot be blank")
+        return stripped
+
+    @field_validator("description")
+    @classmethod
+    def normalize_optional_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class SensorConfigurationProfileVersionCreate(StrictModel):
+    configuration: SensorManagedConfiguration
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
+class SensorConfigurationRolloutCreate(StrictModel):
+    profile_id: UUID
+    profile_version: int = Field(ge=1)
+    sensor_ids: list[UUID] = Field(min_length=1, max_length=100)
+    batch_size: int = Field(default=1, ge=1, le=25)
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("sensor_ids")
+    @classmethod
+    def sensor_ids_must_be_unique(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("sensor_ids must be unique")
+        return value
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
+class SensorConfigurationRolloutAction(StrictModel):
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
 class SensorConfigurationReport(StrictModel):
     desired_revision: int = Field(ge=0)
     applied_revision: int | None = Field(default=None, ge=0)

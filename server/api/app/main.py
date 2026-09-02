@@ -37,6 +37,24 @@ from app.auth_store import (
     update_account,
 )
 from app.config import settings
+from app.configuration_profile_store import (
+    create_sensor_configuration_profile,
+    create_sensor_configuration_profile_version,
+    get_sensor_configuration_profile,
+    list_sensor_configuration_profile_versions,
+    list_sensor_configuration_profiles,
+    update_sensor_configuration_profile,
+)
+from app.configuration_rollout_store import (
+    RolloutConflict,
+    advance_sensor_configuration_rollout,
+    cancel_sensor_configuration_rollout,
+    create_sensor_configuration_rollout,
+    get_sensor_configuration_rollout,
+    list_sensor_configuration_rollouts,
+    rollback_sensor_configuration_rollout,
+    start_sensor_configuration_rollout,
+)
 from app.database import (
     insert_heartbeat,
     insert_observation,
@@ -65,6 +83,11 @@ from app.models import (
     SensorTokenRotation,
     SensorUpdate,
     SensorManagedConfiguration,
+    SensorConfigurationProfileCreate,
+    SensorConfigurationProfileUpdate,
+    SensorConfigurationProfileVersionCreate,
+    SensorConfigurationRolloutAction,
+    SensorConfigurationRolloutCreate,
 )
 from app.operations_store import get_database_storage, get_maintenance_status
 from app.security import (
@@ -151,7 +174,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.23.0",
+    version="0.24.0",
     lifespan=lifespan,
 )
 
@@ -664,6 +687,331 @@ def get_sensor_health_overview() -> dict[str, object]:
         "sensors": sensors,
     }
 
+
+
+
+@app.get(
+    "/api/v1/sensor-configuration-rollouts",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_configuration_rollouts(
+    include_terminal: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        rollouts, total = list_sensor_configuration_rollouts(
+            include_terminal=include_terminal,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "time": utc_now(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "rollouts": rollouts,
+    }
+
+
+@app.post(
+    "/api/v1/sensor-configuration-rollouts",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_administrator_write)],
+    status_code=status.HTTP_201_CREATED,
+)
+def post_sensor_configuration_rollout(
+    payload: SensorConfigurationRolloutCreate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        rollout = create_sensor_configuration_rollout(
+            payload=payload,
+            actor=principal.actor,
+        )
+    except RolloutConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout creation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.get(
+    "/api/v1/sensor-configuration-rollouts/{rollout_id}",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_configuration_rollout_view(
+    rollout_id: UUID,
+) -> dict[str, object]:
+    try:
+        rollout = get_sensor_configuration_rollout(rollout_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if rollout is None:
+        raise HTTPException(status_code=404, detail="configuration rollout not found")
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.post(
+    "/api/v1/sensor-configuration-rollouts/{rollout_id}/start",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_configuration_rollout_start(
+    rollout_id: UUID,
+    payload: SensorConfigurationRolloutAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        rollout = start_sensor_configuration_rollout(
+            rollout_id=rollout_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except RolloutConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout start failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if rollout is None:
+        raise HTTPException(status_code=404, detail="configuration rollout not found")
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.post(
+    "/api/v1/sensor-configuration-rollouts/{rollout_id}/advance",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_configuration_rollout_advance(
+    rollout_id: UUID,
+    payload: SensorConfigurationRolloutAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        rollout = advance_sensor_configuration_rollout(
+            rollout_id=rollout_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except RolloutConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout advance failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if rollout is None:
+        raise HTTPException(status_code=404, detail="configuration rollout not found")
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.post(
+    "/api/v1/sensor-configuration-rollouts/{rollout_id}/cancel",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_configuration_rollout_cancel(
+    rollout_id: UUID,
+    payload: SensorConfigurationRolloutAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        rollout = cancel_sensor_configuration_rollout(
+            rollout_id=rollout_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except RolloutConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout cancellation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if rollout is None:
+        raise HTTPException(status_code=404, detail="configuration rollout not found")
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.post(
+    "/api/v1/sensor-configuration-rollouts/{rollout_id}/rollback",
+    tags=["sensor-configuration-rollouts"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_configuration_rollout_rollback(
+    rollout_id: UUID,
+    payload: SensorConfigurationRolloutAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        rollout = rollback_sensor_configuration_rollout(
+            rollout_id=rollout_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except RolloutConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration rollout rollback failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if rollout is None:
+        raise HTTPException(status_code=404, detail="configuration rollout not found")
+    return {"time": utc_now(), "rollout": rollout}
+
+
+@app.get(
+    "/api/v1/sensor-configuration-profiles",
+    tags=["sensor-configuration-profiles"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_configuration_profiles(
+    include_disabled: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        profiles, total = list_sensor_configuration_profiles(
+            include_disabled=include_disabled,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration profile list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "time": utc_now(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "profiles": profiles,
+    }
+
+
+@app.post(
+    "/api/v1/sensor-configuration-profiles",
+    tags=["sensor-configuration-profiles"],
+    dependencies=[Depends(require_administrator_write)],
+    status_code=status.HTTP_201_CREATED,
+)
+def post_sensor_configuration_profile(
+    payload: SensorConfigurationProfileCreate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        profile = create_sensor_configuration_profile(
+            payload=payload,
+            actor=principal.actor,
+        )
+    except psycopg.errors.UniqueViolation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="configuration profile key already exists",
+        ) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration profile creation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "profile": profile}
+
+
+@app.get(
+    "/api/v1/sensor-configuration-profiles/{profile_id}",
+    tags=["sensor-configuration-profiles"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_configuration_profile_view(profile_id: UUID) -> dict[str, object]:
+    try:
+        profile = get_sensor_configuration_profile(profile_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration profile query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if profile is None:
+        raise HTTPException(status_code=404, detail="configuration profile not found")
+    return {"time": utc_now(), "profile": profile}
+
+
+@app.put(
+    "/api/v1/sensor-configuration-profiles/{profile_id}",
+    tags=["sensor-configuration-profiles"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def put_sensor_configuration_profile(
+    profile_id: UUID,
+    payload: SensorConfigurationProfileUpdate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        profile = update_sensor_configuration_profile(
+            profile_id=profile_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration profile update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if profile is None:
+        raise HTTPException(status_code=404, detail="configuration profile not found")
+    return {"time": utc_now(), "profile": profile}
+
+
+@app.get(
+    "/api/v1/sensor-configuration-profiles/{profile_id}/versions",
+    tags=["sensor-configuration-profiles"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_configuration_profile_versions(
+    profile_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        result = list_sensor_configuration_profile_versions(
+            profile_id=profile_id,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration profile version query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="configuration profile not found")
+    versions, total = result
+    return {
+        "time": utc_now(),
+        "profile_id": profile_id,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "versions": versions,
+    }
+
+
+@app.post(
+    "/api/v1/sensor-configuration-profiles/{profile_id}/versions",
+    tags=["sensor-configuration-profiles"],
+    dependencies=[Depends(require_administrator_write)],
+    status_code=status.HTTP_201_CREATED,
+)
+def post_sensor_configuration_profile_version(
+    profile_id: UUID,
+    payload: SensorConfigurationProfileVersionCreate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        profile = create_sensor_configuration_profile_version(
+            profile_id=profile_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor configuration profile version creation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if profile is None:
+        raise HTTPException(status_code=404, detail="configuration profile not found")
+    return {"time": utc_now(), "profile": profile}
 
 
 @app.get(

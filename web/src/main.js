@@ -128,6 +128,26 @@ const sensorConfigurationComplianceLabels = {
   error: "błąd zastosowania",
 };
 
+const configurationRolloutStatusLabels = {
+  draft: "draft",
+  active: "aktywny",
+  completed: "zakończony",
+  cancelled: "anulowany",
+};
+
+const configurationRolloutTargetStatusLabels = {
+  pending: "oczekuje na partię",
+  awaiting_application: "oczekuje na agenta",
+  compliant: "zgodny",
+  error: "błąd zastosowania",
+  superseded: "nadpisany",
+  cancelled: "anulowany",
+  rollback_pending: "oczekuje na rollback",
+  rolled_back: "przywrócony",
+  rollback_error: "błąd rollbacku",
+  rollback_superseded: "rollback nadpisany",
+};
+
 const SENSOR_CONFIGURATION_FIELDS = {
   heartbeat_seconds: {
     element: "sensorConfigurationHeartbeat",
@@ -247,6 +267,17 @@ const auditEventLabels = {
   sensor_configuration_changed: "Zmieniono konfigurację sensora",
   sensor_configuration_applied: "Sensor zastosował konfigurację",
   sensor_configuration_failed: "Sensor odrzucił konfigurację",
+  sensor_configuration_profile_created: "Utworzono profil konfiguracji",
+  sensor_configuration_profile_updated: "Zmieniono profil konfiguracji",
+  sensor_configuration_profile_version_created: "Utworzono wersję profilu",
+  sensor_configuration_profile_assigned: "Przypisano profil do sensora",
+  sensor_configuration_profile_unassigned: "Odłączono profil od sensora",
+  sensor_configuration_rollout_created: "Utworzono rollout konfiguracji",
+  sensor_configuration_rollout_started: "Uruchomiono rollout konfiguracji",
+  sensor_configuration_rollout_batch_deployed: "Wdrożono partię rollout'u",
+  sensor_configuration_rollout_completed: "Zakończono rollout konfiguracji",
+  sensor_configuration_rollout_cancelled: "Anulowano rollout konfiguracji",
+  sensor_configuration_rollout_rolled_back: "Przywrócono konfigurację sprzed rollout'u",
   operator_created: "Utworzono konto",
   operator_updated: "Zmieniono konto",
   operator_enabled: "Włączono konto",
@@ -329,6 +360,56 @@ const elements = {
   registerSensor: document.querySelector("#register-sensor"),
   manageOperators: document.querySelector("#manage-operators"),
   manageSecurity: document.querySelector("#manage-security"),
+  fleetConfigurationOpen: document.querySelector("#fleet-configuration-open"),
+  fleetConfigurationEditor: document.querySelector("#fleet-configuration-editor"),
+  fleetConfigurationClose: document.querySelector("#fleet-configuration-close"),
+  fleetConfigurationRefresh: document.querySelector("#fleet-configuration-refresh"),
+  fleetConfigurationMessage: document.querySelector("#fleet-configuration-message"),
+  fleetTabButtons: document.querySelectorAll("[data-fleet-tab]"),
+  fleetTabPanels: document.querySelectorAll("[data-fleet-panel]"),
+  profileCreateToggle: document.querySelector("#configuration-profile-create-toggle"),
+  profileCreateForm: document.querySelector("#configuration-profile-create-form"),
+  profileCreateCancel: document.querySelector("#configuration-profile-create-cancel"),
+  profileCreateKey: document.querySelector("#profile-create-key"),
+  profileCreateName: document.querySelector("#profile-create-name"),
+  profileCreateDescription: document.querySelector("#profile-create-description"),
+  profileCreateNote: document.querySelector("#profile-create-note"),
+  profileList: document.querySelector("#configuration-profile-list"),
+  profileDetailEmpty: document.querySelector("#configuration-profile-detail-empty"),
+  profileDetailContent: document.querySelector("#configuration-profile-detail-content"),
+  profileDetailKey: document.querySelector("#configuration-profile-detail-key"),
+  profileDetailName: document.querySelector("#configuration-profile-detail-name"),
+  profileDetailStatus: document.querySelector("#configuration-profile-detail-status"),
+  profileMetadataForm: document.querySelector("#configuration-profile-metadata-form"),
+  profileMetadataName: document.querySelector("#profile-metadata-name"),
+  profileMetadataDescription: document.querySelector("#profile-metadata-description"),
+  profileMetadataEnabled: document.querySelector("#profile-metadata-enabled"),
+  profileVersionForm: document.querySelector("#configuration-profile-version-form"),
+  profileVersionNote: document.querySelector("#profile-version-note"),
+  profileVersionList: document.querySelector("#configuration-profile-version-list"),
+  rolloutShowTerminal: document.querySelector("#configuration-rollout-show-terminal"),
+  rolloutCreateToggle: document.querySelector("#configuration-rollout-create-toggle"),
+  rolloutCreateForm: document.querySelector("#configuration-rollout-create-form"),
+  rolloutCreateCancel: document.querySelector("#configuration-rollout-create-cancel"),
+  rolloutCreateProfile: document.querySelector("#rollout-create-profile"),
+  rolloutCreateVersion: document.querySelector("#rollout-create-version"),
+  rolloutCreateBatchSize: document.querySelector("#rollout-create-batch-size"),
+  rolloutCreateNote: document.querySelector("#rollout-create-note"),
+  rolloutCreateSensors: document.querySelector("#rollout-create-sensors"),
+  rolloutList: document.querySelector("#configuration-rollout-list"),
+  rolloutDetailEmpty: document.querySelector("#configuration-rollout-detail-empty"),
+  rolloutDetailContent: document.querySelector("#configuration-rollout-detail-content"),
+  rolloutDetailProfile: document.querySelector("#configuration-rollout-detail-profile"),
+  rolloutDetailTitle: document.querySelector("#configuration-rollout-detail-title"),
+  rolloutDetailStatus: document.querySelector("#configuration-rollout-detail-status"),
+  rolloutSummary: document.querySelector("#configuration-rollout-summary"),
+  rolloutTargets: document.querySelector("#configuration-rollout-targets"),
+  rolloutActions: document.querySelector("#configuration-rollout-actions"),
+  rolloutActionNote: document.querySelector("#configuration-rollout-action-note"),
+  rolloutStart: document.querySelector("#configuration-rollout-start"),
+  rolloutAdvance: document.querySelector("#configuration-rollout-advance"),
+  rolloutCancel: document.querySelector("#configuration-rollout-cancel"),
+  rolloutRollback: document.querySelector("#configuration-rollout-rollback"),
   storagePanel: document.querySelector("#storage-panel"),
   storageRefresh: document.querySelector("#storage-refresh"),
   storageUsage: document.querySelector("#storage-usage"),
@@ -488,6 +569,7 @@ const elements = {
   sensorConfigurationHelp: document.querySelector("#sensor-configuration-help"),
   sensorConfigurationCompliance: document.querySelector("#sensor-configuration-compliance"),
   sensorConfigurationRevisions: document.querySelector("#sensor-configuration-revisions"),
+  sensorConfigurationProfile: document.querySelector("#sensor-configuration-profile"),
   sensorConfigurationError: document.querySelector("#sensor-configuration-error"),
   sensorConfigurationHeartbeat: document.querySelector("#sensor-configuration-heartbeat"),
   sensorConfigurationReconnect: document.querySelector("#sensor-configuration-reconnect"),
@@ -625,6 +707,14 @@ let editingZoneId = null;
 let editingSensorId = null;
 let editingSensorConfigurationId = null;
 let sensorConfigurationRequestSequence = 0;
+let fleetProfiles = [];
+let fleetProfileVersions = [];
+let fleetRollouts = [];
+let fleetSelectedProfileId = null;
+let fleetSelectedRolloutId = null;
+let fleetSelectedRollout = null;
+let fleetActiveTab = "profiles";
+let fleetLoadSequence = 0;
 let toastTimeout = null;
 
 function isCoordinate(value) {
@@ -2323,6 +2413,7 @@ function updateOperatorUi(message = null, error = false) {
   elements.registerSensor.classList.toggle("hidden", !canAdminister());
   elements.manageOperators.classList.toggle("hidden", !canAdminister());
   elements.manageSecurity.classList.toggle("hidden", !canAdminister());
+  elements.fleetConfigurationOpen.classList.toggle("hidden", !canAdminister());
   elements.storagePanel.classList.toggle("hidden", !canAdminister());
   elements.operatorAdminTab.classList.toggle("hidden", !canOperate());
   elements.operatorAdminTab.disabled = Boolean(currentUser?.must_change_password);
@@ -2401,6 +2492,7 @@ function clearSession(message = "Zaloguj się, aby otworzyć panel.") {
   cancelSensorRegistration();
   closeSensorToken();
   closeSensorConfigurationEditor();
+  closeFleetConfigurationEditor();
   closeSensorOverview({ restoreFocus: false });
   elements.operatorEditor.classList.add("hidden");
   elements.securityEditor.classList.add("hidden");
@@ -5976,6 +6068,677 @@ function cancelZoneDrawing() {
   elements.zoneUndoPoint.disabled = true;
 }
 
+
+function fleetText(tagName, className, value) {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  element.textContent = value ?? "—";
+  return element;
+}
+
+function setFleetConfigurationMessage(message, error = false) {
+  elements.fleetConfigurationMessage.textContent = message;
+  elements.fleetConfigurationMessage.classList.toggle("error", error);
+}
+
+function setFleetTab(tab) {
+  if (!['profiles', 'rollouts'].includes(tab)) return;
+  fleetActiveTab = tab;
+  for (const button of elements.fleetTabButtons) {
+    const active = button.dataset.fleetTab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  }
+  for (const panel of elements.fleetTabPanels) {
+    panel.classList.toggle("hidden", panel.dataset.fleetPanel !== tab);
+  }
+}
+
+function managedConfigurationInput(prefix, suffix) {
+  const input = document.querySelector(`#${prefix}-${suffix}`);
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`Brak pola konfiguracji: ${prefix}-${suffix}`);
+  }
+  return input;
+}
+
+function readFleetManagedConfiguration(prefix) {
+  const definitions = {
+    heartbeat_seconds: ["heartbeat", 2, 3600, "Heartbeat"],
+    reconnect_seconds: ["reconnect", 0.5, 300, "Reconnect"],
+    request_timeout_seconds: ["timeout", 1, 120, "Timeout API"],
+    replay_messages_per_second: ["replay", 0.1, 100, "Replay"],
+  };
+  const configuration = {};
+  for (const [field, [suffix, minimum, maximum, label]] of Object.entries(definitions)) {
+    const value = Number(managedConfigurationInput(prefix, suffix).value);
+    if (!Number.isFinite(value) || value < minimum || value > maximum) {
+      throw new Error(`${label}: podaj wartość od ${minimum} do ${maximum}.`);
+    }
+    configuration[field] = value;
+  }
+  return configuration;
+}
+
+function populateFleetManagedConfiguration(prefix, configuration) {
+  const suffixes = {
+    heartbeat_seconds: "heartbeat",
+    reconnect_seconds: "reconnect",
+    request_timeout_seconds: "timeout",
+    replay_messages_per_second: "replay",
+  };
+  const values = hasCompleteSensorConfiguration(configuration)
+    ? configuration
+    : SENSOR_CONFIGURATION_DEFAULTS;
+  for (const [field, suffix] of Object.entries(suffixes)) {
+    managedConfigurationInput(prefix, suffix).value = String(values[field]);
+  }
+}
+
+function selectedFleetProfile() {
+  return fleetProfiles.find(
+    (profile) => String(profile.id) === String(fleetSelectedProfileId),
+  ) ?? null;
+}
+
+function renderFleetProfileVersions() {
+  elements.profileVersionList.replaceChildren();
+  elements.profileVersionList.classList.toggle(
+    "empty-state", fleetProfileVersions.length === 0,
+  );
+  if (fleetProfileVersions.length === 0) {
+    elements.profileVersionList.textContent = "Brak wersji profilu.";
+    return;
+  }
+  for (const version of fleetProfileVersions) {
+    const card = document.createElement("article");
+    card.className = "fleet-version-card";
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", `Wersja ${version.version}`),
+      fleetText("span", "", formatDateTime(version.created_at)),
+    );
+    const configuration = version.configuration ?? {};
+    const values = fleetText(
+      "p",
+      "fleet-configuration-values",
+      `heartbeat ${configuration.heartbeat_seconds ?? "—"} s · `
+        + `reconnect ${configuration.reconnect_seconds ?? "—"} s · `
+        + `timeout ${configuration.request_timeout_seconds ?? "—"} s · `
+        + `replay ${configuration.replay_messages_per_second ?? "—"}/s`,
+    );
+    const note = fleetText("p", "fleet-card-note", version.change_note || "Brak opisu zmiany");
+    const author = fleetText("span", "fleet-card-meta", `Autor: ${version.created_by || "—"}`);
+    card.append(heading, values, note, author);
+    elements.profileVersionList.append(card);
+  }
+}
+
+function renderSelectedFleetProfile() {
+  const profile = selectedFleetProfile();
+  elements.profileDetailEmpty.classList.toggle("hidden", Boolean(profile));
+  elements.profileDetailContent.classList.toggle("hidden", !profile);
+  if (!profile) return;
+
+  elements.profileDetailKey.textContent = profile.profile_key;
+  elements.profileDetailName.textContent = profile.display_name;
+  elements.profileDetailStatus.textContent = profile.enabled ? "aktywny" : "wyłączony";
+  elements.profileDetailStatus.className =
+    `fleet-status ${profile.enabled ? "status-active" : "status-disabled"}`;
+  elements.profileMetadataName.value = profile.display_name ?? "";
+  elements.profileMetadataDescription.value = profile.description ?? "";
+  elements.profileMetadataEnabled.checked = Boolean(profile.enabled);
+  populateFleetManagedConfiguration("profile-version", profile.current_configuration);
+  elements.profileVersionNote.value = "";
+  renderFleetProfileVersions();
+}
+
+function renderFleetProfiles() {
+  elements.profileList.replaceChildren();
+  elements.profileList.classList.toggle("empty-state", fleetProfiles.length === 0);
+  if (fleetProfiles.length === 0) {
+    elements.profileList.textContent = "Brak profili konfiguracji.";
+    fleetSelectedProfileId = null;
+    fleetProfileVersions = [];
+    renderSelectedFleetProfile();
+    renderRolloutProfileOptions();
+    return;
+  }
+  for (const profile of fleetProfiles) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fleet-card";
+    button.classList.toggle(
+      "selected", String(profile.id) === String(fleetSelectedProfileId),
+    );
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", profile.display_name),
+      fleetText("span", `fleet-status ${profile.enabled ? "status-active" : "status-disabled"}`,
+        profile.enabled ? "aktywny" : "wyłączony"),
+    );
+    button.append(
+      heading,
+      fleetText("span", "fleet-card-key", profile.profile_key),
+      fleetText(
+        "span",
+        "fleet-card-meta",
+        `Bieżąca v${profile.current_version} · wersji: ${profile.version_count}`,
+      ),
+    );
+    button.addEventListener("click", () => void selectFleetProfile(profile.id));
+    elements.profileList.append(button);
+  }
+  renderSelectedFleetProfile();
+  renderRolloutProfileOptions();
+}
+
+async function loadFleetProfileVersions(profileId) {
+  elements.profileVersionList.classList.add("empty-state");
+  elements.profileVersionList.textContent = "Wczytywanie wersji…";
+  try {
+    const payload = await fetchJson(
+      `/api/v1/sensor-configuration-profiles/${encodeURIComponent(profileId)}`
+        + "/versions?limit=500&offset=0",
+    );
+    if (String(fleetSelectedProfileId) !== String(profileId)) return;
+    fleetProfileVersions = Array.isArray(payload.versions) ? payload.versions : [];
+    renderFleetProfileVersions();
+  } catch (error) {
+    if (String(fleetSelectedProfileId) !== String(profileId)) return;
+    elements.profileVersionList.classList.add("empty-state");
+    elements.profileVersionList.textContent = `Nie udało się pobrać wersji: ${error.message}`;
+  }
+}
+
+async function selectFleetProfile(profileId) {
+  fleetSelectedProfileId = profileId;
+  fleetProfileVersions = [];
+  renderFleetProfiles();
+  await loadFleetProfileVersions(profileId);
+}
+
+function renderRolloutProfileOptions() {
+  const previous = elements.rolloutCreateProfile.value;
+  elements.rolloutCreateProfile.replaceChildren();
+  for (const profile of fleetProfiles.filter((item) => item.enabled)) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.dataset.currentVersion = String(profile.current_version);
+    option.textContent = `${profile.display_name} (${profile.profile_key}) · v${profile.current_version}`;
+    elements.rolloutCreateProfile.append(option);
+  }
+  if ([...elements.rolloutCreateProfile.options].some((item) => item.value === previous)) {
+    elements.rolloutCreateProfile.value = previous;
+  }
+  const selected = elements.rolloutCreateProfile.selectedOptions[0];
+  if (selected) {
+    elements.rolloutCreateVersion.value = selected.dataset.currentVersion;
+  }
+}
+
+function renderRolloutSensorTargets() {
+  elements.rolloutCreateSensors.replaceChildren();
+  const sensors = [...currentSensors]
+    .filter((sensor) => sensor.status !== "disabled")
+    .sort((left, right) => String(left.sensor_id).localeCompare(String(right.sensor_id), "pl"));
+  elements.rolloutCreateSensors.classList.toggle("empty-state", sensors.length === 0);
+  if (sensors.length === 0) {
+    elements.rolloutCreateSensors.textContent = "Brak aktywnych sensorów do wyboru.";
+    return;
+  }
+  for (const sensor of sensors) {
+    const label = document.createElement("label");
+    label.className = "fleet-sensor-target";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = sensor.id;
+    input.dataset.rolloutSensor = "";
+    const text = document.createElement("span");
+    text.append(
+      fleetText("strong", "", sensor.display_name || sensor.sensor_id),
+      fleetText("small", "", `${sensor.sensor_id} · ${stateLabel(sensor.status)}`),
+    );
+    label.append(input, text);
+    elements.rolloutCreateSensors.append(label);
+  }
+}
+
+function appendFleetMetric(container, label, value) {
+  const metric = document.createElement("div");
+  metric.append(fleetText("span", "", label), fleetText("strong", "", String(value ?? "—")));
+  container.append(metric);
+}
+
+function renderSelectedFleetRollout() {
+  const rollout = fleetSelectedRollout;
+  elements.rolloutDetailEmpty.classList.toggle("hidden", Boolean(rollout));
+  elements.rolloutDetailContent.classList.toggle("hidden", !rollout);
+  if (!rollout) return;
+
+  elements.rolloutDetailProfile.textContent =
+    `${rollout.profile_key} · wersja ${rollout.profile_version}`;
+  elements.rolloutDetailTitle.textContent = `Rollout ${String(rollout.id).slice(0, 8)}`;
+  elements.rolloutDetailStatus.textContent =
+    rollout.rolled_back_at
+      ? `${configurationRolloutStatusLabels[rollout.status] ?? rollout.status} · rollback`
+      : configurationRolloutStatusLabels[rollout.status] ?? rollout.status;
+  elements.rolloutDetailStatus.className = `fleet-status rollout-${rollout.status}`;
+
+  elements.rolloutSummary.replaceChildren();
+  appendFleetMetric(elements.rolloutSummary, "Wszystkie", rollout.target_count);
+  appendFleetMetric(elements.rolloutSummary, "Wdrożone", rollout.deployed_count);
+  appendFleetMetric(
+    elements.rolloutSummary,
+    rollout.rolled_back_at ? "Rollback zgodny" : "Zgodne",
+    rollout.rolled_back_at ? rollout.rollback_compliant_count : rollout.compliant_count,
+  );
+  appendFleetMetric(
+    elements.rolloutSummary,
+    rollout.rolled_back_at ? "Rollback oczekuje" : "Oczekujące",
+    rollout.rolled_back_at ? rollout.rollback_pending_count : rollout.awaiting_application_count,
+  );
+  appendFleetMetric(
+    elements.rolloutSummary,
+    "Błędy",
+    rollout.rolled_back_at ? rollout.rollback_error_count : rollout.error_count,
+  );
+  appendFleetMetric(elements.rolloutSummary, "Partia", rollout.batch_size);
+
+  elements.rolloutTargets.replaceChildren();
+  const targets = Array.isArray(rollout.targets) ? rollout.targets : [];
+  for (const target of targets) {
+    const row = document.createElement("article");
+    row.className = `fleet-target target-${target.target_status}`;
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", `${target.sequence}. ${target.sensor_display_name || target.sensor_key}`),
+      fleetText(
+        "span",
+        "fleet-status",
+        configurationRolloutTargetStatusLabels[target.target_status] ?? target.target_status,
+      ),
+    );
+    const revision = target.desired_revision === null
+      ? "rewizja jeszcze nieprzydzielona"
+      : `rewizja ${target.desired_revision}`;
+    row.append(heading, fleetText("span", "fleet-card-meta", `${target.sensor_key} · ${revision}`));
+    elements.rolloutTargets.append(row);
+  }
+
+  const actionable = rollout.status === "draft" || rollout.status === "active"
+    || rollout.can_rollback;
+  elements.rolloutActions.classList.toggle("hidden", !actionable);
+  elements.rolloutStart.classList.toggle("hidden", rollout.status !== "draft");
+  elements.rolloutAdvance.classList.toggle("hidden", rollout.status !== "active");
+  elements.rolloutCancel.classList.toggle("hidden", !rollout.can_cancel);
+  elements.rolloutRollback.classList.toggle("hidden", !rollout.can_rollback);
+  elements.rolloutStart.disabled = !rollout.can_start;
+  elements.rolloutAdvance.disabled = !rollout.can_advance;
+  elements.rolloutAdvance.title = rollout.can_advance
+    ? "Wdróż następną partię albo zakończ rollout"
+    : "Poprzednia partia musi być w pełni zgodna";
+  elements.rolloutRollback.disabled = !rollout.can_rollback;
+}
+
+function renderFleetRollouts() {
+  elements.rolloutList.replaceChildren();
+  elements.rolloutList.classList.toggle("empty-state", fleetRollouts.length === 0);
+  if (fleetRollouts.length === 0) {
+    elements.rolloutList.textContent = "Brak rolloutów w wybranym zakresie.";
+    fleetSelectedRolloutId = null;
+    fleetSelectedRollout = null;
+    renderSelectedFleetRollout();
+    return;
+  }
+  for (const rollout of fleetRollouts) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fleet-card";
+    button.classList.toggle(
+      "selected", String(rollout.id) === String(fleetSelectedRolloutId),
+    );
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", `${rollout.profile_key} v${rollout.profile_version}`),
+      fleetText(
+        "span",
+        `fleet-status rollout-${rollout.status}`,
+        configurationRolloutStatusLabels[rollout.status] ?? rollout.status,
+      ),
+    );
+    button.append(
+      heading,
+      fleetText("span", "fleet-card-key", String(rollout.id)),
+      fleetText(
+        "span",
+        "fleet-card-meta",
+        `zgodne ${rollout.compliant_count}/${rollout.target_count} · partia ${rollout.batch_size}`,
+      ),
+    );
+    button.addEventListener("click", () => void selectFleetRollout(rollout.id));
+    elements.rolloutList.append(button);
+  }
+  renderSelectedFleetRollout();
+}
+
+async function selectFleetRollout(rolloutId) {
+  fleetSelectedRolloutId = rolloutId;
+  renderFleetRollouts();
+  elements.rolloutDetailEmpty.classList.remove("hidden");
+  elements.rolloutDetailEmpty.textContent = "Wczytywanie szczegółów rollout'u…";
+  elements.rolloutDetailContent.classList.add("hidden");
+  try {
+    const payload = await fetchJson(
+      `/api/v1/sensor-configuration-rollouts/${encodeURIComponent(rolloutId)}`,
+    );
+    if (String(fleetSelectedRolloutId) !== String(rolloutId)) return;
+    fleetSelectedRollout = payload.rollout ?? null;
+    renderFleetRollouts();
+  } catch (error) {
+    if (String(fleetSelectedRolloutId) !== String(rolloutId)) return;
+    elements.rolloutDetailEmpty.classList.remove("hidden");
+    elements.rolloutDetailContent.classList.add("hidden");
+    elements.rolloutDetailEmpty.textContent =
+      `Nie udało się pobrać rollout'u: ${error.message}`;
+  }
+}
+
+async function loadFleetConfigurationConsole() {
+  const sequence = ++fleetLoadSequence;
+  setFleetConfigurationMessage("Pobieranie profili i rolloutów…");
+  elements.fleetConfigurationRefresh.disabled = true;
+  try {
+    const includeTerminal = elements.rolloutShowTerminal.checked ? "true" : "false";
+    const [profilesPayload, rolloutsPayload] = await Promise.all([
+      fetchJson("/api/v1/sensor-configuration-profiles?include_disabled=true&limit=500&offset=0"),
+      fetchJson(
+        "/api/v1/sensor-configuration-rollouts"
+          + `?include_terminal=${includeTerminal}&limit=500&offset=0`,
+      ),
+    ]);
+    if (sequence !== fleetLoadSequence) return;
+    fleetProfiles = Array.isArray(profilesPayload.profiles) ? profilesPayload.profiles : [];
+    fleetRollouts = Array.isArray(rolloutsPayload.rollouts) ? rolloutsPayload.rollouts : [];
+
+    if (!fleetProfiles.some((item) => String(item.id) === String(fleetSelectedProfileId))) {
+      fleetSelectedProfileId = fleetProfiles[0]?.id ?? null;
+      fleetProfileVersions = [];
+    }
+    if (!fleetRollouts.some((item) => String(item.id) === String(fleetSelectedRolloutId))) {
+      fleetSelectedRolloutId = fleetRollouts[0]?.id ?? null;
+      fleetSelectedRollout = null;
+    }
+    renderFleetProfiles();
+    renderRolloutSensorTargets();
+    renderFleetRollouts();
+
+    const details = [];
+    if (fleetSelectedProfileId) details.push(loadFleetProfileVersions(fleetSelectedProfileId));
+    if (fleetSelectedRolloutId) details.push(selectFleetRollout(fleetSelectedRolloutId));
+    await Promise.all(details);
+    if (sequence !== fleetLoadSequence) return;
+    setFleetConfigurationMessage(
+      `Profile: ${fleetProfiles.length} · rollouty: ${fleetRollouts.length}. `
+        + "Utworzenie rollout'u zapisuje tylko draft.",
+    );
+  } catch (error) {
+    if (sequence !== fleetLoadSequence) return;
+    setFleetConfigurationMessage(`Nie udało się pobrać danych: ${error.message}`, true);
+  } finally {
+    if (sequence === fleetLoadSequence) elements.fleetConfigurationRefresh.disabled = false;
+  }
+}
+
+function closeFleetConfigurationEditor() {
+  fleetLoadSequence += 1;
+  elements.fleetConfigurationEditor.classList.add("hidden");
+  elements.profileCreateForm.classList.add("hidden");
+  elements.rolloutCreateForm.classList.add("hidden");
+  elements.profileCreateToggle.setAttribute("aria-expanded", "false");
+  elements.rolloutCreateToggle.setAttribute("aria-expanded", "false");
+}
+
+async function openFleetConfigurationEditor() {
+  if (!canAdminister()) {
+    showToast("Ta operacja wymaga roli administrator.", true);
+    return;
+  }
+  cancelZoneDrawing();
+  cancelSensorRegistration();
+  closeSensorToken();
+  closeSensorConfigurationEditor();
+  closeSensorOverview({ restoreFocus: false });
+  elements.operatorEditor.classList.add("hidden");
+  elements.securityEditor.classList.add("hidden");
+  clearSelection();
+  setOperatorMenuOpen(false);
+  setFleetTab(fleetActiveTab);
+  elements.fleetConfigurationEditor.classList.remove("hidden");
+  renderRolloutSensorTargets();
+  await loadFleetConfigurationConsole();
+}
+
+function setProfileCreateFormOpen(open) {
+  elements.profileCreateForm.classList.toggle("hidden", !open);
+  elements.profileCreateToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    elements.profileCreateForm.reset();
+    populateFleetManagedConfiguration("profile-create", SENSOR_CONFIGURATION_DEFAULTS);
+    elements.profileCreateKey.focus();
+  }
+}
+
+async function createFleetProfile(event) {
+  event.preventDefault();
+  if (!canAdminister()) return;
+  let configuration;
+  try {
+    configuration = readFleetManagedConfiguration("profile-create");
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+  const profileKey = elements.profileCreateKey.value.trim();
+  const displayName = elements.profileCreateName.value.trim();
+  const changeNote = elements.profileCreateNote.value.trim();
+  if (!window.confirm(`Utworzyć profil „${displayName}” z pierwszą niemodyfikowalną wersją?`)) return;
+  const submit = elements.profileCreateForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const payload = await adminRequest("/api/v1/sensor-configuration-profiles", "POST", {
+      profile_key: profileKey,
+      display_name: displayName,
+      description: elements.profileCreateDescription.value.trim() || null,
+      configuration,
+      change_note: changeNote,
+    });
+    fleetSelectedProfileId = payload.profile?.id ?? null;
+    setProfileCreateFormOpen(false);
+    showToast(`Utworzono profil „${displayName}”.`);
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Utworzenie profilu nie powiodło się: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function updateFleetProfileMetadata(event) {
+  event.preventDefault();
+  const profile = selectedFleetProfile();
+  if (!canAdminister() || !profile) return;
+  const displayName = elements.profileMetadataName.value.trim();
+  if (!window.confirm(`Zapisać metadane profilu „${profile.profile_key}”?`)) return;
+  const submit = elements.profileMetadataForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensor-configuration-profiles/${encodeURIComponent(profile.id)}`,
+      "PUT",
+      {
+        display_name: displayName,
+        description: elements.profileMetadataDescription.value.trim() || null,
+        enabled: elements.profileMetadataEnabled.checked,
+      },
+    );
+    showToast("Zapisano metadane profilu.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Zapis profilu nie powiódł się: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function createFleetProfileVersion(event) {
+  event.preventDefault();
+  const profile = selectedFleetProfile();
+  if (!canAdminister() || !profile) return;
+  let configuration;
+  try {
+    configuration = readFleetManagedConfiguration("profile-version");
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+  const changeNote = elements.profileVersionNote.value.trim();
+  const nextVersion = Number(profile.current_version) + 1;
+  if (!window.confirm(
+    `Utworzyć niemodyfikowalną wersję ${nextVersion} profilu „${profile.profile_key}”?`,
+  )) return;
+  const submit = elements.profileVersionForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensor-configuration-profiles/${encodeURIComponent(profile.id)}/versions`,
+      "POST",
+      { configuration, change_note: changeNote },
+    );
+    showToast(`Utworzono wersję ${nextVersion} profilu.`);
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Utworzenie wersji nie powiodło się: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function setRolloutCreateFormOpen(open) {
+  elements.rolloutCreateForm.classList.toggle("hidden", !open);
+  elements.rolloutCreateToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    elements.rolloutCreateForm.reset();
+    renderRolloutProfileOptions();
+    renderRolloutSensorTargets();
+    elements.rolloutCreateBatchSize.value = "1";
+  }
+}
+
+async function createFleetRollout(event) {
+  event.preventDefault();
+  if (!canAdminister()) return;
+  const profileId = elements.rolloutCreateProfile.value;
+  const profileVersion = Number(elements.rolloutCreateVersion.value);
+  const batchSize = Number(elements.rolloutCreateBatchSize.value);
+  const changeNote = elements.rolloutCreateNote.value.trim();
+  const sensorIds = [...elements.rolloutCreateSensors.querySelectorAll("[data-rollout-sensor]:checked")]
+    .map((input) => input.value);
+  if (!profileId || !Number.isSafeInteger(profileVersion) || profileVersion < 1) {
+    showToast("Wybierz poprawny profil i wersję.", true);
+    return;
+  }
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 25) {
+    showToast("Wielkość partii musi wynosić od 1 do 25.", true);
+    return;
+  }
+  if (sensorIds.length < 1 || sensorIds.length > 100) {
+    showToast("Wybierz od 1 do 100 sensorów.", true);
+    return;
+  }
+  if (!window.confirm(
+    `Utworzyć draft rollout'u dla ${sensorIds.length} sensorów? `
+      + "Konfiguracja nie zostanie jeszcze wdrożona.",
+  )) return;
+  const submit = elements.rolloutCreateForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const payload = await adminRequest("/api/v1/sensor-configuration-rollouts", "POST", {
+      profile_id: profileId,
+      profile_version: profileVersion,
+      sensor_ids: sensorIds,
+      batch_size: batchSize,
+      change_note: changeNote,
+    });
+    fleetSelectedRolloutId = payload.rollout?.id ?? null;
+    fleetSelectedRollout = payload.rollout ?? null;
+    setRolloutCreateFormOpen(false);
+    showToast("Utworzono draft rollout'u. Żaden sensor nie został jeszcze zmieniony.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Utworzenie rollout'u nie powiodło się: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function runFleetRolloutAction(action) {
+  const rollout = fleetSelectedRollout;
+  if (!canAdminister() || !rollout) return;
+  const changeNote = elements.rolloutActionNote.value.trim();
+  if (changeNote.length < 3) {
+    showToast("Notatka operatora musi mieć co najmniej 3 znaki.", true);
+    elements.rolloutActionNote.focus();
+    return;
+  }
+  const prompts = {
+    start: "Uruchomić pierwszą partię? Wybrane sensory otrzymają nową rewizję konfiguracji.",
+    advance: "Wdrożyć następną partię lub zakończyć rollout, jeśli wszystkie sensory są już wdrożone?",
+    cancel: "Anulować rollout? Już wdrożone konfiguracje nie zostaną automatycznie cofnięte.",
+    rollback: "Przywrócić migawki konfiguracji sprzed rollout'u? Każdy sensor otrzyma nową rewizję i musi ponownie potwierdzić jej zastosowanie.",
+  };
+  if (!window.confirm(prompts[action])) return;
+  const button = {
+    start: elements.rolloutStart,
+    advance: elements.rolloutAdvance,
+    cancel: elements.rolloutCancel,
+    rollback: elements.rolloutRollback,
+  }[action];
+  button.disabled = true;
+  try {
+    const payload = await adminRequest(
+      `/api/v1/sensor-configuration-rollouts/${encodeURIComponent(rollout.id)}/${action}`,
+      "POST",
+      { change_note: changeNote },
+    );
+    fleetSelectedRollout = payload.rollout ?? null;
+    fleetSelectedRolloutId = payload.rollout?.id ?? rollout.id;
+    if (payload.rollout?.status === "completed" || payload.rollout?.status === "cancelled") {
+      elements.rolloutShowTerminal.checked = true;
+    }
+    elements.rolloutActionNote.value = "";
+    showToast(
+      action === "start"
+        ? "Uruchomiono pierwszą partię rollout'u."
+        : action === "advance"
+          ? "Zaktualizowano stan rollout'u."
+          : action === "cancel"
+            ? "Anulowano rollout bez automatycznego cofania wdrożeń."
+            : "Wysłano bezpieczny rollback. Oczekiwanie na raporty agentów.",
+    );
+    await Promise.all([loadFleetConfigurationConsole(), refresh()]);
+  } catch (error) {
+    showToast(`Operacja rollout'u nie powiodła się: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function setSensorConfigurationFormDisabled(disabled) {
   for (const definition of Object.values(SENSOR_CONFIGURATION_FIELDS)) {
     elements[definition.element].disabled = disabled;
@@ -6005,6 +6768,9 @@ function renderSensorConfigurationEditorState(configuration) {
     `configuration-value configuration-${state.compliance}`;
   elements.sensorConfigurationRevisions.textContent =
     sensorConfigurationRevisionLabel(state);
+  elements.sensorConfigurationProfile.textContent = configuration?.assigned_profile_key
+    ? `${configuration.assigned_profile_key} v${configuration.assigned_profile_version}`
+    : "Konfiguracja ręczna";
   elements.sensorConfigurationError.textContent = state.applyError || "";
   elements.sensorConfigurationError.classList.toggle("hidden", !state.applyError);
 }
@@ -6040,6 +6806,7 @@ async function openSensorConfigurationEditor(sensor) {
   elements.sensorConfigurationCompliance.textContent = "—";
   elements.sensorConfigurationCompliance.className = "configuration-value";
   elements.sensorConfigurationRevisions.textContent = "—";
+  elements.sensorConfigurationProfile.textContent = "—";
   elements.sensorConfigurationError.classList.add("hidden");
   elements.sensorConfigurationEditor.classList.remove("hidden");
   setSensorConfigurationFormDisabled(true);
@@ -6069,8 +6836,12 @@ async function openSensorConfigurationEditor(sensor) {
     }
     populateSensorConfigurationForm(values);
     renderSensorConfigurationEditorState(configuration);
+    const assignmentWarning = configuration.assigned_profile_key
+      ? ` Sensor jest przypisany do profilu ${configuration.assigned_profile_key} `
+        + `v${configuration.assigned_profile_version}; zapis ręczny odłączy to przypisanie.`
+      : "";
     elements.sensorConfigurationHelp.textContent =
-      `Pola wczytano z: ${source}. Zapis utworzy nową rewizję konfiguracji.`;
+      `Pola wczytano z: ${source}. Zapis utworzy nową rewizję konfiguracji.${assignmentWarning}`;
     setSensorConfigurationFormDisabled(false);
     elements.sensorConfigurationHeartbeat.focus();
   } catch (error) {
@@ -6747,6 +7518,41 @@ for (const button of elements.operatorTabButtons) {
   });
   button.addEventListener("keydown", handleOperatorTabKeydown);
 }
+elements.fleetConfigurationOpen.addEventListener("click", () => {
+  void openFleetConfigurationEditor();
+});
+elements.fleetConfigurationClose.addEventListener("click", closeFleetConfigurationEditor);
+elements.fleetConfigurationRefresh.addEventListener("click", () => {
+  void loadFleetConfigurationConsole();
+});
+for (const button of elements.fleetTabButtons) {
+  button.addEventListener("click", () => setFleetTab(button.dataset.fleetTab));
+}
+elements.profileCreateToggle.addEventListener("click", () => {
+  setProfileCreateFormOpen(elements.profileCreateForm.classList.contains("hidden"));
+});
+elements.profileCreateCancel.addEventListener("click", () => setProfileCreateFormOpen(false));
+elements.profileCreateForm.addEventListener("submit", createFleetProfile);
+elements.profileMetadataForm.addEventListener("submit", updateFleetProfileMetadata);
+elements.profileVersionForm.addEventListener("submit", createFleetProfileVersion);
+elements.rolloutCreateToggle.addEventListener("click", () => {
+  setRolloutCreateFormOpen(elements.rolloutCreateForm.classList.contains("hidden"));
+});
+elements.rolloutCreateCancel.addEventListener("click", () => setRolloutCreateFormOpen(false));
+elements.rolloutCreateForm.addEventListener("submit", createFleetRollout);
+elements.rolloutCreateProfile.addEventListener("change", () => {
+  const selected = elements.rolloutCreateProfile.selectedOptions[0];
+  if (selected) elements.rolloutCreateVersion.value = selected.dataset.currentVersion;
+});
+elements.rolloutShowTerminal.addEventListener("change", () => {
+  fleetSelectedRolloutId = null;
+  fleetSelectedRollout = null;
+  void loadFleetConfigurationConsole();
+});
+elements.rolloutStart.addEventListener("click", () => void runFleetRolloutAction("start"));
+elements.rolloutAdvance.addEventListener("click", () => void runFleetRolloutAction("advance"));
+elements.rolloutCancel.addEventListener("click", () => void runFleetRolloutAction("cancel"));
+elements.rolloutRollback.addEventListener("click", () => void runFleetRolloutAction("rollback"));
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.manageOperators.addEventListener("click", openOperatorEditor);
@@ -6805,6 +7611,11 @@ document.addEventListener("keydown", (event) => {
     !elements.sensorOverviewPanel.classList.contains("hidden")
   ) {
     closeSensorOverview();
+  } else if (
+    event.key === "Escape" &&
+    !elements.fleetConfigurationEditor.classList.contains("hidden")
+  ) {
+    closeFleetConfigurationEditor();
   } else if (event.key === "Escape" && !elements.zoneEditor.classList.contains("hidden")) {
     cancelZoneDrawing();
   } else if (
