@@ -180,11 +180,26 @@ class SensorConfigurationFleetUiTests(unittest.TestCase):
         self.assertIn("width: min(1120px", STYLES)
         self.assertIn("@media (max-width: 900px)", STYLES)
 
-    def test_release_version_is_0250(self) -> None:
+    def test_fleet_form_checkboxes_align_with_their_text(self) -> None:
+        alignment_rule = re.compile(
+            r'\.fleet-form label\.toggle-row\s*\{'
+            r'[\s\S]*?display:\s*flex;'
+            r'[\s\S]*?align-items:\s*center;'
+            r'[\s\S]*?\}',
+        )
+        checkbox_rule = re.compile(
+            r'\.fleet-form label\.toggle-row input\[type="checkbox"\]\s*\{'
+            r'[\s\S]*?margin:\s*0;'
+            r'[\s\S]*?\}',
+        )
+        self.assertRegex(STYLES, alignment_rule)
+        self.assertRegex(STYLES, checkbox_rule)
+
+    def test_release_version_is_0260(self) -> None:
         package = json.loads((ROOT / "web/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["version"], "0.25.0")
+        self.assertEqual(package["version"], "0.26.0")
         api_main = (ROOT / "server/api/app/main.py").read_text(encoding="utf-8")
-        self.assertIn('version="0.25.0"', api_main)
+        self.assertIn('version="0.26.0"', api_main)
 
 
 if __name__ == "__main__":

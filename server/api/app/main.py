@@ -62,6 +62,9 @@ from app.configuration_rollout_store import (
 from app.fleet_readiness_store import (
     FleetReadinessPolicyConflict,
     get_sensor_fleet_readiness,
+    get_sensor_fleet_readiness_timeline,
+    list_sensor_fleet_readiness_history,
+    reconcile_sensor_fleet_readiness,
     update_sensor_fleet_readiness_policy,
 )
 from app.database import (
@@ -169,6 +172,17 @@ async def sensor_status_monitor() -> None:
         except psycopg.Error:
             logger.exception("Sensor status monitor could not reach the database")
         try:
+            readiness_changes = await asyncio.to_thread(
+                reconcile_sensor_fleet_readiness
+            )
+            if readiness_changes["history_events"]:
+                logger.info(
+                    "Recorded %s fleet readiness transition(s)",
+                    readiness_changes["history_events"],
+                )
+        except (psycopg.Error, RuntimeError):
+            logger.exception("Fleet readiness history monitor failed")
+        try:
             paused = await asyncio.to_thread(
                 monitor_active_sensor_configuration_rollouts
             )
@@ -195,7 +209,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.25.0",
+    version="0.26.0",
     lifespan=lifespan,
 )
 
@@ -721,6 +735,58 @@ def get_sensor_fleet_readiness_view() -> dict[str, object]:
         logger.exception("Sensor fleet readiness query failed")
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"time": utc_now(), **readiness_payload}
+
+
+@app.get(
+    "/api/v1/sensor-fleet/readiness-history",
+    tags=["sensor-fleet"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_fleet_readiness_history_view(
+    sensor_id: UUID | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=2160),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        events, total = list_sensor_fleet_readiness_history(
+            sensor_id=sensor_id,
+            hours=hours,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor fleet readiness history query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "time": utc_now(),
+        "hours": hours,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "events": events,
+    }
+
+
+@app.get(
+    "/api/v1/sensors/{sensor_id}/readiness-history",
+    tags=["sensor-fleet"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_fleet_readiness_timeline_view(
+    sensor_id: UUID,
+    hours: SensorHealthHistoryWindow = Query(
+        default=SensorHealthHistoryWindow.ONE_DAY
+    ),
+) -> dict[str, object]:
+    try:
+        history = get_sensor_fleet_readiness_timeline(sensor_id, int(hours))
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor fleet readiness timeline query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if history is None:
+        raise HTTPException(status_code=404, detail="sensor not found")
+    return {"time": utc_now(), **history}
 
 
 @app.put(

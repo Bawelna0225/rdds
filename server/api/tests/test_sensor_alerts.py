@@ -72,8 +72,10 @@ class SensorAlertPersistenceTests(unittest.TestCase):
         self.assertEqual(4, opened)
         self.assertEqual(2, closed)
         upsert = cursor.queries[0]
-        self.assertIn("ON CONFLICT (sensor_id)", upsert)
+        self.assertIn("ON CONFLICT (sensor_id, alert_kind)", upsert)
         self.assertIn("FROM sensor_alerts AS existing", upsert)
+        self.assertIn("existing.alert_kind = 'health'", upsert)
+        self.assertIn("'health'", upsert)
         self.assertIn("state IN ('active', 'acknowledged')", upsert)
         self.assertIn("sensor.health_issue_started_at", upsert)
         self.assertIn("sensor.health_changed_at <=", upsert)
@@ -90,6 +92,7 @@ class SensorAlertPersistenceTests(unittest.TestCase):
             sensor_alert_store.evaluate_sensor_alerts()
 
         close_query = cursor.queries[1]
+        self.assertIn("alert.alert_kind = 'health'", close_query)
         self.assertIn("sensor.status NOT IN ('degraded', 'offline')", close_query)
         self.assertIn("WHEN sensor.status = 'maintenance' THEN 'maintenance'", close_query)
         self.assertIn("WHEN sensor.status = 'disabled' THEN 'disabled'", close_query)
@@ -114,6 +117,9 @@ class SensorAlertPersistenceTests(unittest.TestCase):
         self.assertIn("alert.closed_at >= %(closed_from)s", query)
         self.assertIn("alert.closed_at < %(closed_before)s", query)
         self.assertIn("sensor.reported_dead_letter_depth AS dead_letter_depth", query)
+        self.assertIn("alert.alert_kind", query)
+        self.assertIn("alert.condition_details", query)
+        self.assertIn("readiness.readiness_status AS fleet_readiness_status", query)
         self.assertIn("sensor.fixed_position::geometry", query)
         self.assertIn("alert.id = %(alert_id)s", query)
         self.assertIsNotNone(cursor.parameters[0]["alert_id"])

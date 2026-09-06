@@ -27,9 +27,11 @@ def evaluate_sensor_alerts() -> tuple[int, int]:
             f"""
             INSERT INTO sensor_alerts (
                 sensor_id,
+                alert_kind,
                 state,
                 severity,
                 reason,
+                condition_details,
                 condition_started_at,
                 opened_at,
                 last_observed_at,
@@ -37,9 +39,11 @@ def evaluate_sensor_alerts() -> tuple[int, int]:
             )
             SELECT
                 sensor.id,
+                'health',
                 'active',
                 {SEVERITY_SQL},
                 sensor.health_reason,
+                '{{}}'::jsonb,
                 CASE
                     WHEN sensor.status = 'offline' THEN sensor.health_changed_at
                     ELSE sensor.health_issue_started_at
@@ -56,6 +60,7 @@ def evaluate_sensor_alerts() -> tuple[int, int]:
                       SELECT 1
                       FROM sensor_alerts AS existing
                       WHERE existing.sensor_id = sensor.id
+                        AND existing.alert_kind = 'health'
                         AND existing.state IN ('active', 'acknowledged')
                   )
                   OR (
@@ -69,7 +74,7 @@ def evaluate_sensor_alerts() -> tuple[int, int]:
                           NOW() - (%(degraded_delay)s * INTERVAL '1 second')
                   )
               )
-            ON CONFLICT (sensor_id)
+            ON CONFLICT (sensor_id, alert_kind)
                 WHERE state IN ('active', 'acknowledged')
             DO UPDATE SET
                 severity = EXCLUDED.severity,
@@ -110,11 +115,136 @@ def evaluate_sensor_alerts() -> tuple[int, int]:
                 updated_at = NOW()
             FROM sensors AS sensor
             WHERE alert.sensor_id = sensor.id
+              AND alert.alert_kind = 'health'
               AND alert.state IN ('active', 'acknowledged')
               AND (
                   sensor.deleted_at IS NOT NULL
                   OR sensor.status NOT IN ('degraded', 'offline')
                   OR sensor.health_issue_started_at IS NULL
+              )
+            """
+        )
+        closed = cursor.rowcount
+    return opened_or_refreshed, closed
+
+
+def evaluate_sensor_readiness_alerts() -> tuple[int, int]:
+    """Open delayed readiness alerts and close them after recovery/exclusion."""
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO sensor_alerts (
+                sensor_id,
+                alert_kind,
+                state,
+                severity,
+                reason,
+                condition_details,
+                condition_started_at,
+                opened_at,
+                last_observed_at,
+                occurrence_count
+            )
+            SELECT
+                sensor.id,
+                'readiness',
+                'active',
+                CASE
+                    WHEN readiness.readiness_status = 'blocked' THEN 'high'
+                    ELSE 'medium'
+                END,
+                'fleet_readiness_' || readiness.readiness_status,
+                jsonb_build_object(
+                    'readiness_status', readiness.readiness_status,
+                    'policy_revision', readiness.policy_revision,
+                    'rollout_eligible', readiness.rollout_eligible,
+                    'agent_version_state', readiness.agent_version_state,
+                    'reasons', readiness.reasons
+                ),
+                readiness.state_changed_at,
+                NOW(),
+                NOW(),
+                1
+            FROM sensor_fleet_readiness_state AS readiness
+            JOIN sensors AS sensor ON sensor.id = readiness.sensor_id
+            WHERE sensor.deleted_at IS NULL
+              AND readiness.readiness_status IN ('attention', 'blocked')
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM sensor_alerts AS existing
+                      WHERE existing.sensor_id = sensor.id
+                        AND existing.alert_kind = 'readiness'
+                        AND existing.state IN ('active', 'acknowledged')
+                  )
+                  OR readiness.state_changed_at <= NOW() - (
+                      CASE readiness.readiness_status
+                          WHEN 'blocked' THEN %(blocked_delay)s
+                          ELSE %(attention_delay)s
+                      END * INTERVAL '1 second'
+                  )
+              )
+            ON CONFLICT (sensor_id, alert_kind)
+                WHERE state IN ('active', 'acknowledged')
+            DO UPDATE SET
+                severity = EXCLUDED.severity,
+                reason = EXCLUDED.reason,
+                condition_details = EXCLUDED.condition_details,
+                last_observed_at = NOW(),
+                occurrence_count = sensor_alerts.occurrence_count + CASE
+                    WHEN sensor_alerts.reason IS DISTINCT FROM EXCLUDED.reason
+                      OR sensor_alerts.severity IS DISTINCT FROM EXCLUDED.severity
+                      OR (
+                          sensor_alerts.condition_details - 'policy_revision'
+                      ) IS DISTINCT FROM (
+                          EXCLUDED.condition_details - 'policy_revision'
+                      )
+                    THEN 1
+                    ELSE 0
+                END,
+                updated_at = NOW()
+            WHERE sensor_alerts.reason IS DISTINCT FROM EXCLUDED.reason
+               OR sensor_alerts.severity IS DISTINCT FROM EXCLUDED.severity
+               OR sensor_alerts.condition_details IS DISTINCT FROM
+                    EXCLUDED.condition_details
+               OR sensor_alerts.last_observed_at < NOW() - INTERVAL '30 seconds'
+            """,
+            {
+                "blocked_delay": (
+                    settings.sensor_readiness_alert_blocked_after_seconds
+                ),
+                "attention_delay": (
+                    settings.sensor_readiness_alert_attention_after_seconds
+                ),
+            },
+        )
+        opened_or_refreshed = cursor.rowcount
+
+        cursor.execute(
+            """
+            UPDATE sensor_alerts AS alert
+            SET
+                state = 'closed',
+                closed_at = NOW(),
+                closed_by = 'system',
+                resolution = CASE
+                    WHEN sensor.deleted_at IS NOT NULL THEN 'sensor_deleted'
+                    WHEN readiness.sensor_id IS NULL THEN 'readiness_state_unavailable'
+                    WHEN readiness.readiness_status = 'excluded' THEN 'sensor_excluded'
+                    ELSE 'readiness_restored'
+                END,
+                last_observed_at = NOW(),
+                updated_at = NOW()
+            FROM sensors AS sensor
+            LEFT JOIN sensor_fleet_readiness_state AS readiness
+              ON readiness.sensor_id = sensor.id
+            WHERE alert.sensor_id = sensor.id
+              AND alert.alert_kind = 'readiness'
+              AND alert.state IN ('active', 'acknowledged')
+              AND (
+                  sensor.deleted_at IS NOT NULL
+                  OR readiness.sensor_id IS NULL
+                  OR readiness.readiness_status NOT IN ('attention', 'blocked')
               )
             """
         )
@@ -137,9 +267,11 @@ def list_sensor_alerts(
             SELECT
                 alert.id,
                 alert.sensor_id,
+                alert.alert_kind,
                 alert.state,
                 alert.severity,
                 alert.reason,
+                alert.condition_details,
                 alert.condition_started_at,
                 alert.opened_at,
                 alert.last_observed_at,
@@ -163,12 +295,20 @@ def list_sensor_alerts(
                 sensor.health_issue_started_at,
                 sensor.agent_version,
                 sensor.source_connected,
+                readiness.policy_revision AS fleet_readiness_policy_revision,
+                readiness.readiness_status AS fleet_readiness_status,
+                readiness.rollout_eligible AS fleet_rollout_eligible,
+                readiness.agent_version_state AS fleet_agent_version_state,
+                readiness.reasons AS fleet_readiness_reasons,
+                readiness.state_changed_at AS fleet_readiness_changed_at,
                 sensor.reported_queue_depth AS queue_depth,
                 sensor.reported_dead_letter_depth AS dead_letter_depth,
                 ST_Y(sensor.fixed_position::geometry) AS latitude,
                 ST_X(sensor.fixed_position::geometry) AS longitude
             FROM sensor_alerts AS alert
             JOIN sensors AS sensor ON sensor.id = alert.sensor_id
+            LEFT JOIN sensor_fleet_readiness_state AS readiness
+              ON readiness.sensor_id = sensor.id
             WHERE (
                 CASE
                     WHEN %(closed_only)s THEN alert.state = 'closed'

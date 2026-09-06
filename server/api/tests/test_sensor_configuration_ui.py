@@ -56,11 +56,11 @@ class SensorConfigurationUiTests(unittest.TestCase):
         self.assertIn('<span>Konfiguracja</span>', INDEX)
         self.assertIn("sensorConfigurationPriority", MAIN_JS)
 
-    def test_release_version_is_0250(self) -> None:
+    def test_release_version_is_0260(self) -> None:
         package = json.loads((ROOT / "web/package.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["version"], "0.25.0")
+        self.assertEqual(package["version"], "0.26.0")
         api_main = (ROOT / "server/api/app/main.py").read_text(encoding="utf-8")
-        self.assertIn('version="0.25.0"', api_main)
+        self.assertIn('version="0.26.0"', api_main)
 
 
 if __name__ == "__main__":

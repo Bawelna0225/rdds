@@ -118,6 +118,13 @@ const sensorHealthReasonLabels = {
   heartbeat_timeout: "brak heartbeat agenta",
   maintenance: "zaplanowana konserwacja",
   disabled: "sensor wyłączony administracyjnie",
+  fleet_readiness_blocked: "gotowość operacyjna zablokowana",
+  fleet_readiness_attention: "gotowość operacyjna wymaga uwagi",
+};
+
+const sensorAlertKindLabels = {
+  health: "kondycja sensora",
+  readiness: "gotowość floty",
 };
 
 const sensorConfigurationComplianceLabels = {
@@ -154,6 +161,7 @@ const fleetReadinessStatusLabels = {
   attention: "wymaga uwagi",
   blocked: "zablokowany",
   excluded: "poza oceną",
+  unknown: "brak danych",
 };
 
 const fleetReadinessReasonLabels = {
@@ -253,6 +261,9 @@ const sensorAlertResolutionLabels = {
   maintenance: "tryb konserwacji",
   disabled: "sensor wyłączony",
   sensor_deleted: "sensor usunięty",
+  readiness_restored: "gotowość operacyjna odzyskana",
+  sensor_excluded: "sensor wyłączony z oceny gotowości",
+  readiness_state_unavailable: "brak aktualnej oceny gotowości",
 };
 
 const severityColorVariables = {
@@ -407,6 +418,10 @@ const elements = {
   fleetReadinessSummary: document.querySelector("#fleet-readiness-summary"),
   fleetReadinessSensorList: document.querySelector("#fleet-readiness-sensor-list"),
   fleetReadinessVersionList: document.querySelector("#fleet-readiness-version-list"),
+  fleetReadinessHistoryTitle: document.querySelector("#fleet-readiness-history-title"),
+  fleetReadinessHistoryMeta: document.querySelector("#fleet-readiness-history-meta"),
+  fleetReadinessHistoryContent: document.querySelector("#fleet-readiness-history-content"),
+  fleetReadinessHistoryWindowButtons: document.querySelectorAll("[data-readiness-hours]"),
   fleetReadinessPolicyForm: document.querySelector("#fleet-readiness-policy-form"),
   fleetPolicyMinimumVersion: document.querySelector("#fleet-policy-minimum-version"),
   fleetPolicyRecommendedVersion: document.querySelector("#fleet-policy-recommended-version"),
@@ -763,6 +778,13 @@ let fleetProfiles = [];
 let fleetProfileVersions = [];
 let fleetRollouts = [];
 let fleetReadiness = null;
+let fleetSelectedReadinessSensorId = null;
+let fleetReadinessTimeline = null;
+let fleetReadinessTimelineSensorId = null;
+let fleetReadinessTimelineHours = 24;
+let fleetReadinessTimelineLoadingId = null;
+let fleetReadinessTimelineError = null;
+let fleetReadinessTimelineRequestSequence = 0;
 let fleetSelectedProfileId = null;
 let fleetSelectedRolloutId = null;
 let fleetSelectedRollout = null;
@@ -3130,6 +3152,17 @@ function sensorAlertDisplayName(alert) {
   return alert.sensor_name || alert.sensor_key || alert.sensor_id || "Sensor";
 }
 
+function sensorAlertKindLabel(kind) {
+  return sensorAlertKindLabels[kind] ?? kind ?? "kondycja sensora";
+}
+
+function fleetReadinessReasonsLabel(reasons) {
+  if (!Array.isArray(reasons) || reasons.length === 0) return "brak ograniczeń";
+  return reasons.map(
+    (item) => fleetReadinessReasonLabels[item.code] ?? item.code,
+  ).join(" · ");
+}
+
 function createSensorAlertCard(alert, { archive = false } = {}) {
   const pendingAction = pendingSensorAlertActions.get(String(alert.id));
   const card = document.createElement("div");
@@ -3154,6 +3187,8 @@ function createSensorAlertCard(alert, { archive = false } = {}) {
 
   const meta = document.createElement("div");
   meta.className = "entity-meta";
+  const kind = document.createElement("span");
+  kind.textContent = sensorAlertKindLabel(alert.alert_kind);
   const reason = document.createElement("span");
   reason.textContent = sensorHealthReasonLabel(alert.reason);
   const severity = document.createElement("span");
@@ -3162,7 +3197,7 @@ function createSensorAlertCard(alert, { archive = false } = {}) {
   time.textContent = archive
     ? `Zamknięto: ${formatDateTime(alert.closed_at)}`
     : `Trwa: ${formatDuration(alert.duration_seconds)}`;
-  meta.append(reason, severity, time);
+  meta.append(kind, reason, severity, time);
   main.append(titleRow, meta);
   card.append(main);
 
@@ -4801,6 +4836,7 @@ function renderSensorAlertSelection(alert) {
   elements.selectionTimelineTitle.textContent = "Historia alarmu sensora";
   elements.selectionDetails.replaceChildren(
     detailSection("Alarm"),
+    detailItem("Rodzaj", sensorAlertKindLabel(alert.alert_kind)),
     detailItem("Stan", alertStateLabel(alert.state)),
     detailItem("Priorytet", severityLabel(alert.severity)),
     detailItem("Powód", sensorHealthReasonLabel(alert.reason)),
@@ -4808,6 +4844,24 @@ function renderSensorAlertSelection(alert) {
     detailItem("Alarm otwarto", formatDateTime(alert.opened_at)),
     detailItem("Czas trwania", formatDuration(alert.duration_seconds)),
     detailItem("Aktualizacje problemu", formatInteger(alert.occurrence_count)),
+    ...(alert.alert_kind === "readiness"
+      ? [
+          detailItem(
+            "Zarejestrowana gotowość",
+            fleetReadinessStatusLabels[
+              alert.condition_details?.readiness_status
+            ] ?? alert.condition_details?.readiness_status,
+          ),
+          detailItem(
+            "Zarejestrowane przyczyny",
+            fleetReadinessReasonsLabel(alert.condition_details?.reasons),
+          ),
+          detailItem(
+            "Polityka oceny alarmu",
+            alert.condition_details?.policy_revision,
+          ),
+        ]
+      : []),
     ...(alert.acknowledged_at
       ? [
           detailItem("Potwierdził", alert.acknowledged_by),
@@ -4828,6 +4882,20 @@ function renderSensorAlertSelection(alert) {
     detailItem("Sensor", sensorAlertDisplayName(alert)),
     detailItem("Status", stateLabel(alert.sensor_status)),
     detailItem("Stan toru detekcji", sensorHealthReasonLabel(alert.sensor_health_reason)),
+    ...(alert.alert_kind === "readiness"
+      ? [
+          detailItem(
+            "Gotowość floty",
+            fleetReadinessStatusLabels[alert.fleet_readiness_status]
+              ?? alert.fleet_readiness_status,
+          ),
+          detailItem(
+            "Aktualne przyczyny gotowości",
+            fleetReadinessReasonsLabel(alert.fleet_readiness_reasons),
+          ),
+          detailItem("Rewizja polityki", alert.fleet_readiness_policy_revision),
+        ]
+      : []),
     detailItem("Zmiana kondycji", formatDateTime(alert.health_changed_at)),
     detailItem("Agent", alert.agent_version),
     detailItem("Źródło połączone", formatBoolean(alert.source_connected)),
@@ -4986,6 +5054,10 @@ function renderAuditSelection(event) {
     detailItem("Sensor", event.sensor_name || event.sensor_key),
     ...(event.sensor_alert_id
       ? [
+          detailItem(
+            "Rodzaj alarmu sensora",
+            sensorAlertKindLabel(event.sensor_alert_kind),
+          ),
           detailItem("Stan alarmu sensora", alertStateLabel(event.sensor_alert_state)),
           detailItem("Priorytet alarmu sensora", severityLabel(event.sensor_alert_severity)),
           detailItem("Przyczyna alarmu sensora", sensorHealthReasonLabel(event.sensor_alert_reason)),
@@ -6155,6 +6227,200 @@ function setFleetTab(tab) {
   }
 }
 
+function fleetReadinessTimelineReasonText(segment) {
+  if (segment.readiness_status === "unknown") return "Brak zarejestrowanej oceny";
+  const reasons = Array.isArray(segment.reasons) ? segment.reasons : [];
+  if (reasons.length === 0) return "Brak powodów ograniczających gotowość";
+  return reasons.map(
+    (item) => fleetReadinessReasonLabels[item.code] ?? item.code,
+  ).join(" · ");
+}
+
+function updateFleetReadinessTimelineControls() {
+  for (const button of elements.fleetReadinessHistoryWindowButtons) {
+    button.classList.toggle(
+      "active",
+      Number(button.dataset.readinessHours) === fleetReadinessTimelineHours,
+    );
+  }
+}
+
+function renderFleetReadinessTimeline() {
+  updateFleetReadinessTimelineControls();
+  elements.fleetReadinessHistoryContent.replaceChildren();
+  const sensor = (fleetReadiness?.sensors ?? []).find(
+    (item) => String(item.id) === String(fleetSelectedReadinessSensorId),
+  );
+  if (!sensor) {
+    elements.fleetReadinessHistoryTitle.textContent = "Wybierz sensor";
+    elements.fleetReadinessHistoryMeta.textContent = "—";
+    elements.fleetReadinessHistoryContent.classList.add("empty-state");
+    elements.fleetReadinessHistoryContent.textContent =
+      "Wybierz sensor, aby zobaczyć dokładne czasy stanów.";
+    return;
+  }
+
+  elements.fleetReadinessHistoryTitle.textContent =
+    sensor.display_name || sensor.sensor_key;
+  if (fleetReadinessTimelineLoadingId === sensor.id) {
+    elements.fleetReadinessHistoryMeta.textContent = `${sensor.sensor_key} · wczytywanie…`;
+    elements.fleetReadinessHistoryContent.classList.add("empty-state", "inline-loading");
+    elements.fleetReadinessHistoryContent.textContent = "Wczytywanie historii gotowości…";
+    return;
+  }
+  elements.fleetReadinessHistoryContent.classList.remove("inline-loading");
+  if (fleetReadinessTimelineError) {
+    elements.fleetReadinessHistoryMeta.textContent = sensor.sensor_key;
+    elements.fleetReadinessHistoryContent.classList.add("empty-state");
+    elements.fleetReadinessHistoryContent.textContent =
+      `Nie udało się pobrać historii: ${fleetReadinessTimelineError}`;
+    return;
+  }
+  if (
+    String(fleetReadinessTimelineSensorId) !== String(sensor.id)
+    || !fleetReadinessTimeline
+  ) {
+    elements.fleetReadinessHistoryMeta.textContent = sensor.sensor_key;
+    elements.fleetReadinessHistoryContent.classList.add("empty-state");
+    elements.fleetReadinessHistoryContent.textContent = "Historia nie została jeszcze pobrana.";
+    return;
+  }
+
+  const history = fleetReadinessTimeline;
+  const summary = history.summary ?? {};
+  const current = history.current ?? {};
+  elements.fleetReadinessHistoryMeta.textContent = [
+    sensor.sensor_key,
+    `okno ${history.window_hours ?? fleetReadinessTimelineHours} h`,
+    `bieżąca polityka r${current.policy_revision ?? "—"}`,
+    `ocena ${formatDateTime(current.last_evaluated_at)}`,
+  ].join(" · ");
+  elements.fleetReadinessHistoryContent.classList.remove("empty-state");
+
+  const summaryGrid = document.createElement("div");
+  summaryGrid.className = "fleet-readiness-history-summary";
+  summaryGrid.append(
+    healthHistoryMetric("Gotowość", healthPercentLabel(summary.ready_percent)),
+    healthHistoryMetric("Gotowy", formatDuration(summary.ready_seconds)),
+    healthHistoryMetric("Uwaga", formatDuration(summary.attention_seconds)),
+    healthHistoryMetric("Zablokowany", formatDuration(summary.blocked_seconds)),
+    healthHistoryMetric("Poza oceną", formatDuration(summary.excluded_seconds)),
+    healthHistoryMetric("Brak danych", formatDuration(summary.unknown_seconds)),
+    healthHistoryMetric("Zmiany", formatInteger(summary.transition_count)),
+  );
+  elements.fleetReadinessHistoryContent.append(summaryGrid);
+
+  const timeline = Array.isArray(history.timeline) ? history.timeline : [];
+  if (timeline.length === 0) {
+    elements.fleetReadinessHistoryContent.append(
+      fleetText("p", "sensor-health-history-empty", "Brak historii w wybranym okresie."),
+    );
+    return;
+  }
+
+  const bar = document.createElement("div");
+  bar.className = "fleet-readiness-history-bar";
+  bar.setAttribute("aria-label", "Oś czasu gotowości sensora");
+  for (const segment of timeline) {
+    const part = document.createElement("span");
+    const status = segment.readiness_status ?? "unknown";
+    part.className = `fleet-readiness-history-segment readiness-${status}`;
+    part.style.flexGrow = String(Math.max(0, Number(segment.duration_seconds) || 0));
+    part.title = [
+      fleetReadinessStatusLabels[status] ?? status,
+      fleetReadinessTimelineReasonText(segment),
+      formatDuration(segment.duration_seconds),
+    ].join(" · ");
+    bar.append(part);
+  }
+  elements.fleetReadinessHistoryContent.append(bar);
+
+  const legend = document.createElement("div");
+  legend.className = "fleet-readiness-history-legend";
+  for (const [status, label] of [
+    ["ready", "gotowy"],
+    ["attention", "uwaga"],
+    ["blocked", "zablokowany"],
+    ["excluded", "poza oceną"],
+    ["unknown", "brak danych"],
+  ]) {
+    const item = fleetText("span", `legend-${status}`, label);
+    legend.append(item);
+  }
+  elements.fleetReadinessHistoryContent.append(legend);
+
+  const segmentList = document.createElement("div");
+  segmentList.className = "fleet-readiness-history-events";
+  for (const segment of [...timeline].reverse()) {
+    const status = segment.readiness_status ?? "unknown";
+    const item = document.createElement("div");
+    item.className = `fleet-readiness-history-event readiness-${status}`;
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText(
+        "strong",
+        "",
+        fleetReadinessStatusLabels[status] ?? status,
+      ),
+      fleetText("span", `fleet-status readiness-${status}`, formatDuration(
+        segment.duration_seconds,
+      )),
+    );
+    item.append(
+      heading,
+      fleetText("span", "fleet-card-meta", [
+        `${formatDateTime(segment.started_at)} → ${formatDateTime(segment.ended_at)}`,
+        segment.policy_revision ? `polityka r${segment.policy_revision}` : "bez oceny",
+      ].join(" · ")),
+      fleetText("p", "fleet-card-note", fleetReadinessTimelineReasonText(segment)),
+    );
+    segmentList.append(item);
+  }
+  elements.fleetReadinessHistoryContent.append(segmentList);
+}
+
+async function loadFleetReadinessTimeline(sensorId) {
+  const requestedSensorId = String(sensorId);
+  const requestedHours = fleetReadinessTimelineHours;
+  const sequence = ++fleetReadinessTimelineRequestSequence;
+  fleetReadinessTimelineLoadingId = sensorId;
+  fleetReadinessTimelineError = null;
+  renderFleetReadinessTimeline();
+  try {
+    const payload = await fetchJson(
+      `/api/v1/sensors/${encodeURIComponent(requestedSensorId)}`
+        + `/readiness-history?hours=${requestedHours}`,
+    );
+    if (
+      sequence !== fleetReadinessTimelineRequestSequence
+      || String(fleetSelectedReadinessSensorId) !== requestedSensorId
+      || fleetReadinessTimelineHours !== requestedHours
+    ) return;
+    fleetReadinessTimeline = payload;
+    fleetReadinessTimelineSensorId = sensorId;
+  } catch (error) {
+    if (sequence !== fleetReadinessTimelineRequestSequence) return;
+    fleetReadinessTimeline = null;
+    fleetReadinessTimelineSensorId = null;
+    fleetReadinessTimelineError = error.message;
+  } finally {
+    if (sequence === fleetReadinessTimelineRequestSequence) {
+      fleetReadinessTimelineLoadingId = null;
+      renderFleetReadinessTimeline();
+    }
+  }
+}
+
+function selectFleetReadinessSensor(sensorId) {
+  fleetSelectedReadinessSensorId = sensorId;
+  fleetReadinessTimeline = null;
+  fleetReadinessTimelineSensorId = null;
+  fleetReadinessTimelineError = null;
+  renderFleetReadiness();
+  void loadFleetReadinessTimeline(sensorId);
+}
+
 function renderFleetReadiness() {
   const payload = fleetReadiness;
   elements.fleetReadinessSummary.replaceChildren();
@@ -6166,6 +6432,7 @@ function renderFleetReadiness() {
     elements.fleetReadinessSensorList.textContent = "Brak danych o gotowości floty.";
     elements.fleetReadinessVersionList.classList.add("empty-state");
     elements.fleetReadinessVersionList.textContent = "Brak danych o wersjach.";
+    renderFleetReadinessTimeline();
     return;
   }
 
@@ -6237,11 +6504,29 @@ function renderFleetReadiness() {
   elements.fleetReadinessSensorList.classList.toggle("empty-state", sensors.length === 0);
   if (sensors.length === 0) {
     elements.fleetReadinessSensorList.textContent = "Brak sensorów.";
+    fleetSelectedReadinessSensorId = null;
+    renderFleetReadinessTimeline();
     return;
   }
+  if (!sensors.some(
+    (sensor) => String(sensor.id) === String(fleetSelectedReadinessSensorId),
+  )) {
+    fleetSelectedReadinessSensorId = null;
+    fleetReadinessTimeline = null;
+    fleetReadinessTimelineSensorId = null;
+  }
   for (const sensor of sensors) {
-    const row = document.createElement("article");
+    const row = document.createElement("button");
+    row.type = "button";
     row.className = `fleet-readiness-row readiness-${sensor.readiness_status}`;
+    row.classList.toggle(
+      "selected",
+      String(sensor.id) === String(fleetSelectedReadinessSensorId),
+    );
+    row.setAttribute(
+      "aria-pressed",
+      String(sensor.id) === String(fleetSelectedReadinessSensorId) ? "true" : "false",
+    );
     const heading = document.createElement("div");
     heading.className = "fleet-card-heading";
     heading.append(
@@ -6267,8 +6552,10 @@ function renderFleetReadiness() {
         (item) => fleetReadinessReasonLabels[item.code] ?? item.code,
       ).join(" · ");
     row.append(heading, metadata, fleetText("p", "fleet-card-note", reasonText));
+    row.addEventListener("click", () => selectFleetReadinessSensor(sensor.id));
     elements.fleetReadinessSensorList.append(row);
   }
+  renderFleetReadinessTimeline();
 }
 
 function parseFleetAgentVersion(value) {
@@ -6806,6 +7093,13 @@ async function loadFleetConfigurationConsole() {
       fleetSelectedRolloutId = fleetRollouts[0]?.id ?? null;
       fleetSelectedRollout = null;
     }
+    if (!(fleetReadiness.sensors ?? []).some(
+      (item) => String(item.id) === String(fleetSelectedReadinessSensorId),
+    )) {
+      fleetSelectedReadinessSensorId = null;
+      fleetReadinessTimeline = null;
+      fleetReadinessTimelineSensorId = null;
+    }
     renderFleetReadiness();
     renderFleetProfiles();
     renderRolloutSensorTargets();
@@ -6814,6 +7108,9 @@ async function loadFleetConfigurationConsole() {
     const details = [];
     if (fleetSelectedProfileId) details.push(loadFleetProfileVersions(fleetSelectedProfileId));
     if (fleetSelectedRolloutId) details.push(selectFleetRollout(fleetSelectedRolloutId));
+    if (fleetSelectedReadinessSensorId) {
+      details.push(loadFleetReadinessTimeline(fleetSelectedReadinessSensorId));
+    }
     await Promise.all(details);
     if (sequence !== fleetLoadSequence) return;
     setFleetConfigurationMessage(
@@ -6833,6 +7130,8 @@ async function loadFleetConfigurationConsole() {
 
 function closeFleetConfigurationEditor() {
   fleetLoadSequence += 1;
+  fleetReadinessTimelineRequestSequence += 1;
+  fleetReadinessTimelineLoadingId = null;
   elements.fleetConfigurationEditor.classList.add("hidden");
   elements.profileCreateForm.classList.add("hidden");
   elements.rolloutCreateForm.classList.add("hidden");
@@ -7891,6 +8190,17 @@ elements.fleetConfigurationRefresh.addEventListener("click", () => {
 });
 for (const button of elements.fleetTabButtons) {
   button.addEventListener("click", () => setFleetTab(button.dataset.fleetTab));
+}
+for (const button of elements.fleetReadinessHistoryWindowButtons) {
+  button.addEventListener("click", () => {
+    const hours = Number(button.dataset.readinessHours);
+    if (![1, 6, 24, 168].includes(hours) || hours === fleetReadinessTimelineHours) return;
+    fleetReadinessTimelineHours = hours;
+    updateFleetReadinessTimelineControls();
+    if (fleetSelectedReadinessSensorId) {
+      void loadFleetReadinessTimeline(fleetSelectedReadinessSensorId);
+    }
+  });
 }
 elements.fleetReadinessPolicyForm.addEventListener(
   "submit",

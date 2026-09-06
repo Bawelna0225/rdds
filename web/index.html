@@ -994,6 +994,25 @@
                   <div id="fleet-readiness-sensor-list" class="fleet-readiness-list empty-state">
                     Wczytywanie gotowości…
                   </div>
+
+                  <section class="fleet-readiness-history">
+                    <div class="fleet-readiness-history-heading">
+                      <div>
+                        <span>Historia gotowości sensora</span>
+                        <strong id="fleet-readiness-history-title">Wybierz sensor</strong>
+                      </div>
+                      <div class="fleet-readiness-history-window" aria-label="Zakres historii gotowości">
+                        <button type="button" data-readiness-hours="1">1 h</button>
+                        <button type="button" data-readiness-hours="6">6 h</button>
+                        <button type="button" data-readiness-hours="24" class="active">24 h</button>
+                        <button type="button" data-readiness-hours="168">7 dni</button>
+                      </div>
+                    </div>
+                    <span id="fleet-readiness-history-meta" class="fleet-card-meta">—</span>
+                    <div id="fleet-readiness-history-content" class="fleet-readiness-history-content empty-state">
+                      Wybierz sensor, aby zobaczyć dokładne czasy stanów.
+                    </div>
+                  </section>
                 </section>
 
                 <div class="fleet-readiness-side">

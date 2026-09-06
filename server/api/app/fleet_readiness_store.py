@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from psycopg.types.json import Jsonb
+
+from app.config import settings
 from app.database import connection
 from app.models import SensorFleetReadinessPolicyUpdate
 
@@ -45,6 +48,19 @@ READINESS_SENSOR_COLUMNS = """
     configuration.apply_status AS configuration_apply_status,
     configuration.apply_error AS configuration_apply_error,
     configuration.reported_at AS configuration_reported_at
+"""
+
+
+READINESS_STATE_COLUMNS = """
+    sensor_id,
+    policy_revision,
+    readiness_status,
+    rollout_eligible,
+    agent_version_state,
+    reasons,
+    first_observed_at,
+    state_changed_at,
+    last_evaluated_at
 """
 
 
@@ -224,6 +240,249 @@ def assess_sensor_fleet_readiness(
     return policy, sensors
 
 
+def _normalized_reasons(sensor: dict[str, Any]) -> list[dict[str, str]]:
+    return sorted(
+        [
+            {
+                "code": str(reason["code"]),
+                "severity": str(reason["severity"]),
+            }
+            for reason in sensor["reasons"]
+        ],
+        key=lambda reason: (reason["severity"], reason["code"]),
+    )
+
+
+def _readiness_assessment(sensor: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "readiness_status": sensor["readiness_status"],
+        "rollout_eligible": bool(sensor["rollout_eligible"]),
+        "agent_version_state": sensor["agent_version_state"],
+        "reasons": _normalized_reasons(sensor),
+    }
+
+
+def _assessment_changed(
+    recorded: dict[str, Any],
+    assessment: dict[str, Any],
+) -> bool:
+    return any(
+        recorded[field] != assessment[field]
+        for field in (
+            "readiness_status",
+            "rollout_eligible",
+            "agent_version_state",
+            "reasons",
+        )
+    )
+
+
+def _insert_readiness_history(
+    cursor: Any,
+    *,
+    sensor_id: UUID,
+    policy_revision: int,
+    assessment: dict[str, Any],
+    observed_at: datetime,
+    previous: dict[str, Any] | None,
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO sensor_fleet_readiness_history (
+            sensor_id,
+            policy_revision,
+            change_type,
+            previous_readiness_status,
+            readiness_status,
+            previous_rollout_eligible,
+            rollout_eligible,
+            previous_agent_version_state,
+            agent_version_state,
+            previous_reasons,
+            reasons,
+            observed_at
+        )
+        VALUES (
+            %(sensor_id)s,
+            %(policy_revision)s,
+            %(change_type)s,
+            %(previous_readiness_status)s,
+            %(readiness_status)s,
+            %(previous_rollout_eligible)s,
+            %(rollout_eligible)s,
+            %(previous_agent_version_state)s,
+            %(agent_version_state)s,
+            %(previous_reasons)s,
+            %(reasons)s,
+            %(observed_at)s
+        )
+        """,
+        {
+            "sensor_id": sensor_id,
+            "policy_revision": policy_revision,
+            "change_type": "initial" if previous is None else "changed",
+            "previous_readiness_status": (
+                None if previous is None else previous["readiness_status"]
+            ),
+            "readiness_status": assessment["readiness_status"],
+            "previous_rollout_eligible": (
+                None if previous is None else previous["rollout_eligible"]
+            ),
+            "rollout_eligible": assessment["rollout_eligible"],
+            "previous_agent_version_state": (
+                None if previous is None else previous["agent_version_state"]
+            ),
+            "agent_version_state": assessment["agent_version_state"],
+            "previous_reasons": (
+                None if previous is None else Jsonb(previous["reasons"])
+            ),
+            "reasons": Jsonb(assessment["reasons"]),
+            "observed_at": observed_at,
+        },
+    )
+
+
+def reconcile_sensor_fleet_readiness(
+    *,
+    observed_at: datetime | None = None,
+) -> dict[str, int]:
+    """Persist current readiness and append history only for real changes."""
+    evaluated_at = observed_at or datetime.now(timezone.utc)
+    refresh_before = evaluated_at - timedelta(
+        seconds=settings.fleet_readiness_state_refresh_seconds
+    )
+    initial_states = 0
+    changed_states = 0
+    refreshed_states = 0
+
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock("
+            "hashtextextended('rdds:fleet-readiness-history', 0))"
+        )
+        policy, sensors = assess_sensor_fleet_readiness(cursor)
+        sensor_ids = sorted(
+            (sensor["id"] for sensor in sensors),
+            key=str,
+        )
+        recorded_by_sensor: dict[UUID, dict[str, Any]] = {}
+        if sensor_ids:
+            cursor.execute(
+                f"""
+                SELECT {READINESS_STATE_COLUMNS}
+                FROM sensor_fleet_readiness_state
+                WHERE sensor_id = ANY(%s::uuid[])
+                ORDER BY sensor_id
+                FOR UPDATE
+                """,
+                (sensor_ids,),
+            )
+            recorded_by_sensor = {
+                row["sensor_id"]: dict(row)
+                for row in cursor.fetchall()
+            }
+
+        for sensor in sorted(sensors, key=lambda item: str(item["id"])):
+            sensor_id = sensor["id"]
+            assessment = _readiness_assessment(sensor)
+            previous = recorded_by_sensor.get(sensor_id)
+            if previous is None:
+                cursor.execute(
+                    """
+                    INSERT INTO sensor_fleet_readiness_state (
+                        sensor_id,
+                        policy_revision,
+                        readiness_status,
+                        rollout_eligible,
+                        agent_version_state,
+                        reasons,
+                        first_observed_at,
+                        state_changed_at,
+                        last_evaluated_at
+                    )
+                    VALUES (
+                        %(sensor_id)s,
+                        %(policy_revision)s,
+                        %(readiness_status)s,
+                        %(rollout_eligible)s,
+                        %(agent_version_state)s,
+                        %(reasons)s,
+                        %(evaluated_at)s,
+                        %(evaluated_at)s,
+                        %(evaluated_at)s
+                    )
+                    """,
+                    {
+                        "sensor_id": sensor_id,
+                        "policy_revision": policy["revision"],
+                        **assessment,
+                        "reasons": Jsonb(assessment["reasons"]),
+                        "evaluated_at": evaluated_at,
+                    },
+                )
+                _insert_readiness_history(
+                    cursor,
+                    sensor_id=sensor_id,
+                    policy_revision=policy["revision"],
+                    assessment=assessment,
+                    observed_at=evaluated_at,
+                    previous=None,
+                )
+                initial_states += 1
+                continue
+
+            changed = _assessment_changed(previous, assessment)
+            policy_changed = previous["policy_revision"] != policy["revision"]
+            refresh_due = previous["last_evaluated_at"] <= refresh_before
+            if not (changed or policy_changed or refresh_due):
+                continue
+
+            cursor.execute(
+                """
+                UPDATE sensor_fleet_readiness_state
+                SET
+                    policy_revision = %(policy_revision)s,
+                    readiness_status = %(readiness_status)s,
+                    rollout_eligible = %(rollout_eligible)s,
+                    agent_version_state = %(agent_version_state)s,
+                    reasons = %(reasons)s,
+                    state_changed_at = %(state_changed_at)s,
+                    last_evaluated_at = %(evaluated_at)s
+                WHERE sensor_id = %(sensor_id)s
+                """,
+                {
+                    "sensor_id": sensor_id,
+                    "policy_revision": policy["revision"],
+                    **assessment,
+                    "reasons": Jsonb(assessment["reasons"]),
+                    "state_changed_at": (
+                        evaluated_at if changed else previous["state_changed_at"]
+                    ),
+                    "evaluated_at": evaluated_at,
+                },
+            )
+            if changed:
+                _insert_readiness_history(
+                    cursor,
+                    sensor_id=sensor_id,
+                    policy_revision=policy["revision"],
+                    assessment=assessment,
+                    observed_at=evaluated_at,
+                    previous=previous,
+                )
+                changed_states += 1
+            else:
+                refreshed_states += 1
+
+    return {
+        "evaluated": len(sensors),
+        "initial_states": initial_states,
+        "changed_states": changed_states,
+        "refreshed_states": refreshed_states,
+        "history_events": initial_states + changed_states,
+    }
+
+
 def get_sensor_fleet_readiness() -> dict[str, Any]:
     with connection() as conn, conn.cursor() as cursor:
         policy, sensors = assess_sensor_fleet_readiness(cursor)
@@ -262,6 +521,384 @@ def get_sensor_fleet_readiness() -> dict[str, Any]:
             )
         ],
         "sensors": sensors,
+    }
+
+
+def list_sensor_fleet_readiness_history(
+    *,
+    sensor_id: UUID | None = None,
+    hours: int = 24,
+    limit: int = 200,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    filter_parameters = {
+        "sensor_id": sensor_id,
+        "hours": hours,
+    }
+    page_parameters = {
+        **filter_parameters,
+        "limit": limit,
+        "offset": offset,
+    }
+    history_filter = """
+        history.observed_at >= NOW() - (%(hours)s * INTERVAL '1 hour')
+        AND (
+            %(sensor_id)s::uuid IS NULL
+            OR history.sensor_id = %(sensor_id)s
+        )
+    """
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*)::BIGINT AS total
+            FROM sensor_fleet_readiness_history AS history
+            WHERE {history_filter}
+            """,
+            filter_parameters,
+        )
+        total_row = cursor.fetchone()
+        total = 0 if total_row is None else int(total_row["total"])
+        cursor.execute(
+            f"""
+            SELECT
+                history.id,
+                history.sensor_id,
+                sensor.sensor_key,
+                sensor.display_name AS sensor_name,
+                history.policy_revision,
+                history.change_type,
+                history.previous_readiness_status,
+                history.readiness_status,
+                history.previous_rollout_eligible,
+                history.rollout_eligible,
+                history.previous_agent_version_state,
+                history.agent_version_state,
+                history.previous_reasons,
+                history.reasons,
+                history.observed_at
+            FROM sensor_fleet_readiness_history AS history
+            JOIN sensors AS sensor ON sensor.id = history.sensor_id
+            WHERE {history_filter}
+            ORDER BY history.observed_at DESC, history.id DESC
+            LIMIT %(limit)s
+            OFFSET %(offset)s
+            """,
+            page_parameters,
+        )
+        events = [dict(row) for row in cursor.fetchall()]
+    return events, total
+
+
+def _readiness_timeline_segment(
+    *,
+    readiness_status: str,
+    rollout_eligible: bool | None,
+    agent_version_state: str | None,
+    reasons: list[dict[str, str]],
+    policy_revision: int | None,
+    started_at: datetime,
+    ended_at: datetime,
+) -> dict[str, Any]:
+    return {
+        "readiness_status": readiness_status,
+        "rollout_eligible": rollout_eligible,
+        "agent_version_state": agent_version_state,
+        "reasons": reasons,
+        "policy_revision": policy_revision,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_seconds": max(
+            0.0,
+            round((ended_at - started_at).total_seconds(), 3),
+        ),
+    }
+
+
+def _readiness_timeline_summary(
+    *,
+    current_state: dict[str, Any],
+    events: list[dict[str, Any]],
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[str, Any]:
+    """Build an honest, gap-aware readiness timeline for one sensor."""
+    prior_events = [event for event in events if event["observed_at"] < window_start]
+    window_events = [
+        event
+        for event in events
+        if window_start <= event["observed_at"] <= window_end
+    ]
+
+    timeline: list[dict[str, Any]] = []
+
+    def append_segment(
+        state: dict[str, Any],
+        started_at: datetime,
+        ended_at: datetime,
+    ) -> None:
+        if ended_at <= started_at:
+            return
+        timeline.append(
+            _readiness_timeline_segment(
+                readiness_status=state["readiness_status"],
+                rollout_eligible=state.get("rollout_eligible"),
+                agent_version_state=state.get("agent_version_state"),
+                reasons=list(state.get("reasons") or []),
+                policy_revision=state.get("policy_revision"),
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+        )
+
+    def event_state(event: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "readiness_status": event["readiness_status"],
+            "rollout_eligible": event["rollout_eligible"],
+            "agent_version_state": event["agent_version_state"],
+            "reasons": list(event.get("reasons") or []),
+            "policy_revision": event["policy_revision"],
+        }
+
+    cursor_at = window_start
+    state: dict[str, Any] | None = None
+    remaining_events = window_events
+    coverage_start: datetime | None = None
+
+    if prior_events:
+        state = event_state(prior_events[-1])
+        coverage_start = window_start
+    elif window_events:
+        first_event = window_events[0]
+        first_observed_at = min(max(first_event["observed_at"], window_start), window_end)
+        if first_observed_at > window_start:
+            append_segment(
+                {
+                    "readiness_status": "unknown",
+                    "rollout_eligible": None,
+                    "agent_version_state": None,
+                    "reasons": [],
+                    "policy_revision": None,
+                },
+                window_start,
+                first_observed_at,
+            )
+        cursor_at = first_observed_at
+        coverage_start = first_observed_at
+        state = event_state(first_event)
+        remaining_events = window_events[1:]
+    elif current_state.get("readiness_status") is not None:
+        first_observed_at = current_state.get("first_observed_at")
+        state_changed_at = current_state.get("state_changed_at")
+        known_since = state_changed_at or first_observed_at or window_end
+        if first_observed_at is not None:
+            known_since = max(known_since, first_observed_at)
+        known_since = min(max(known_since, window_start), window_end)
+        if known_since > window_start:
+            append_segment(
+                {
+                    "readiness_status": "unknown",
+                    "rollout_eligible": None,
+                    "agent_version_state": None,
+                    "reasons": [],
+                    "policy_revision": None,
+                },
+                window_start,
+                known_since,
+            )
+        cursor_at = known_since
+        coverage_start = known_since
+        state = {
+            "readiness_status": current_state["readiness_status"],
+            "rollout_eligible": current_state.get("rollout_eligible"),
+            "agent_version_state": current_state.get("agent_version_state"),
+            "reasons": list(current_state.get("reasons") or []),
+            "policy_revision": current_state.get("policy_revision"),
+        }
+
+    for event in remaining_events:
+        event_at = min(max(event["observed_at"], window_start), window_end)
+        if state is not None:
+            append_segment(state, cursor_at, event_at)
+        state = event_state(event)
+        cursor_at = max(cursor_at, event_at)
+
+    if state is not None:
+        append_segment(state, cursor_at, window_end)
+    elif not timeline and window_end > window_start:
+        append_segment(
+            {
+                "readiness_status": "unknown",
+                "rollout_eligible": None,
+                "agent_version_state": None,
+                "reasons": [],
+                "policy_revision": None,
+            },
+            window_start,
+            window_end,
+        )
+
+    durations = {
+        "ready": 0.0,
+        "attention": 0.0,
+        "blocked": 0.0,
+        "excluded": 0.0,
+        "unknown": 0.0,
+    }
+    for segment in timeline:
+        status = segment["readiness_status"]
+        durations[status if status in durations else "unknown"] += segment[
+            "duration_seconds"
+        ]
+
+    assessed_seconds = (
+        durations["ready"] + durations["attention"] + durations["blocked"]
+    )
+    ready_percent = None
+    if assessed_seconds > 0:
+        ready_percent = round(100 * durations["ready"] / assessed_seconds, 2)
+
+    return {
+        "coverage_start": coverage_start,
+        "coverage_end": window_end,
+        "coverage_seconds": round(
+            durations["ready"]
+            + durations["attention"]
+            + durations["blocked"]
+            + durations["excluded"],
+            3,
+        ),
+        "window_seconds": max(
+            0.0,
+            round((window_end - window_start).total_seconds(), 3),
+        ),
+        "summary": {
+            "ready_percent": ready_percent,
+            "ready_seconds": round(durations["ready"], 3),
+            "attention_seconds": round(durations["attention"], 3),
+            "blocked_seconds": round(durations["blocked"], 3),
+            "excluded_seconds": round(durations["excluded"], 3),
+            "unknown_seconds": round(durations["unknown"], 3),
+            "transition_count": sum(
+                1
+                for event in window_events
+                if event.get("change_type") == "changed"
+            ),
+            "readiness_change_count": sum(
+                1
+                for event in window_events
+                if event.get("change_type") == "changed"
+                and event.get("previous_readiness_status")
+                != event.get("readiness_status")
+            ),
+        },
+        "timeline": timeline,
+    }
+
+
+def get_sensor_fleet_readiness_timeline(
+    sensor_id: UUID,
+    hours: int,
+) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                sensor.id,
+                sensor.sensor_key AS sensor_id,
+                sensor.display_name,
+                state.policy_revision,
+                state.readiness_status,
+                state.rollout_eligible,
+                state.agent_version_state,
+                state.reasons,
+                state.first_observed_at,
+                state.state_changed_at,
+                state.last_evaluated_at,
+                NOW() AS generated_at
+            FROM sensors AS sensor
+            LEFT JOIN sensor_fleet_readiness_state AS state
+              ON state.sensor_id = sensor.id
+            WHERE sensor.id = %s
+              AND sensor.deleted_at IS NULL
+            """,
+            (sensor_id,),
+        )
+        sensor = cursor.fetchone()
+        if sensor is None:
+            return None
+
+        current_state = dict(sensor)
+        window_end = current_state["generated_at"]
+        window_start = window_end - timedelta(hours=hours)
+        cursor.execute(
+            """
+            WITH prior_event AS (
+                SELECT
+                    id,
+                    policy_revision,
+                    change_type,
+                    previous_readiness_status,
+                    readiness_status,
+                    rollout_eligible,
+                    agent_version_state,
+                    reasons,
+                    observed_at
+                FROM sensor_fleet_readiness_history
+                WHERE sensor_id = %(sensor_id)s
+                  AND observed_at < %(window_start)s
+                ORDER BY observed_at DESC, id DESC
+                LIMIT 1
+            ),
+            window_events AS (
+                SELECT
+                    id,
+                    policy_revision,
+                    change_type,
+                    previous_readiness_status,
+                    readiness_status,
+                    rollout_eligible,
+                    agent_version_state,
+                    reasons,
+                    observed_at
+                FROM sensor_fleet_readiness_history
+                WHERE sensor_id = %(sensor_id)s
+                  AND observed_at >= %(window_start)s
+                  AND observed_at <= %(window_end)s
+            )
+            SELECT * FROM prior_event
+            UNION ALL
+            SELECT * FROM window_events
+            ORDER BY observed_at, id
+            """,
+            {
+                "sensor_id": sensor_id,
+                "window_start": window_start,
+                "window_end": window_end,
+            },
+        )
+        events = [dict(row) for row in cursor.fetchall()]
+
+    timeline = _readiness_timeline_summary(
+        current_state=current_state,
+        events=events,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    return {
+        "sensor_id": current_state["sensor_id"],
+        "display_name": current_state["display_name"],
+        "window_hours": hours,
+        "current": {
+            "policy_revision": current_state.get("policy_revision"),
+            "readiness_status": current_state.get("readiness_status"),
+            "rollout_eligible": current_state.get("rollout_eligible"),
+            "agent_version_state": current_state.get("agent_version_state"),
+            "reasons": list(current_state.get("reasons") or []),
+            "first_observed_at": current_state.get("first_observed_at"),
+            "state_changed_at": current_state.get("state_changed_at"),
+            "last_evaluated_at": current_state.get("last_evaluated_at"),
+        },
+        **timeline,
     }
 
 
