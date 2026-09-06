@@ -975,6 +975,18 @@
               >
                 Gotowość
               </button>
+              <button
+                id="fleet-tab-releases"
+                type="button"
+                class="fleet-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="fleet-panel-releases"
+                data-fleet-tab="releases"
+                tabindex="-1"
+              >
+                Wydania agentów
+              </button>
             </div>
 
             <section id="fleet-panel-readiness" class="fleet-panel hidden" data-fleet-panel="readiness">
@@ -1158,6 +1170,7 @@
                   </div>
                 </div>
               </div>
+
             </section>
 
             <section id="fleet-panel-rollouts" class="fleet-panel hidden" data-fleet-panel="rollouts">
@@ -1242,6 +1255,207 @@
                   </div>
                 </div>
               </div>
+            </section>
+
+            <section id="fleet-panel-releases" class="fleet-panel hidden" data-fleet-panel="releases">
+              <div class="fleet-toolbar">
+                <label class="toggle-row">
+                  <input id="agent-release-show-withdrawn" type="checkbox" />
+                  <span>Pokaż wycofane</span>
+                </label>
+                <button id="agent-release-create-toggle" type="button"
+                  aria-expanded="false" aria-controls="agent-release-create-form">
+                  Nowe wydanie
+                </button>
+              </div>
+
+              <p class="fleet-safety-note">
+                Katalog przechowuje wyłącznie zweryfikowane metadane artefaktu. Nie przesyła pliku,
+                nie publikuje adresu pobierania i nie uruchamia aktualizacji agentów.
+              </p>
+
+              <section class="fleet-detail agent-release-compliance">
+                <div class="fleet-detail-heading">
+                  <div>
+                    <span>Informacyjna ocena wersji</span>
+                    <h3>Adopcja stabilnego wydania</h3>
+                  </div>
+                  <span id="agent-release-compliance-target" class="fleet-status">—</span>
+                </div>
+                <div id="agent-release-compliance-summary"
+                  class="fleet-summary agent-release-compliance-summary"></div>
+                <div id="agent-release-compliance-list"
+                  class="agent-release-compliance-list empty-state">
+                  Wczytywanie wersji agentów…
+                </div>
+                <p class="fleet-card-note">
+                  Kwalifikacja jest wyłącznie informacyjna. Nie przydziela wydania i nie wysyła
+                  polecenia aktualizacji do sensora.
+                </p>
+              </section>
+
+              <form id="agent-release-create-form" class="fleet-form hidden">
+                <h3>Nowy draft wydania</h3>
+                <div class="fleet-form-grid agent-release-grid">
+                  <label>Wersja<input id="agent-release-create-version" type="text"
+                    pattern="[0-9]+\.[0-9]+\.[0-9]+" maxlength="32" placeholder="0.27.0" required /></label>
+                  <label>Kanał<select id="agent-release-create-channel">
+                    <option value="candidate">candidate</option>
+                    <option value="stable">stable</option>
+                  </select></label>
+                  <label>Nazwa artefaktu<input id="agent-release-create-filename" type="text"
+                    pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,254}" maxlength="255" required /></label>
+                  <label>Rozmiar (bajty)<input id="agent-release-create-size" type="number"
+                    min="1" max="536870912" step="1" required /></label>
+                  <label>Minimalna wersja agenta<input id="agent-release-create-minimum" type="text"
+                    pattern="[0-9]+\.[0-9]+\.[0-9]+" maxlength="32" value="0.23.0" required /></label>
+                  <label>Wersja protokołu<input id="agent-release-create-protocol" type="text"
+                    pattern="rdds/[0-9]+\.[0-9]+" maxlength="32" value="rdds/1.0" required /></label>
+                </div>
+                <label>SHA-256 artefaktu<input id="agent-release-create-sha256" class="agent-release-hash"
+                  type="text" minlength="64" maxlength="64" pattern="[0-9A-Fa-f]{64}" required /></label>
+                <label>Informacje o wydaniu<textarea id="agent-release-create-notes"
+                  minlength="3" maxlength="5000" rows="4" required></textarea></label>
+                <label>Powód utworzenia<input id="agent-release-create-change-note" type="text"
+                  minlength="3" maxlength="500" required /></label>
+                <div class="panel-actions">
+                  <button type="submit">Utwórz draft</button>
+                  <button id="agent-release-create-cancel" type="button" class="secondary-button">Anuluj</button>
+                </div>
+              </form>
+
+              <div class="fleet-columns">
+                <div id="agent-release-list" class="fleet-list empty-state">
+                  Wczytywanie wydań agentów…
+                </div>
+                <div class="fleet-detail">
+                  <p id="agent-release-detail-empty" class="empty-state">
+                    Wybierz wydanie, aby zobaczyć zweryfikowane metadane.
+                  </p>
+                  <div id="agent-release-detail-content" class="hidden">
+                    <div class="fleet-detail-heading">
+                      <div>
+                        <span id="agent-release-detail-channel">—</span>
+                        <h3 id="agent-release-detail-title">—</h3>
+                      </div>
+                      <span id="agent-release-detail-status" class="fleet-status">—</span>
+                    </div>
+                    <p id="agent-release-detail-meta" class="fleet-card-meta">—</p>
+                    <form id="agent-release-metadata-form" class="fleet-form compact">
+                      <div class="fleet-form-grid agent-release-grid">
+                        <label>Wersja<input id="agent-release-version" type="text"
+                          pattern="[0-9]+\.[0-9]+\.[0-9]+" maxlength="32" required /></label>
+                        <label>Kanał<select id="agent-release-channel">
+                          <option value="candidate">candidate</option>
+                          <option value="stable">stable</option>
+                        </select></label>
+                        <label>Nazwa artefaktu<input id="agent-release-filename" type="text"
+                          pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,254}" maxlength="255" required /></label>
+                        <label>Rozmiar (bajty)<input id="agent-release-size" type="number"
+                          min="1" max="536870912" step="1" required /></label>
+                        <label>Minimalna wersja agenta<input id="agent-release-minimum" type="text"
+                          pattern="[0-9]+\.[0-9]+\.[0-9]+" maxlength="32" required /></label>
+                        <label>Wersja protokołu<input id="agent-release-protocol" type="text"
+                          pattern="rdds/[0-9]+\.[0-9]+" maxlength="32" required /></label>
+                      </div>
+                      <label>SHA-256 artefaktu<input id="agent-release-sha256" class="agent-release-hash"
+                        type="text" minlength="64" maxlength="64" pattern="[0-9A-Fa-f]{64}" required /></label>
+                      <label>Informacje o wydaniu<textarea id="agent-release-notes"
+                        minlength="3" maxlength="5000" rows="5" required></textarea></label>
+                      <label id="agent-release-update-note-row">Powód zmiany<input id="agent-release-update-note"
+                        type="text" minlength="3" maxlength="500" /></label>
+                      <button id="agent-release-save" type="submit">Zapisz draft</button>
+                    </form>
+                    <div id="agent-release-lifecycle" class="fleet-form compact">
+                      <label>Notatka operacji<input id="agent-release-action-note" type="text"
+                        minlength="3" maxlength="500" /></label>
+                      <div class="panel-actions">
+                        <button id="agent-release-publish" type="button">Opublikuj metadane</button>
+                        <button id="agent-release-withdraw" type="button" class="danger-button">Wycofaj wydanie</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <section class="fleet-detail agent-update-plans">
+                <div class="fleet-toolbar">
+                  <div>
+                    <strong>Drafty planów aktualizacji</strong>
+                    <span>Migawki planistyczne — bez przydzielania wydania agentom.</span>
+                  </div>
+                  <div class="panel-actions">
+                    <label class="toggle-row">
+                      <input id="agent-update-plan-show-cancelled" type="checkbox" />
+                      <span>Pokaż anulowane</span>
+                    </label>
+                    <button id="agent-update-plan-create-toggle" type="button"
+                      aria-expanded="false" aria-controls="agent-update-plan-create-form">
+                      Nowy plan
+                    </button>
+                  </div>
+                </div>
+
+                <form id="agent-update-plan-create-form" class="fleet-form hidden">
+                  <h3>Nowy draft planu</h3>
+                  <label>
+                    Opublikowane wydanie docelowe
+                    <select id="agent-update-plan-release" required></select>
+                  </label>
+                  <fieldset>
+                    <legend>Sensory docelowe (maks. 100)</legend>
+                    <div id="agent-update-plan-sensors" class="fleet-sensor-targets empty-state">
+                      Brak sensorów do wyboru.
+                    </div>
+                  </fieldset>
+                  <label>
+                    Powód utworzenia planu
+                    <input id="agent-update-plan-create-note" type="text"
+                      minlength="3" maxlength="500" required />
+                  </label>
+                  <p class="fleet-safety-note">
+                    Utworzenie planu zapisuje tylko migawkę. Nie przydziela wersji, nie wysyła
+                    polecenia i nie zmienia żadnego sensora.
+                  </p>
+                  <div class="panel-actions">
+                    <button type="submit">Utwórz draft planu</button>
+                    <button id="agent-update-plan-create-cancel" type="button"
+                      class="secondary-button">Anuluj</button>
+                  </div>
+                </form>
+
+                <div class="fleet-columns agent-update-plan-columns">
+                  <div id="agent-update-plan-list" class="fleet-list empty-state">
+                    Brak draftów planów.
+                  </div>
+                  <div class="fleet-detail">
+                    <p id="agent-update-plan-detail-empty" class="empty-state">
+                      Wybierz plan, aby zobaczyć niezmienną migawkę sensorów.
+                    </p>
+                    <div id="agent-update-plan-detail-content" class="hidden">
+                      <div class="fleet-detail-heading">
+                        <div>
+                          <span id="agent-update-plan-detail-release">—</span>
+                          <h3 id="agent-update-plan-detail-title">—</h3>
+                        </div>
+                        <span id="agent-update-plan-detail-status" class="fleet-status">—</span>
+                      </div>
+                      <div id="agent-update-plan-summary" class="fleet-summary"></div>
+                      <p id="agent-update-plan-detail-meta" class="fleet-card-meta">—</p>
+                      <div id="agent-update-plan-target-list" class="fleet-target-list"></div>
+                      <div id="agent-update-plan-actions" class="fleet-form compact hidden">
+                        <label>
+                          Powód anulowania
+                          <input id="agent-update-plan-action-note" type="text"
+                            minlength="3" maxlength="500" />
+                        </label>
+                        <button id="agent-update-plan-cancel" type="button"
+                          class="danger-button">Anuluj draft planu</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
             </section>
           </section>
 

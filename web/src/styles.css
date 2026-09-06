@@ -4027,6 +4027,21 @@ html[data-theme="light"] .sensor-alert-group {
   border-color: rgba(67, 213, 255, 0.42);
 }
 
+.fleet-status.agent-release-draft {
+  color: var(--cyan);
+  border-color: rgba(67, 213, 255, 0.42);
+}
+
+.fleet-status.agent-release-published {
+  color: var(--green);
+  border-color: rgba(67, 225, 164, 0.42);
+}
+
+.fleet-status.agent-release-withdrawn {
+  color: var(--red);
+  border-color: rgba(255, 86, 112, 0.42);
+}
+
 .fleet-status.rollout-cancelled,
 .target-error .fleet-status,
 .target-superseded .fleet-status,
@@ -4072,6 +4087,146 @@ html[data-theme="light"] .sensor-alert-group {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.agent-release-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-release-hash {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+#agent-release-lifecycle {
+  border-color: rgba(255, 184, 77, 0.3);
+  background: rgba(255, 184, 77, 0.035);
+}
+
+.agent-release-compliance {
+  display: grid;
+  gap: 9px;
+}
+
+.agent-release-compliance-summary {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.agent-release-compliance-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.agent-release-compliance-row {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  background: rgba(18, 25, 34, 0.48);
+}
+
+.agent-release-state-current,
+.agent-release-state-candidate {
+  border-color: rgba(67, 225, 164, 0.42);
+}
+
+.agent-release-state-upgrade_available,
+.agent-release-state-no_stable_release {
+  border-color: rgba(67, 213, 255, 0.42);
+}
+
+.agent-release-state-upgrade_blocked,
+.agent-release-state-withdrawn {
+  border-color: rgba(255, 86, 112, 0.42);
+}
+
+.agent-release-state-unreported,
+.agent-release-state-ahead {
+  border-color: rgba(255, 184, 77, 0.42);
+}
+
+.agent-update-plans {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.agent-update-plan-columns {
+  min-height: 310px;
+}
+
+.agent-update-plan-sensor-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.agent-update-plan-sensor-option input[type="checkbox"] {
+  margin: 0;
+}
+
+.agent-update-plan-sensor-option span,
+.agent-update-plan-sensor-option strong,
+.agent-update-plan-sensor-option small {
+  display: block;
+  min-width: 0;
+}
+
+.agent-update-plan-target {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  background: rgba(18, 25, 34, 0.62);
+}
+
+.fleet-status.agent-update-plan-draft,
+.fleet-status.agent-update-plan-eligibility-eligible {
+  color: var(--cyan);
+  border-color: rgba(67, 213, 255, 0.42);
+}
+
+.fleet-status.agent-update-plan-cancelled,
+.fleet-status.agent-update-plan-eligibility-below_minimum {
+  color: var(--red);
+  border-color: rgba(255, 86, 112, 0.42);
+}
+
+.fleet-status.agent-update-plan-eligibility-already_current {
+  color: var(--green);
+  border-color: rgba(67, 225, 164, 0.42);
+}
+
+.fleet-status.agent-update-plan-eligibility-ahead,
+.fleet-status.agent-update-plan-eligibility-unreported,
+.fleet-status.agent-update-plan-eligibility-inactive {
+  color: var(--amber);
+  border-color: rgba(255, 184, 77, 0.42);
+}
+
+.agent-update-plan-eligibility-eligible {
+  border-left-color: var(--cyan);
+}
+
+.agent-update-plan-eligibility-already_current {
+  border-left-color: var(--green);
+}
+
+.agent-update-plan-eligibility-below_minimum {
+  border-left-color: var(--red);
+}
+
+.agent-update-plan-eligibility-ahead,
+.agent-update-plan-eligibility-unreported,
+.agent-update-plan-eligibility-inactive {
+  border-left-color: var(--amber);
 }
 
 .fleet-configuration-fields,
@@ -4430,6 +4585,15 @@ html[data-theme="light"] .fleet-readiness-history-event {
   background: rgba(255, 255, 255, 0.86);
 }
 
+html[data-theme="light"] .agent-release-compliance-row {
+  background: rgba(255, 255, 255, 0.86);
+}
+
+html[data-theme="light"] .agent-update-plan-target,
+html[data-theme="light"] .agent-update-plan-sensor-option {
+  background: rgba(255, 255, 255, 0.86);
+}
+
 @media (max-width: 900px) {
   .fleet-columns,
   .fleet-readiness-columns {
@@ -4438,6 +4602,14 @@ html[data-theme="light"] .fleet-readiness-history-event {
 
   .fleet-list:not(.compact) {
     max-height: 260px;
+  }
+
+  .agent-release-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-release-compliance-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -4467,5 +4639,15 @@ html[data-theme="light"] .fleet-readiness-history-event {
   .fleet-readiness-summary,
   .fleet-sensor-targets {
     grid-template-columns: 1fr;
+  }
+
+
+  .agent-release-grid {
+    grid-template-columns: 1fr;
+  }
+
+
+  .agent-release-compliance-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

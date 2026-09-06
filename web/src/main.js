@@ -182,6 +182,45 @@ const fleetReadinessReasonLabels = {
   configuration_error: "błąd zastosowania konfiguracji",
 };
 
+const agentReleaseComplianceStateLabels = {
+  current: "aktualne",
+  upgrade_available: "dostępna aktualizacja",
+  upgrade_blocked: "wymaga uwagi",
+  candidate: "kanał candidate",
+  ahead: "przed katalogiem",
+  withdrawn: "wersja wycofana",
+  unreported: "brak wersji",
+  no_stable_release: "brak wydania stable",
+};
+
+const agentReleaseComplianceReasonLabels = {
+  agent_version_unreported: "agent nie raportuje prawidłowej wersji",
+  installed_release_withdrawn: "zainstalowane wydanie zostało wycofane",
+  no_published_stable_release: "brak opublikowanego wydania stable",
+  agent_version_below_release_minimum: "wersja poniżej minimalnej ścieżki aktualizacji",
+  newer_stable_release_available: "dostępne jest nowsze stabilne wydanie",
+  published_candidate_installed: "sensor korzysta z opublikowanego kanału candidate",
+  agent_version_ahead_of_stable_catalog: "wersja nowsza niż katalog stable",
+  sensor_not_online: "sensor nie jest obecnie online",
+};
+
+const agentUpdatePlanEligibilityLabels = {
+  eligible: "kwalifikuje się",
+  already_current: "wersja już zainstalowana",
+  below_minimum: "poniżej minimalnej ścieżki",
+  ahead: "nowsza od celu",
+  unreported: "brak wersji",
+  inactive: "sensor nieaktywny",
+};
+
+const agentUpdatePlanReasonLabels = {
+  agent_version_unreported: "agent nie raportuje prawidłowej wersji",
+  agent_version_below_release_minimum: "wersja poniżej minimum wydania",
+  sensor_not_online: "sensor nie jest obecnie online",
+  target_release_already_installed: "wydanie docelowe jest już zainstalowane",
+  target_release_is_older: "wydanie docelowe jest starsze od wersji sensora",
+};
+
 const rolloutRecoveryReasonLabels = {
   configuration_superseded: "rewizja rolloutu została nadpisana",
   configuration_error: "agent zgłosił błąd konfiguracji",
@@ -325,6 +364,12 @@ const auditEventLabels = {
   sensor_configuration_rollout_resumed: "Wznowiono rollout konfiguracji",
   sensor_configuration_rollout_rolled_back: "Przywrócono konfigurację sprzed rollout'u",
   sensor_fleet_readiness_policy_changed: "Zmieniono politykę gotowości floty",
+  sensor_agent_release_created: "Utworzono draft wydania agenta",
+  sensor_agent_release_updated: "Zmieniono draft wydania agenta",
+  sensor_agent_release_published: "Opublikowano metadane wydania agenta",
+  sensor_agent_release_withdrawn: "Wycofano wydanie agenta",
+  sensor_agent_update_plan_created: "Utworzono draft planu aktualizacji agentów",
+  sensor_agent_update_plan_cancelled: "Anulowano draft planu aktualizacji agentów",
   operator_created: "Utworzono konto",
   operator_updated: "Zmieniono konto",
   operator_enabled: "Włączono konto",
@@ -477,6 +522,64 @@ const elements = {
   rolloutResume: document.querySelector("#configuration-rollout-resume"),
   rolloutCancel: document.querySelector("#configuration-rollout-cancel"),
   rolloutRollback: document.querySelector("#configuration-rollout-rollback"),
+  agentReleaseShowWithdrawn: document.querySelector("#agent-release-show-withdrawn"),
+  agentReleaseCreateToggle: document.querySelector("#agent-release-create-toggle"),
+  agentReleaseCreateForm: document.querySelector("#agent-release-create-form"),
+  agentReleaseCreateCancel: document.querySelector("#agent-release-create-cancel"),
+  agentReleaseCreateVersion: document.querySelector("#agent-release-create-version"),
+  agentReleaseCreateChannel: document.querySelector("#agent-release-create-channel"),
+  agentReleaseCreateFilename: document.querySelector("#agent-release-create-filename"),
+  agentReleaseCreateSize: document.querySelector("#agent-release-create-size"),
+  agentReleaseCreateMinimum: document.querySelector("#agent-release-create-minimum"),
+  agentReleaseCreateProtocol: document.querySelector("#agent-release-create-protocol"),
+  agentReleaseCreateSha256: document.querySelector("#agent-release-create-sha256"),
+  agentReleaseCreateNotes: document.querySelector("#agent-release-create-notes"),
+  agentReleaseCreateChangeNote: document.querySelector("#agent-release-create-change-note"),
+  agentReleaseList: document.querySelector("#agent-release-list"),
+  agentReleaseDetailEmpty: document.querySelector("#agent-release-detail-empty"),
+  agentReleaseDetailContent: document.querySelector("#agent-release-detail-content"),
+  agentReleaseDetailChannel: document.querySelector("#agent-release-detail-channel"),
+  agentReleaseDetailTitle: document.querySelector("#agent-release-detail-title"),
+  agentReleaseDetailStatus: document.querySelector("#agent-release-detail-status"),
+  agentReleaseDetailMeta: document.querySelector("#agent-release-detail-meta"),
+  agentReleaseMetadataForm: document.querySelector("#agent-release-metadata-form"),
+  agentReleaseVersion: document.querySelector("#agent-release-version"),
+  agentReleaseChannel: document.querySelector("#agent-release-channel"),
+  agentReleaseFilename: document.querySelector("#agent-release-filename"),
+  agentReleaseSize: document.querySelector("#agent-release-size"),
+  agentReleaseMinimum: document.querySelector("#agent-release-minimum"),
+  agentReleaseProtocol: document.querySelector("#agent-release-protocol"),
+  agentReleaseSha256: document.querySelector("#agent-release-sha256"),
+  agentReleaseNotes: document.querySelector("#agent-release-notes"),
+  agentReleaseUpdateNoteRow: document.querySelector("#agent-release-update-note-row"),
+  agentReleaseUpdateNote: document.querySelector("#agent-release-update-note"),
+  agentReleaseSave: document.querySelector("#agent-release-save"),
+  agentReleaseLifecycle: document.querySelector("#agent-release-lifecycle"),
+  agentReleaseActionNote: document.querySelector("#agent-release-action-note"),
+  agentReleasePublish: document.querySelector("#agent-release-publish"),
+  agentReleaseWithdraw: document.querySelector("#agent-release-withdraw"),
+  agentReleaseComplianceTarget: document.querySelector("#agent-release-compliance-target"),
+  agentReleaseComplianceSummary: document.querySelector("#agent-release-compliance-summary"),
+  agentReleaseComplianceList: document.querySelector("#agent-release-compliance-list"),
+  agentUpdatePlanShowCancelled: document.querySelector("#agent-update-plan-show-cancelled"),
+  agentUpdatePlanCreateToggle: document.querySelector("#agent-update-plan-create-toggle"),
+  agentUpdatePlanCreateForm: document.querySelector("#agent-update-plan-create-form"),
+  agentUpdatePlanRelease: document.querySelector("#agent-update-plan-release"),
+  agentUpdatePlanSensors: document.querySelector("#agent-update-plan-sensors"),
+  agentUpdatePlanCreateNote: document.querySelector("#agent-update-plan-create-note"),
+  agentUpdatePlanCreateCancel: document.querySelector("#agent-update-plan-create-cancel"),
+  agentUpdatePlanList: document.querySelector("#agent-update-plan-list"),
+  agentUpdatePlanDetailEmpty: document.querySelector("#agent-update-plan-detail-empty"),
+  agentUpdatePlanDetailContent: document.querySelector("#agent-update-plan-detail-content"),
+  agentUpdatePlanDetailRelease: document.querySelector("#agent-update-plan-detail-release"),
+  agentUpdatePlanDetailTitle: document.querySelector("#agent-update-plan-detail-title"),
+  agentUpdatePlanDetailStatus: document.querySelector("#agent-update-plan-detail-status"),
+  agentUpdatePlanSummary: document.querySelector("#agent-update-plan-summary"),
+  agentUpdatePlanDetailMeta: document.querySelector("#agent-update-plan-detail-meta"),
+  agentUpdatePlanTargetList: document.querySelector("#agent-update-plan-target-list"),
+  agentUpdatePlanActions: document.querySelector("#agent-update-plan-actions"),
+  agentUpdatePlanActionNote: document.querySelector("#agent-update-plan-action-note"),
+  agentUpdatePlanCancel: document.querySelector("#agent-update-plan-cancel"),
   storagePanel: document.querySelector("#storage-panel"),
   storageRefresh: document.querySelector("#storage-refresh"),
   storageUsage: document.querySelector("#storage-usage"),
@@ -788,6 +891,12 @@ let fleetReadinessTimelineRequestSequence = 0;
 let fleetSelectedProfileId = null;
 let fleetSelectedRolloutId = null;
 let fleetSelectedRollout = null;
+let fleetAgentReleases = [];
+let fleetSelectedAgentReleaseId = null;
+let fleetAgentReleaseCompliance = null;
+let fleetAgentUpdatePlans = [];
+let fleetSelectedAgentUpdatePlanId = null;
+let fleetSelectedAgentUpdatePlan = null;
 let fleetActiveTab = "profiles";
 let fleetLoadSequence = 0;
 let toastTimeout = null;
@@ -6214,7 +6323,7 @@ function setFleetConfigurationMessage(message, error = false) {
 }
 
 function setFleetTab(tab) {
-  if (!["profiles", "rollouts", "readiness"].includes(tab)) return;
+  if (!["profiles", "rollouts", "readiness", "releases"].includes(tab)) return;
   fleetActiveTab = tab;
   for (const button of elements.fleetTabButtons) {
     const active = button.dataset.fleetTab === tab;
@@ -7066,24 +7175,649 @@ async function selectFleetRollout(rolloutId) {
   }
 }
 
+function selectedFleetAgentRelease() {
+  return fleetAgentReleases.find(
+    (item) => String(item.id) === String(fleetSelectedAgentReleaseId),
+  ) ?? null;
+}
+
+function renderFleetAgentReleaseCompliance() {
+  elements.agentReleaseComplianceSummary.replaceChildren();
+  elements.agentReleaseComplianceList.replaceChildren();
+  const payload = fleetAgentReleaseCompliance;
+  if (!payload) {
+    elements.agentReleaseComplianceTarget.textContent = "—";
+    elements.agentReleaseComplianceList.classList.add("empty-state");
+    elements.agentReleaseComplianceList.textContent = "Brak oceny wersji agentów.";
+    return;
+  }
+  const summary = payload.summary ?? {};
+  appendFleetMetric(elements.agentReleaseComplianceSummary, "Aktualne", summary.current_count ?? 0);
+  appendFleetMetric(
+    elements.agentReleaseComplianceSummary,
+    "Aktualizacja",
+    summary.upgrade_available_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.agentReleaseComplianceSummary,
+    "Wymaga uwagi",
+    summary.upgrade_blocked_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.agentReleaseComplianceSummary,
+    "Wycofane",
+    summary.withdrawn_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.agentReleaseComplianceSummary,
+    "Brak wersji",
+    summary.unreported_count ?? 0,
+  );
+  appendFleetMetric(
+    elements.agentReleaseComplianceSummary,
+    "Kwalifikują się",
+    summary.update_eligible_count ?? 0,
+  );
+  const stable = payload.catalog?.latest_stable;
+  elements.agentReleaseComplianceTarget.textContent = stable
+    ? `stable ${stable.version}`
+    : "brak stable";
+
+  const sensors = Array.isArray(payload.sensors) ? [...payload.sensors] : [];
+  const order = {
+    withdrawn: 0,
+    upgrade_blocked: 1,
+    upgrade_available: 2,
+    unreported: 3,
+    candidate: 4,
+    ahead: 5,
+    no_stable_release: 6,
+    current: 7,
+  };
+  sensors.sort((left, right) => {
+    const state = (order[left.release_state] ?? 9) - (order[right.release_state] ?? 9);
+    if (state !== 0) return state;
+    return String(left.sensor_key).localeCompare(String(right.sensor_key), "pl");
+  });
+  elements.agentReleaseComplianceList.classList.toggle("empty-state", sensors.length === 0);
+  if (sensors.length === 0) {
+    elements.agentReleaseComplianceList.textContent = "Brak sensorów do oceny.";
+    return;
+  }
+  for (const sensor of sensors) {
+    const row = document.createElement("div");
+    row.className = `agent-release-compliance-row agent-release-state-${sensor.release_state}`;
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", sensor.display_name || sensor.sensor_key),
+      fleetText(
+        "span",
+        `fleet-status agent-release-state-${sensor.release_state}`,
+        agentReleaseComplianceStateLabels[sensor.release_state] ?? sensor.release_state,
+      ),
+    );
+    const reasons = Array.isArray(sensor.reason_codes)
+      ? sensor.reason_codes.map(
+        (reason) => agentReleaseComplianceReasonLabels[reason] ?? reason,
+      )
+      : [];
+    row.append(
+      heading,
+      fleetText(
+        "span",
+        "fleet-card-meta",
+        `${sensor.sensor_key} · agent ${sensor.agent_version || "brak wersji"} · ${sensor.status}`,
+      ),
+      fleetText(
+        "p",
+        "fleet-card-note",
+        reasons.length > 0 ? reasons.join(" · ") : "wersja zgodna z katalogiem stable",
+      ),
+    );
+    elements.agentReleaseComplianceList.append(row);
+  }
+}
+
+function agentReleaseStatusLabel(status) {
+  return {
+    draft: "draft",
+    published: "opublikowane",
+    withdrawn: "wycofane",
+  }[status] ?? status;
+}
+
+function setAgentReleaseCreateFormOpen(open) {
+  elements.agentReleaseCreateForm.classList.toggle("hidden", !open);
+  elements.agentReleaseCreateToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    elements.agentReleaseCreateForm.reset();
+    elements.agentReleaseCreateChannel.value = "candidate";
+    elements.agentReleaseCreateMinimum.value = "0.23.0";
+    elements.agentReleaseCreateProtocol.value = "rdds/1.0";
+    elements.agentReleaseCreateVersion.focus();
+  }
+}
+
+function readAgentReleaseMetadata(scope) {
+  const prefix = scope === "create" ? "agentReleaseCreate" : "agentRelease";
+  const size = Number(elements[`${prefix}Size`].value);
+  if (!Number.isSafeInteger(size) || size < 1 || size > 536870912) {
+    throw new Error("Rozmiar artefaktu musi być całkowitą liczbą bajtów od 1 do 536870912.");
+  }
+  return {
+    version: elements[`${prefix}Version`].value.trim(),
+    channel: elements[`${prefix}Channel`].value,
+    artifact_filename: elements[`${prefix}Filename`].value.trim(),
+    artifact_sha256: elements[`${prefix}Sha256`].value.trim().toLowerCase(),
+    artifact_size_bytes: size,
+    minimum_agent_version: elements[`${prefix}Minimum`].value.trim(),
+    protocol_version: elements[`${prefix}Protocol`].value.trim(),
+    release_notes: elements[`${prefix}Notes`].value.trim(),
+  };
+}
+
+function renderFleetAgentReleases() {
+  elements.agentReleaseList.replaceChildren();
+  elements.agentReleaseList.classList.toggle("empty-state", fleetAgentReleases.length === 0);
+  if (fleetAgentReleases.length === 0) {
+    elements.agentReleaseList.textContent = "Brak wydań agentów w katalogu.";
+  }
+  for (const release of fleetAgentReleases) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fleet-card";
+    button.classList.toggle(
+      "selected",
+      String(release.id) === String(fleetSelectedAgentReleaseId),
+    );
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", `RDDS Agent ${release.version}`),
+      fleetText(
+        "span",
+        `fleet-status agent-release-${release.status}`,
+        agentReleaseStatusLabel(release.status),
+      ),
+    );
+    button.append(
+      heading,
+      fleetText(
+        "span",
+        "fleet-card-key",
+        `${release.channel} · rewizja ${release.revision}`,
+      ),
+      fleetText(
+        "span",
+        "fleet-card-note",
+        `${release.artifact_filename} · ${formatBytes(release.artifact_size_bytes)}`,
+      ),
+    );
+    button.addEventListener("click", () => {
+      fleetSelectedAgentReleaseId = release.id;
+      renderFleetAgentReleases();
+    });
+    elements.agentReleaseList.append(button);
+  }
+
+  const release = selectedFleetAgentRelease();
+  elements.agentReleaseDetailEmpty.classList.toggle("hidden", Boolean(release));
+  elements.agentReleaseDetailContent.classList.toggle("hidden", !release);
+  if (!release) return;
+
+  elements.agentReleaseDetailChannel.textContent = `${release.channel} · rewizja ${release.revision}`;
+  elements.agentReleaseDetailTitle.textContent = `RDDS Agent ${release.version}`;
+  elements.agentReleaseDetailStatus.textContent = agentReleaseStatusLabel(release.status);
+  elements.agentReleaseDetailStatus.className =
+    `fleet-status agent-release-${release.status}`;
+  const lifecycle = [
+    `utworzył ${release.created_by} · ${formatDateTime(release.created_at)}`,
+  ];
+  if (release.published_at) {
+    lifecycle.push(`opublikował ${release.published_by} · ${formatDateTime(release.published_at)}`);
+  }
+  if (release.withdrawn_at) {
+    lifecycle.push(`wycofał ${release.withdrawn_by} · ${formatDateTime(release.withdrawn_at)}`);
+  }
+  elements.agentReleaseDetailMeta.textContent = lifecycle.join(" · ");
+
+  elements.agentReleaseVersion.value = release.version;
+  elements.agentReleaseChannel.value = release.channel;
+  elements.agentReleaseFilename.value = release.artifact_filename;
+  elements.agentReleaseSize.value = String(release.artifact_size_bytes);
+  elements.agentReleaseMinimum.value = release.minimum_agent_version;
+  elements.agentReleaseProtocol.value = release.protocol_version;
+  elements.agentReleaseSha256.value = release.artifact_sha256;
+  elements.agentReleaseNotes.value = release.release_notes;
+  const editable = release.status === "draft";
+  for (const field of elements.agentReleaseMetadataForm.querySelectorAll("input, select, textarea")) {
+    field.disabled = !editable;
+  }
+  elements.agentReleaseSave.classList.toggle("hidden", !editable);
+  elements.agentReleaseUpdateNoteRow.classList.toggle("hidden", !editable);
+  elements.agentReleaseUpdateNote.required = editable;
+  elements.agentReleasePublish.classList.toggle("hidden", release.status !== "draft");
+  elements.agentReleaseWithdraw.classList.toggle("hidden", release.status !== "published");
+  elements.agentReleaseLifecycle.classList.toggle("hidden", release.status === "withdrawn");
+  elements.agentReleaseActionNote.value = "";
+  elements.agentReleaseActionNote.required = release.status !== "withdrawn";
+}
+
+async function createFleetAgentRelease(event) {
+  event.preventDefault();
+  if (!canAdminister()) return;
+  let metadata;
+  try {
+    metadata = readAgentReleaseMetadata("create");
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+  if (!window.confirm(
+    `Utworzyć draft wydania ${metadata.version}? Nie spowoduje to instalacji na sensorach.`,
+  )) return;
+  const submit = elements.agentReleaseCreateForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const payload = await adminRequest("/api/v1/sensor-agent-releases", "POST", {
+      ...metadata,
+      change_note: elements.agentReleaseCreateChangeNote.value.trim(),
+    });
+    fleetSelectedAgentReleaseId = payload.release?.id ?? null;
+    setAgentReleaseCreateFormOpen(false);
+    showToast("Utworzono draft wydania. Żaden agent nie został zmieniony.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Utworzenie wydania nie powiodło się: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function updateFleetAgentRelease(event) {
+  event.preventDefault();
+  const release = selectedFleetAgentRelease();
+  if (!canAdminister() || !release || release.status !== "draft") return;
+  let metadata;
+  try {
+    metadata = readAgentReleaseMetadata("detail");
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+  if (!window.confirm(`Zapisać rewizję draftu wydania ${release.version}?`)) return;
+  elements.agentReleaseSave.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensor-agent-releases/${encodeURIComponent(release.id)}`,
+      "PUT",
+      {
+        ...metadata,
+        expected_revision: release.revision,
+        change_note: elements.agentReleaseUpdateNote.value.trim(),
+      },
+    );
+    showToast("Zapisano nową rewizję draftu wydania.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Zapis wydania nie powiódł się: ${error.message}`, true);
+  } finally {
+    elements.agentReleaseSave.disabled = false;
+  }
+}
+
+async function runFleetAgentReleaseAction(action) {
+  const release = selectedFleetAgentRelease();
+  if (!canAdminister() || !release) return;
+  const changeNote = elements.agentReleaseActionNote.value.trim();
+  if (changeNote.length < 3) {
+    showToast("Notatka operacji musi mieć co najmniej 3 znaki.", true);
+    elements.agentReleaseActionNote.focus();
+    return;
+  }
+  const prompt = action === "publish"
+    ? `Opublikować niezmienne metadane wydania ${release.version}?`
+    : `Wycofać wydanie ${release.version}? Ta operacja nie odinstaluje go z sensorów.`;
+  if (!window.confirm(prompt)) return;
+  const button = action === "publish"
+    ? elements.agentReleasePublish
+    : elements.agentReleaseWithdraw;
+  button.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensor-agent-releases/${encodeURIComponent(release.id)}/${action}`,
+      "POST",
+      { expected_revision: release.revision, change_note: changeNote },
+    );
+    if (action === "withdraw") elements.agentReleaseShowWithdrawn.checked = true;
+    showToast(
+      action === "publish"
+        ? "Opublikowano metadane wydania. Nie uruchomiono aktualizacji agentów."
+        : "Wycofano wydanie z katalogu aktywnych wydań.",
+    );
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Operacja na wydaniu nie powiodła się: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function agentUpdatePlanStatusLabel(status) {
+  return {
+    draft: "draft",
+    cancelled: "anulowany",
+  }[status] ?? status;
+}
+
+function setAgentUpdatePlanCreateFormOpen(open) {
+  elements.agentUpdatePlanCreateForm.classList.toggle("hidden", !open);
+  elements.agentUpdatePlanCreateToggle.setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  elements.agentUpdatePlanCreateForm.reset();
+  renderAgentUpdatePlanCreateOptions();
+  elements.agentUpdatePlanRelease.focus();
+}
+
+function renderAgentUpdatePlanCreateOptions() {
+  const selectedReleaseId = elements.agentUpdatePlanRelease.value;
+  const releases = fleetAgentReleases.filter((release) => release.status === "published");
+  elements.agentUpdatePlanRelease.replaceChildren();
+  if (releases.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Brak opublikowanego wydania";
+    elements.agentUpdatePlanRelease.append(option);
+    elements.agentUpdatePlanRelease.disabled = true;
+  } else {
+    elements.agentUpdatePlanRelease.disabled = false;
+    for (const release of releases) {
+      const option = document.createElement("option");
+      option.value = release.id;
+      option.textContent = `RDDS Agent ${release.version} · ${release.channel}`;
+      option.selected = String(release.id) === String(selectedReleaseId);
+      elements.agentUpdatePlanRelease.append(option);
+    }
+  }
+
+  elements.agentUpdatePlanSensors.replaceChildren();
+  const sensors = Array.isArray(fleetAgentReleaseCompliance?.sensors)
+    ? fleetAgentReleaseCompliance.sensors
+    : [];
+  elements.agentUpdatePlanSensors.classList.toggle("empty-state", sensors.length === 0);
+  if (sensors.length === 0) {
+    elements.agentUpdatePlanSensors.textContent = "Brak sensorów do wyboru.";
+    return;
+  }
+  for (const sensor of sensors) {
+    const label = document.createElement("label");
+    label.className = "agent-update-plan-sensor-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "agent-update-plan-sensor";
+    checkbox.value = sensor.id;
+    checkbox.checked = Boolean(sensor.update_eligible);
+    const text = document.createElement("span");
+    text.append(
+      fleetText("strong", "", sensor.display_name || sensor.sensor_key),
+      fleetText(
+        "small",
+        "fleet-card-meta",
+        `${sensor.sensor_key} · agent ${sensor.agent_version || "brak wersji"} · ${
+          agentReleaseComplianceStateLabels[sensor.release_state] ?? sensor.release_state
+        }`,
+      ),
+    );
+    label.append(checkbox, text);
+    elements.agentUpdatePlanSensors.append(label);
+  }
+}
+
+function renderFleetAgentUpdatePlans() {
+  elements.agentUpdatePlanList.replaceChildren();
+  elements.agentUpdatePlanList.classList.toggle("empty-state", fleetAgentUpdatePlans.length === 0);
+  if (fleetAgentUpdatePlans.length === 0) {
+    elements.agentUpdatePlanList.textContent = "Brak draftów planów aktualizacji.";
+  }
+  for (const plan of fleetAgentUpdatePlans) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "fleet-card";
+    button.classList.toggle(
+      "selected",
+      String(plan.id) === String(fleetSelectedAgentUpdatePlanId),
+    );
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", `RDDS Agent ${plan.release_version}`),
+      fleetText(
+        "span",
+        `fleet-status agent-update-plan-${plan.status}`,
+        agentUpdatePlanStatusLabel(plan.status),
+      ),
+    );
+    button.append(
+      heading,
+      fleetText("span", "fleet-card-key", String(plan.id).slice(0, 8)),
+      fleetText(
+        "span",
+        "fleet-card-note",
+        `kwalifikuje się ${plan.eligible_count}/${plan.target_count} · ${plan.release_channel}`,
+      ),
+    );
+    button.addEventListener("click", () => void selectFleetAgentUpdatePlan(plan.id));
+    elements.agentUpdatePlanList.append(button);
+  }
+
+  const plan = fleetSelectedAgentUpdatePlan;
+  const selectedMatches = plan
+    && String(plan.id) === String(fleetSelectedAgentUpdatePlanId);
+  elements.agentUpdatePlanDetailEmpty.classList.toggle("hidden", Boolean(selectedMatches));
+  elements.agentUpdatePlanDetailContent.classList.toggle("hidden", !selectedMatches);
+  if (!selectedMatches) return;
+
+  elements.agentUpdatePlanDetailRelease.textContent =
+    `${plan.release_channel} · SHA ${String(plan.release_artifact_sha256).slice(0, 12)}…`;
+  elements.agentUpdatePlanDetailTitle.textContent =
+    `Plan ${String(plan.id).slice(0, 8)} · RDDS Agent ${plan.release_version}`;
+  elements.agentUpdatePlanDetailStatus.textContent = agentUpdatePlanStatusLabel(plan.status);
+  elements.agentUpdatePlanDetailStatus.className =
+    `fleet-status agent-update-plan-${plan.status}`;
+  elements.agentUpdatePlanSummary.replaceChildren();
+  appendFleetMetric(elements.agentUpdatePlanSummary, "Wszystkie", plan.target_count);
+  appendFleetMetric(elements.agentUpdatePlanSummary, "Kwalifikują się", plan.eligible_count);
+  appendFleetMetric(
+    elements.agentUpdatePlanSummary,
+    "Poza ścieżką",
+    Math.max(0, plan.target_count - plan.eligible_count),
+  );
+  const lifecycle = [
+    `rewizja ${plan.revision}`,
+    `utworzył ${plan.created_by} · ${formatDateTime(plan.created_at)}`,
+  ];
+  if (plan.cancelled_at) {
+    lifecycle.push(`anulował ${plan.cancelled_by} · ${formatDateTime(plan.cancelled_at)}`);
+  }
+  elements.agentUpdatePlanDetailMeta.textContent = lifecycle.join(" · ");
+
+  elements.agentUpdatePlanTargetList.replaceChildren();
+  const targets = Array.isArray(plan.targets) ? plan.targets : [];
+  for (const target of targets) {
+    const row = document.createElement("div");
+    row.className = `agent-update-plan-target agent-update-plan-eligibility-${target.eligibility_status}`;
+    const heading = document.createElement("div");
+    heading.className = "fleet-card-heading";
+    heading.append(
+      fleetText("strong", "", `${target.sequence}. ${target.sensor_key}`),
+      fleetText(
+        "span",
+        `fleet-status agent-update-plan-eligibility-${target.eligibility_status}`,
+        agentUpdatePlanEligibilityLabels[target.eligibility_status] ?? target.eligibility_status,
+      ),
+    );
+    const reasons = Array.isArray(target.reason_codes)
+      ? target.reason_codes.map((reason) => agentUpdatePlanReasonLabels[reason] ?? reason)
+      : [];
+    row.append(
+      heading,
+      fleetText(
+        "span",
+        "fleet-card-meta",
+        `agent ${target.reported_agent_version || "brak wersji"} · stan ${target.sensor_status}`,
+      ),
+      fleetText(
+        "p",
+        "fleet-card-note",
+        reasons.length > 0 ? reasons.join(" · ") : "spełnia warunki migawki planu",
+      ),
+    );
+    elements.agentUpdatePlanTargetList.append(row);
+  }
+  elements.agentUpdatePlanActions.classList.toggle("hidden", plan.status !== "draft");
+  elements.agentUpdatePlanActionNote.required = plan.status === "draft";
+  elements.agentUpdatePlanActionNote.value = "";
+}
+
+async function selectFleetAgentUpdatePlan(planId) {
+  fleetSelectedAgentUpdatePlanId = planId;
+  fleetSelectedAgentUpdatePlan = null;
+  elements.agentUpdatePlanDetailEmpty.classList.remove("hidden");
+  elements.agentUpdatePlanDetailEmpty.textContent = "Wczytywanie migawki planu…";
+  elements.agentUpdatePlanDetailContent.classList.add("hidden");
+  renderFleetAgentUpdatePlans();
+  try {
+    const payload = await fetchJson(
+      `/api/v1/sensor-agent-update-plans/${encodeURIComponent(planId)}`,
+    );
+    if (String(fleetSelectedAgentUpdatePlanId) !== String(planId)) return;
+    fleetSelectedAgentUpdatePlan = payload.plan ?? null;
+    renderFleetAgentUpdatePlans();
+  } catch (error) {
+    if (String(fleetSelectedAgentUpdatePlanId) !== String(planId)) return;
+    elements.agentUpdatePlanDetailEmpty.classList.remove("hidden");
+    elements.agentUpdatePlanDetailContent.classList.add("hidden");
+    elements.agentUpdatePlanDetailEmpty.textContent =
+      `Nie udało się pobrać planu: ${error.message}`;
+  }
+}
+
+async function createFleetAgentUpdatePlan(event) {
+  event.preventDefault();
+  if (!canAdminister()) return;
+  const releaseId = elements.agentUpdatePlanRelease.value;
+  const sensorIds = [...elements.agentUpdatePlanSensors.querySelectorAll(
+    'input[name="agent-update-plan-sensor"]:checked',
+  )].map((input) => input.value);
+  if (!releaseId) {
+    showToast("Wybierz opublikowane wydanie docelowe.", true);
+    return;
+  }
+  if (sensorIds.length < 1 || sensorIds.length > 100) {
+    showToast("Wybierz od 1 do 100 sensorów.", true);
+    return;
+  }
+  const release = fleetAgentReleases.find((item) => String(item.id) === releaseId);
+  if (!window.confirm(
+    `Utworzyć draft planu dla ${sensorIds.length} sensorów i wydania ${
+      release?.version ?? "—"
+    }? Nie uruchomi to aktualizacji.`,
+  )) return;
+  const submit = elements.agentUpdatePlanCreateForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const payload = await adminRequest("/api/v1/sensor-agent-update-plans", "POST", {
+      release_id: releaseId,
+      sensor_ids: sensorIds,
+      change_note: elements.agentUpdatePlanCreateNote.value.trim(),
+    });
+    fleetSelectedAgentUpdatePlanId = payload.plan?.id ?? null;
+    fleetSelectedAgentUpdatePlan = payload.plan ?? null;
+    setAgentUpdatePlanCreateFormOpen(false);
+    showToast("Utworzono draft planu. Żaden sensor nie został zmieniony.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Utworzenie planu nie powiodło się: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function cancelFleetAgentUpdatePlan() {
+  const plan = fleetSelectedAgentUpdatePlan;
+  if (!canAdminister() || !plan || plan.status !== "draft") return;
+  const changeNote = elements.agentUpdatePlanActionNote.value.trim();
+  if (changeNote.length < 3) {
+    showToast("Powód anulowania musi mieć co najmniej 3 znaki.", true);
+    elements.agentUpdatePlanActionNote.focus();
+    return;
+  }
+  if (!window.confirm(
+    `Anulować draft planu ${String(plan.id).slice(0, 8)}? Sensory pozostaną bez zmian.`,
+  )) return;
+  elements.agentUpdatePlanCancel.disabled = true;
+  try {
+    await adminRequest(
+      `/api/v1/sensor-agent-update-plans/${encodeURIComponent(plan.id)}/cancel`,
+      "POST",
+      { expected_revision: plan.revision, change_note: changeNote },
+    );
+    elements.agentUpdatePlanShowCancelled.checked = true;
+    showToast("Anulowano draft planu. Żaden sensor nie został zmieniony.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Anulowanie planu nie powiodło się: ${error.message}`, true);
+  } finally {
+    elements.agentUpdatePlanCancel.disabled = false;
+  }
+}
+
 async function loadFleetConfigurationConsole() {
   const sequence = ++fleetLoadSequence;
-  setFleetConfigurationMessage("Pobieranie gotowości, profili i rolloutów…");
+  setFleetConfigurationMessage("Pobieranie gotowości, profili, rolloutów, wydań i planów…");
   elements.fleetConfigurationRefresh.disabled = true;
   try {
     const includeTerminal = elements.rolloutShowTerminal.checked ? "true" : "false";
-    const [readinessPayload, profilesPayload, rolloutsPayload] = await Promise.all([
+    const includeWithdrawn = elements.agentReleaseShowWithdrawn.checked ? "true" : "false";
+    const includeCancelledPlans = elements.agentUpdatePlanShowCancelled.checked
+      ? "true"
+      : "false";
+    const [
+      readinessPayload,
+      profilesPayload,
+      rolloutsPayload,
+      releasesPayload,
+      releaseCompliancePayload,
+      updatePlansPayload,
+    ] = await Promise.all([
       fetchJson("/api/v1/sensor-fleet/readiness"),
       fetchJson("/api/v1/sensor-configuration-profiles?include_disabled=true&limit=500&offset=0"),
       fetchJson(
         "/api/v1/sensor-configuration-rollouts"
           + `?include_terminal=${includeTerminal}&limit=500&offset=0`,
       ),
+      fetchJson(
+        "/api/v1/sensor-agent-releases"
+          + `?include_withdrawn=${includeWithdrawn}&limit=500&offset=0`,
+      ),
+      fetchJson("/api/v1/sensor-fleet/agent-release-compliance"),
+      fetchJson(
+        "/api/v1/sensor-agent-update-plans"
+          + `?include_cancelled=${includeCancelledPlans}&limit=500&offset=0`,
+      ),
     ]);
     if (sequence !== fleetLoadSequence) return;
     fleetReadiness = readinessPayload;
     fleetProfiles = Array.isArray(profilesPayload.profiles) ? profilesPayload.profiles : [];
     fleetRollouts = Array.isArray(rolloutsPayload.rollouts) ? rolloutsPayload.rollouts : [];
+    fleetAgentReleases = Array.isArray(releasesPayload.releases)
+      ? releasesPayload.releases
+      : [];
+    fleetAgentReleaseCompliance = releaseCompliancePayload;
+    fleetAgentUpdatePlans = Array.isArray(updatePlansPayload.plans)
+      ? updatePlansPayload.plans
+      : [];
 
     if (!fleetProfiles.some((item) => String(item.id) === String(fleetSelectedProfileId))) {
       fleetSelectedProfileId = fleetProfiles[0]?.id ?? null;
@@ -7092,6 +7826,17 @@ async function loadFleetConfigurationConsole() {
     if (!fleetRollouts.some((item) => String(item.id) === String(fleetSelectedRolloutId))) {
       fleetSelectedRolloutId = fleetRollouts[0]?.id ?? null;
       fleetSelectedRollout = null;
+    }
+    if (!fleetAgentReleases.some(
+      (item) => String(item.id) === String(fleetSelectedAgentReleaseId),
+    )) {
+      fleetSelectedAgentReleaseId = fleetAgentReleases[0]?.id ?? null;
+    }
+    if (!fleetAgentUpdatePlans.some(
+      (item) => String(item.id) === String(fleetSelectedAgentUpdatePlanId),
+    )) {
+      fleetSelectedAgentUpdatePlanId = fleetAgentUpdatePlans[0]?.id ?? null;
+      fleetSelectedAgentUpdatePlan = null;
     }
     if (!(fleetReadiness.sensors ?? []).some(
       (item) => String(item.id) === String(fleetSelectedReadinessSensorId),
@@ -7104,6 +7849,10 @@ async function loadFleetConfigurationConsole() {
     renderFleetProfiles();
     renderRolloutSensorTargets();
     renderFleetRollouts();
+    renderFleetAgentReleases();
+    renderFleetAgentReleaseCompliance();
+    renderAgentUpdatePlanCreateOptions();
+    renderFleetAgentUpdatePlans();
 
     const details = [];
     if (fleetSelectedProfileId) details.push(loadFleetProfileVersions(fleetSelectedProfileId));
@@ -7111,14 +7860,18 @@ async function loadFleetConfigurationConsole() {
     if (fleetSelectedReadinessSensorId) {
       details.push(loadFleetReadinessTimeline(fleetSelectedReadinessSensorId));
     }
+    if (fleetSelectedAgentUpdatePlanId) {
+      details.push(selectFleetAgentUpdatePlan(fleetSelectedAgentUpdatePlanId));
+    }
     await Promise.all(details);
     if (sequence !== fleetLoadSequence) return;
     setFleetConfigurationMessage(
       `Gotowe: ${fleetReadiness.summary?.ready_count ?? 0} · `
         + `zablokowane: ${fleetReadiness.summary?.blocked_count ?? 0} · `
         + `poza oceną: ${fleetReadiness.summary?.excluded_count ?? 0} · `
-        + `profile: ${fleetProfiles.length} · rollouty: ${fleetRollouts.length}. `
-        + "Utworzenie rollout'u zapisuje tylko draft.",
+        + `profile: ${fleetProfiles.length} · rollouty: ${fleetRollouts.length} · `
+        + `wydania: ${fleetAgentReleases.length} · plany: ${fleetAgentUpdatePlans.length}. `
+        + "Utworzenie rollout'u lub planu zapisuje tylko draft.",
     );
   } catch (error) {
     if (sequence !== fleetLoadSequence) return;
@@ -7135,8 +7888,12 @@ function closeFleetConfigurationEditor() {
   elements.fleetConfigurationEditor.classList.add("hidden");
   elements.profileCreateForm.classList.add("hidden");
   elements.rolloutCreateForm.classList.add("hidden");
+  elements.agentReleaseCreateForm.classList.add("hidden");
+  elements.agentUpdatePlanCreateForm.classList.add("hidden");
   elements.profileCreateToggle.setAttribute("aria-expanded", "false");
   elements.rolloutCreateToggle.setAttribute("aria-expanded", "false");
+  elements.agentReleaseCreateToggle.setAttribute("aria-expanded", "false");
+  elements.agentUpdatePlanCreateToggle.setAttribute("aria-expanded", "false");
 }
 
 async function openFleetConfigurationEditor() {
@@ -8232,6 +8989,46 @@ elements.rolloutAdvance.addEventListener("click", () => void runFleetRolloutActi
 elements.rolloutResume.addEventListener("click", () => void runFleetRolloutAction("resume"));
 elements.rolloutCancel.addEventListener("click", () => void runFleetRolloutAction("cancel"));
 elements.rolloutRollback.addEventListener("click", () => void runFleetRolloutAction("rollback"));
+elements.agentReleaseCreateToggle.addEventListener("click", () => {
+  setAgentReleaseCreateFormOpen(elements.agentReleaseCreateForm.classList.contains("hidden"));
+});
+elements.agentReleaseCreateCancel.addEventListener(
+  "click",
+  () => setAgentReleaseCreateFormOpen(false),
+);
+elements.agentReleaseCreateForm.addEventListener("submit", createFleetAgentRelease);
+elements.agentReleaseMetadataForm.addEventListener("submit", updateFleetAgentRelease);
+elements.agentReleasePublish.addEventListener(
+  "click",
+  () => void runFleetAgentReleaseAction("publish"),
+);
+elements.agentReleaseWithdraw.addEventListener(
+  "click",
+  () => void runFleetAgentReleaseAction("withdraw"),
+);
+elements.agentReleaseShowWithdrawn.addEventListener("change", () => {
+  fleetSelectedAgentReleaseId = null;
+  void loadFleetConfigurationConsole();
+});
+elements.agentUpdatePlanCreateToggle.addEventListener("click", () => {
+  setAgentUpdatePlanCreateFormOpen(
+    elements.agentUpdatePlanCreateForm.classList.contains("hidden"),
+  );
+});
+elements.agentUpdatePlanCreateCancel.addEventListener(
+  "click",
+  () => setAgentUpdatePlanCreateFormOpen(false),
+);
+elements.agentUpdatePlanCreateForm.addEventListener("submit", createFleetAgentUpdatePlan);
+elements.agentUpdatePlanCancel.addEventListener(
+  "click",
+  () => void cancelFleetAgentUpdatePlan(),
+);
+elements.agentUpdatePlanShowCancelled.addEventListener("change", () => {
+  fleetSelectedAgentUpdatePlanId = null;
+  fleetSelectedAgentUpdatePlan = null;
+  void loadFleetConfigurationConsole();
+});
 elements.drawZone.addEventListener("click", startZoneDrawing);
 elements.registerSensor.addEventListener("click", startSensorRegistration);
 elements.manageOperators.addEventListener("click", openOperatorEditor);

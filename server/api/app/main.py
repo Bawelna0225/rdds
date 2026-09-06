@@ -24,6 +24,23 @@ from app.alert_store import (
     set_zone_active,
     update_zone,
 )
+from app.agent_release_store import (
+    AgentReleaseConflict,
+    create_sensor_agent_release,
+    get_sensor_agent_release,
+    list_sensor_agent_releases,
+    publish_sensor_agent_release,
+    update_sensor_agent_release,
+    withdraw_sensor_agent_release,
+)
+from app.agent_release_compliance_store import get_sensor_agent_release_compliance
+from app.agent_update_plan_store import (
+    AgentUpdatePlanConflict,
+    cancel_sensor_agent_update_plan,
+    create_sensor_agent_update_plan,
+    get_sensor_agent_update_plan,
+    list_sensor_agent_update_plans,
+)
 from app.audit_store import AuditCategory, list_audit_events
 from app.auth_store import (
     authenticate_login,
@@ -101,6 +118,11 @@ from app.models import (
     SensorConfigurationRolloutAction,
     SensorConfigurationRolloutCreate,
     SensorFleetReadinessPolicyUpdate,
+    SensorAgentReleaseAction,
+    SensorAgentReleaseCreate,
+    SensorAgentReleaseUpdate,
+    SensorAgentUpdatePlanAction,
+    SensorAgentUpdatePlanCreate,
 )
 from app.operations_store import get_database_storage, get_maintenance_status
 from app.security import (
@@ -209,7 +231,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.26.0",
+    version="0.27.0",
     lifespan=lifespan,
 )
 
@@ -1025,6 +1047,265 @@ def post_sensor_configuration_rollout_rollback(
     if rollout is None:
         raise HTTPException(status_code=404, detail="configuration rollout not found")
     return {"time": utc_now(), "rollout": rollout}
+
+
+@app.get(
+    "/api/v1/sensor-agent-update-plans",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_agent_update_plans(
+    include_cancelled: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        plans, total = list_sensor_agent_update_plans(
+            include_cancelled=include_cancelled,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent update plan list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "time": utc_now(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "plans": plans,
+    }
+
+
+@app.post(
+    "/api/v1/sensor-agent-update-plans",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+    status_code=status.HTTP_201_CREATED,
+)
+def post_sensor_agent_update_plan(
+    payload: SensorAgentUpdatePlanCreate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        plan = create_sensor_agent_update_plan(
+            payload=payload,
+            actor=principal.actor,
+        )
+    except AgentUpdatePlanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent update plan creation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail="published agent release not found")
+    return {"time": utc_now(), "plan": plan}
+
+
+@app.get(
+    "/api/v1/sensor-agent-update-plans/{plan_id}",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_agent_update_plan_view(plan_id: UUID) -> dict[str, object]:
+    try:
+        plan = get_sensor_agent_update_plan(plan_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent update plan query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail="agent update plan not found")
+    return {"time": utc_now(), "plan": plan}
+
+
+@app.post(
+    "/api/v1/sensor-agent-update-plans/{plan_id}/cancel",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_agent_update_plan_cancel(
+    plan_id: UUID,
+    payload: SensorAgentUpdatePlanAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        plan = cancel_sensor_agent_update_plan(
+            plan_id=plan_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except AgentUpdatePlanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent update plan cancellation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail="agent update plan not found")
+    return {"time": utc_now(), "plan": plan}
+
+
+@app.get(
+    "/api/v1/sensor-fleet/agent-release-compliance",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_agent_release_compliance_view() -> dict[str, object]:
+    try:
+        compliance = get_sensor_agent_release_compliance()
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release compliance query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), **compliance}
+
+
+@app.get(
+    "/api/v1/sensor-agent-releases",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_agent_releases(
+    include_withdrawn: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    try:
+        releases, total = list_sensor_agent_releases(
+            include_withdrawn=include_withdrawn,
+            limit=limit,
+            offset=offset,
+        )
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release list query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "time": utc_now(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "releases": releases,
+    }
+
+
+@app.post(
+    "/api/v1/sensor-agent-releases",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+    status_code=status.HTTP_201_CREATED,
+)
+def post_sensor_agent_release(
+    payload: SensorAgentReleaseCreate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        release = create_sensor_agent_release(payload=payload, actor=principal.actor)
+    except psycopg.errors.UniqueViolation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="agent release version already exists",
+        ) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release creation failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"time": utc_now(), "release": release}
+
+
+@app.get(
+    "/api/v1/sensor-agent-releases/{release_id}",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_sensor_agent_release_view(release_id: UUID) -> dict[str, object]:
+    try:
+        release = get_sensor_agent_release(release_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if release is None:
+        raise HTTPException(status_code=404, detail="agent release not found")
+    return {"time": utc_now(), "release": release}
+
+
+@app.put(
+    "/api/v1/sensor-agent-releases/{release_id}",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def put_sensor_agent_release(
+    release_id: UUID,
+    payload: SensorAgentReleaseUpdate,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        release = update_sensor_agent_release(
+            release_id=release_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except AgentReleaseConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except psycopg.errors.UniqueViolation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="agent release version already exists",
+        ) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release update failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if release is None:
+        raise HTTPException(status_code=404, detail="agent release not found")
+    return {"time": utc_now(), "release": release}
+
+
+@app.post(
+    "/api/v1/sensor-agent-releases/{release_id}/publish",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_agent_release_publish(
+    release_id: UUID,
+    payload: SensorAgentReleaseAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        release = publish_sensor_agent_release(
+            release_id=release_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except AgentReleaseConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release publication failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if release is None:
+        raise HTTPException(status_code=404, detail="agent release not found")
+    return {"time": utc_now(), "release": release}
+
+
+@app.post(
+    "/api/v1/sensor-agent-releases/{release_id}/withdraw",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+)
+def post_sensor_agent_release_withdraw(
+    release_id: UUID,
+    payload: SensorAgentReleaseAction,
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    try:
+        release = withdraw_sensor_agent_release(
+            release_id=release_id,
+            payload=payload,
+            actor=principal.actor,
+        )
+    except AgentReleaseConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release withdrawal failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if release is None:
+        raise HTTPException(status_code=404, detail="agent release not found")
+    return {"time": utc_now(), "release": release}
 
 
 @app.get(
@@ -2029,6 +2310,12 @@ AuditEventType = Literal[
     "sensor_configuration_rollout_paused",
     "sensor_configuration_rollout_resumed",
     "sensor_fleet_readiness_policy_changed",
+    "sensor_agent_release_created",
+    "sensor_agent_release_updated",
+    "sensor_agent_release_published",
+    "sensor_agent_release_withdrawn",
+    "sensor_agent_update_plan_created",
+    "sensor_agent_update_plan_cancelled",
 ]
 
 

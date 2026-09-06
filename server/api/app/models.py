@@ -227,6 +227,136 @@ class SensorFleetReadinessPolicyUpdate(StrictModel):
         return self
 
 
+class SensorAgentReleaseMetadata(StrictModel):
+    version: str = Field(
+        min_length=5,
+        max_length=32,
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$",
+    )
+    channel: Literal["stable", "candidate"]
+    artifact_filename: str = Field(
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$",
+    )
+    artifact_sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9A-Fa-f]{64}$",
+    )
+    artifact_size_bytes: int = Field(ge=1, le=536870912)
+    minimum_agent_version: str = Field(
+        min_length=5,
+        max_length=32,
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$",
+    )
+    protocol_version: str = Field(
+        min_length=8,
+        max_length=32,
+        pattern=r"^rdds/[0-9]+\.[0-9]+$",
+    )
+    release_notes: str = Field(min_length=3, max_length=5000)
+
+    @field_validator("artifact_sha256")
+    @classmethod
+    def normalize_sha256(cls, value: str) -> str:
+        return value.lower()
+
+    @field_validator("release_notes")
+    @classmethod
+    def release_notes_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("release_notes cannot be blank")
+        return stripped
+
+    @model_validator(mode="after")
+    def minimum_version_cannot_exceed_release(
+        self,
+    ) -> "SensorAgentReleaseMetadata":
+        release_version = tuple(int(part) for part in self.version.split("."))
+        minimum_version = tuple(
+            int(part) for part in self.minimum_agent_version.split(".")
+        )
+        if minimum_version > release_version:
+            raise ValueError(
+                "minimum_agent_version cannot be newer than release version"
+            )
+        return self
+
+
+class SensorAgentReleaseCreate(SensorAgentReleaseMetadata):
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
+class SensorAgentReleaseUpdate(SensorAgentReleaseMetadata):
+    expected_revision: int = Field(ge=1)
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
+class SensorAgentReleaseAction(StrictModel):
+    expected_revision: int = Field(ge=1)
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
+class SensorAgentUpdatePlanCreate(StrictModel):
+    release_id: UUID
+    sensor_ids: list[UUID] = Field(min_length=1, max_length=100)
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("sensor_ids")
+    @classmethod
+    def sensor_ids_must_be_unique(cls, value: list[UUID]) -> list[UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("sensor_ids must be unique")
+        return value
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
+class SensorAgentUpdatePlanAction(StrictModel):
+    expected_revision: int = Field(ge=1)
+    change_note: str = Field(min_length=3, max_length=500)
+
+    @field_validator("change_note")
+    @classmethod
+    def change_note_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("change_note cannot be blank")
+        return stripped
+
+
 class SensorConfigurationReport(StrictModel):
     desired_revision: int = Field(ge=0)
     applied_revision: int | None = Field(default=None, ge=0)
