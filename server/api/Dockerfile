@@ -7,7 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN groupadd --system --gid 10001 rdds \
-    && useradd --system --uid 10001 --gid rdds --home-dir /nonexistent rdds
+    && useradd --system --uid 10001 --gid rdds --home-dir /nonexistent rdds \
+    && install -d -o rdds -g rdds -m 0750 /var/lib/rdds/agent-artifacts
 
 COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt

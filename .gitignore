@@ -10,6 +10,7 @@ __pycache__/
 .idea/
 *.log
 backups/
+artifacts/
 gateway/certs/
 node_modules/
 dist/

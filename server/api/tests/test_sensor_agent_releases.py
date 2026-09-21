@@ -212,7 +212,7 @@ class SensorAgentReleaseWebTests(unittest.TestCase):
         self.assertIn('id="agent-release-list"', INDEX)
         self.assertIn("Wydania agentów", INDEX)
 
-    def test_form_collects_identity_but_never_binary_or_url(self) -> None:
+    def test_form_separates_catalog_metadata_from_controlled_binary_upload(self) -> None:
         for field in (
             "agent-release-create-filename",
             "agent-release-create-sha256",
@@ -220,7 +220,11 @@ class SensorAgentReleaseWebTests(unittest.TestCase):
             "agent-release-create-protocol",
         ):
             self.assertIn(f'id="{field}"', INDEX)
-        self.assertNotRegex(INDEX, r'<input[^>]+type="file"')
+        self.assertIn('id="agent-release-artifact-file" type="file"', INDEX)
+        create_form = INDEX.split('id="agent-release-create-form"', 1)[1].split(
+            "</form>", 1
+        )[0]
+        self.assertNotRegex(create_form, r'<input[^>]+type="file"')
         self.assertNotIn("download_url", INDEX + MAIN_JS)
 
     def test_create_update_and_lifecycle_are_separate_confirmed_writes(self) -> None:

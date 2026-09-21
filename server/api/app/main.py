@@ -30,8 +30,13 @@ from app.agent_release_store import (
     get_sensor_agent_release,
     list_sensor_agent_releases,
     publish_sensor_agent_release,
+    register_verified_sensor_agent_artifact,
     update_sensor_agent_release,
     withdraw_sensor_agent_release,
+)
+from app.agent_artifact_store import (
+    AgentArtifactRejected,
+    store_verified_agent_artifact,
 )
 from app.agent_release_compliance_store import get_sensor_agent_release_compliance
 from app.agent_update_plan_store import (
@@ -1256,6 +1261,95 @@ def put_sensor_agent_release(
     return {"time": utc_now(), "release": release}
 
 
+@app.put(
+    "/api/v1/sensor-agent-releases/{release_id}/artifact",
+    tags=["sensor-agent-releases"],
+    dependencies=[Depends(require_administrator_write)],
+)
+async def put_sensor_agent_release_artifact(
+    request: Request,
+    release_id: UUID,
+    expected_revision: int = Query(ge=1),
+    change_note: str = Query(min_length=3, max_length=500),
+    principal: OperatorPrincipal = Depends(require_administrator_write),
+) -> dict[str, object]:
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != (
+        "application/octet-stream"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="artifact upload requires application/octet-stream",
+        )
+    change_note = change_note.strip()
+    if len(change_note) < 3:
+        raise HTTPException(status_code=422, detail="change_note cannot be blank")
+    try:
+        release = get_sensor_agent_release(release_id)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent release lookup before artifact upload failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if release is None:
+        raise HTTPException(status_code=404, detail="agent release not found")
+    if release["status"] == "withdrawn":
+        raise HTTPException(status_code=409, detail="withdrawn release cannot accept an artifact")
+    if release["revision"] != expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail="agent release changed; refresh before uploading",
+        )
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid Content-Length") from exc
+        if declared_size != release["artifact_size_bytes"]:
+            raise HTTPException(
+                status_code=422,
+                detail="artifact size does not match catalog metadata",
+            )
+    try:
+        stored = await store_verified_agent_artifact(
+            chunks=request.stream(),
+            root_directory=settings.agent_artifact_directory,
+            expected_sha256=release["artifact_sha256"],
+            expected_size_bytes=release["artifact_size_bytes"],
+        )
+    except AgentArtifactRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Sensor agent artifact storage failed")
+        raise HTTPException(status_code=503, detail="artifact storage unavailable") from exc
+    try:
+        verified_release = register_verified_sensor_agent_artifact(
+            release_id=release_id,
+            expected_revision=expected_revision,
+            artifact_filename=release["artifact_filename"],
+            artifact_sha256=stored.sha256,
+            artifact_size_bytes=stored.size_bytes,
+            storage_key=stored.storage_key,
+            change_note=change_note,
+            actor=principal.actor,
+        )
+    except AgentReleaseConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Sensor agent artifact verification registration failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    if verified_release is None:
+        raise HTTPException(status_code=404, detail="agent release not found")
+    return {
+        "time": utc_now(),
+        "release": verified_release,
+        "artifact": {
+            "storage_status": "verified",
+            "sha256": stored.sha256,
+            "size_bytes": stored.size_bytes,
+            "created": stored.created,
+        },
+    }
+
+
 @app.post(
     "/api/v1/sensor-agent-releases/{release_id}/publish",
     tags=["sensor-agent-releases"],
@@ -2314,6 +2408,7 @@ AuditEventType = Literal[
     "sensor_agent_release_updated",
     "sensor_agent_release_published",
     "sensor_agent_release_withdrawn",
+    "sensor_agent_release_artifact_verified",
     "sensor_agent_update_plan_created",
     "sensor_agent_update_plan_cancelled",
 ]

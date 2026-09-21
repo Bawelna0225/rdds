@@ -36,7 +36,26 @@ RELEASE_COLUMNS = """
     release.published_by,
     release.withdrawn_at,
     release.withdrawn_by,
-    release.withdrawal_reason
+    release.withdrawal_reason,
+    CASE
+        WHEN artifact.release_id IS NULL THEN 'missing'
+        WHEN artifact.artifact_filename = release.artifact_filename
+         AND artifact.artifact_sha256 = release.artifact_sha256
+         AND artifact.artifact_size_bytes = release.artifact_size_bytes
+         AND (
+             artifact.release_revision = release.revision
+             OR (
+                 release.status = 'published'
+                 AND artifact.release_revision = release.revision - 1
+             )
+             OR release.status = 'withdrawn'
+         )
+        THEN 'verified'
+        ELSE 'stale'
+    END AS artifact_storage_status,
+    artifact.release_revision AS artifact_verified_revision,
+    artifact.verified_at AS artifact_verified_at,
+    artifact.verified_by AS artifact_verified_by
 """
 
 
@@ -46,11 +65,13 @@ def _read_release(
     *,
     for_update: bool = False,
 ) -> dict[str, Any] | None:
-    lock = " FOR UPDATE" if for_update else ""
+    lock = " FOR UPDATE OF release" if for_update else ""
     cursor.execute(
         f"""
         SELECT {RELEASE_COLUMNS}
         FROM sensor_agent_releases AS release
+        LEFT JOIN sensor_agent_release_artifacts AS artifact
+          ON artifact.release_id = release.id
         WHERE release.id = %s{lock}
         """,
         (release_id,),
@@ -108,6 +129,8 @@ def list_sensor_agent_releases(
             f"""
             SELECT {RELEASE_COLUMNS}
             FROM sensor_agent_releases AS release
+            LEFT JOIN sensor_agent_release_artifacts AS artifact
+              ON artifact.release_id = release.id
             WHERE (%(include_withdrawn)s OR release.status <> 'withdrawn')
             ORDER BY
                 CASE release.status
@@ -133,6 +156,111 @@ def list_sensor_agent_releases(
 def get_sensor_agent_release(release_id: UUID) -> dict[str, Any] | None:
     with connection() as conn, conn.cursor() as cursor:
         return _read_release(cursor, release_id)
+
+
+def register_verified_sensor_agent_artifact(
+    *,
+    release_id: UUID,
+    expected_revision: int,
+    artifact_filename: str,
+    artifact_sha256: str,
+    artifact_size_bytes: int,
+    storage_key: str,
+    change_note: str,
+    actor: str,
+) -> dict[str, Any] | None:
+    with connection() as conn, conn.cursor() as cursor:
+        release = _read_release(cursor, release_id, for_update=True)
+        if release is None:
+            return None
+        if release["status"] == "withdrawn":
+            raise AgentReleaseConflict("withdrawn release cannot accept an artifact")
+        if release["revision"] != expected_revision:
+            raise AgentReleaseConflict(
+                "agent release changed during upload; refresh and upload again"
+            )
+        if (
+            release["artifact_filename"] != artifact_filename
+            or release["artifact_sha256"] != artifact_sha256
+            or release["artifact_size_bytes"] != artifact_size_bytes
+        ):
+            raise AgentReleaseConflict(
+                "agent release metadata changed during upload; refresh and upload again"
+            )
+        cursor.execute(
+            """
+            INSERT INTO sensor_agent_release_artifacts (
+                release_id,
+                release_revision,
+                artifact_filename,
+                artifact_sha256,
+                artifact_size_bytes,
+                storage_key,
+                verified_by
+            )
+            VALUES (
+                %(release_id)s,
+                %(release_revision)s,
+                %(artifact_filename)s,
+                %(artifact_sha256)s,
+                %(artifact_size_bytes)s,
+                %(storage_key)s,
+                %(actor)s
+            )
+            ON CONFLICT (release_id) DO UPDATE
+            SET
+                release_revision = EXCLUDED.release_revision,
+                artifact_filename = EXCLUDED.artifact_filename,
+                artifact_sha256 = EXCLUDED.artifact_sha256,
+                artifact_size_bytes = EXCLUDED.artifact_size_bytes,
+                storage_key = EXCLUDED.storage_key,
+                verified_at = NOW(),
+                verified_by = EXCLUDED.verified_by
+            """,
+            {
+                "release_id": release_id,
+                "release_revision": expected_revision,
+                "artifact_filename": artifact_filename,
+                "artifact_sha256": artifact_sha256,
+                "artifact_size_bytes": artifact_size_bytes,
+                "storage_key": storage_key,
+                "actor": actor,
+            },
+        )
+        cursor.execute(
+            """
+            INSERT INTO audit_events (occurred_at, event_type, actor, details)
+            VALUES (
+                NOW(),
+                'sensor_agent_release_artifact_verified',
+                %(actor)s,
+                jsonb_build_object(
+                    'release_id', %(release_id)s::uuid,
+                    'version', %(version)s::text,
+                    'release_revision', %(release_revision)s::bigint,
+                    'artifact_filename', %(artifact_filename)s::text,
+                    'artifact_sha256', %(artifact_sha256)s::text,
+                    'artifact_size_bytes', %(artifact_size_bytes)s::bigint,
+                    'change_note', %(change_note)s::text
+                )
+            )
+            """,
+            {
+                "actor": actor,
+                "release_id": release_id,
+                "version": release["version"],
+                "release_revision": expected_revision,
+                "artifact_filename": artifact_filename,
+                "artifact_sha256": artifact_sha256,
+                "artifact_size_bytes": artifact_size_bytes,
+                "storage_key": storage_key,
+                "change_note": change_note,
+            },
+        )
+        verified = _read_release(cursor, release_id)
+        if verified is None:
+            raise RuntimeError("Verified sensor agent release could not be read")
+        return verified
 
 
 def create_sensor_agent_release(
@@ -297,6 +425,10 @@ def publish_sensor_agent_release(
         if before["revision"] != payload.expected_revision:
             raise AgentReleaseConflict(
                 "agent release changed; refresh before publishing"
+            )
+        if before["artifact_storage_status"] != "verified":
+            raise AgentReleaseConflict(
+                "release artifact must be uploaded and verified before publishing"
             )
         cursor.execute(
             """

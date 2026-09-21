@@ -368,6 +368,7 @@ const auditEventLabels = {
   sensor_agent_release_updated: "Zmieniono draft wydania agenta",
   sensor_agent_release_published: "Opublikowano metadane wydania agenta",
   sensor_agent_release_withdrawn: "Wycofano wydanie agenta",
+  sensor_agent_release_artifact_verified: "Zweryfikowano artefakt wydania agenta",
   sensor_agent_update_plan_created: "Utworzono draft planu aktualizacji agentów",
   sensor_agent_update_plan_cancelled: "Anulowano draft planu aktualizacji agentów",
   operator_created: "Utworzono konto",
@@ -554,6 +555,12 @@ const elements = {
   agentReleaseUpdateNoteRow: document.querySelector("#agent-release-update-note-row"),
   agentReleaseUpdateNote: document.querySelector("#agent-release-update-note"),
   agentReleaseSave: document.querySelector("#agent-release-save"),
+  agentReleaseArtifactForm: document.querySelector("#agent-release-artifact-form"),
+  agentReleaseArtifactStatus: document.querySelector("#agent-release-artifact-status"),
+  agentReleaseArtifactMeta: document.querySelector("#agent-release-artifact-meta"),
+  agentReleaseArtifactFile: document.querySelector("#agent-release-artifact-file"),
+  agentReleaseArtifactNote: document.querySelector("#agent-release-artifact-note"),
+  agentReleaseArtifactUpload: document.querySelector("#agent-release-artifact-upload"),
   agentReleaseLifecycle: document.querySelector("#agent-release-lifecycle"),
   agentReleaseActionNote: document.querySelector("#agent-release-action-note"),
   agentReleasePublish: document.querySelector("#agent-release-publish"),
@@ -765,7 +772,7 @@ const map = L.map("map", {
 
 L.control.zoom({ position: "bottomright" }).addTo(map);
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: "&copy; OpenStreetMap contributors",
 }).addTo(map);
@@ -1967,6 +1974,37 @@ async function adminRequest(path, method, body) {
     }
     throw error;
   }
+}
+
+async function adminBinaryRequest(path, file) {
+  if (!currentUser || !csrfToken) {
+    throw new ApiError("Sesja użytkownika nie jest aktywna", 401);
+  }
+  const response = await fetch(path, {
+    method: "PUT",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/octet-stream",
+      "X-RDDS-CSRF-Token": csrfToken,
+    },
+    body: file,
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const payload = await response.json();
+      detail = typeof payload.detail === "object"
+        ? payload.detail.message ?? payload.detail.code ?? detail
+        : payload.detail ?? detail;
+    } catch {
+      // Preserve the HTTP status when a proxy returns a non-JSON response.
+    }
+    if (response.status === 401) clearSession("Sesja wygasła. Zaloguj się ponownie.");
+    throw new ApiError(`${response.status}: ${detail}`, response.status, detail);
+  }
+  return response.json();
 }
 
 function canOperate() {
@@ -7287,6 +7325,14 @@ function agentReleaseStatusLabel(status) {
   }[status] ?? status;
 }
 
+function agentArtifactStatusLabel(status) {
+  return {
+    missing: "brak artefaktu",
+    stale: "weryfikacja nieaktualna",
+    verified: "zweryfikowany",
+  }[status] ?? status;
+}
+
 function setAgentReleaseCreateFormOpen(open) {
   elements.agentReleaseCreateForm.classList.toggle("hidden", !open);
   elements.agentReleaseCreateToggle.setAttribute("aria-expanded", String(open));
@@ -7351,7 +7397,9 @@ function renderFleetAgentReleases() {
       fleetText(
         "span",
         "fleet-card-note",
-        `${release.artifact_filename} · ${formatBytes(release.artifact_size_bytes)}`,
+        `${release.artifact_filename} · ${formatBytes(release.artifact_size_bytes)} · ${
+          agentArtifactStatusLabel(release.artifact_storage_status ?? "missing")
+        }`,
       ),
     );
     button.addEventListener("click", () => {
@@ -7390,6 +7438,29 @@ function renderFleetAgentReleases() {
   elements.agentReleaseProtocol.value = release.protocol_version;
   elements.agentReleaseSha256.value = release.artifact_sha256;
   elements.agentReleaseNotes.value = release.release_notes;
+  const artifactStatus = release.artifact_storage_status ?? "missing";
+  elements.agentReleaseArtifactStatus.textContent = agentArtifactStatusLabel(artifactStatus);
+  elements.agentReleaseArtifactStatus.className =
+    `fleet-status agent-artifact-${artifactStatus}`;
+  elements.agentReleaseArtifactMeta.textContent = artifactStatus === "verified"
+    ? `SHA-256 zgodny · ${formatDateTime(release.artifact_verified_at)} · ${release.artifact_verified_by}`
+    : artifactStatus === "stale"
+      ? "Wgrany plik nie odpowiada bieżącym metadanym"
+      : "Plik nie został jeszcze zapisany na serwerze";
+  const artifactUploadVisible = release.status !== "withdrawn" && artifactStatus !== "verified";
+  elements.agentReleaseArtifactFile.closest("label").classList.toggle(
+    "hidden",
+    !artifactUploadVisible,
+  );
+  elements.agentReleaseArtifactNote.closest("label").classList.toggle(
+    "hidden",
+    !artifactUploadVisible,
+  );
+  elements.agentReleaseArtifactUpload.classList.toggle("hidden", !artifactUploadVisible);
+  elements.agentReleaseArtifactFile.required = artifactUploadVisible;
+  elements.agentReleaseArtifactNote.required = artifactUploadVisible;
+  elements.agentReleaseArtifactFile.value = "";
+  elements.agentReleaseArtifactNote.value = "";
   const editable = release.status === "draft";
   for (const field of elements.agentReleaseMetadataForm.querySelectorAll("input, select, textarea")) {
     field.disabled = !editable;
@@ -7398,6 +7469,11 @@ function renderFleetAgentReleases() {
   elements.agentReleaseUpdateNoteRow.classList.toggle("hidden", !editable);
   elements.agentReleaseUpdateNote.required = editable;
   elements.agentReleasePublish.classList.toggle("hidden", release.status !== "draft");
+  elements.agentReleasePublish.disabled =
+    release.status === "draft" && artifactStatus !== "verified";
+  elements.agentReleasePublish.title = elements.agentReleasePublish.disabled
+    ? "Najpierw wgraj i zweryfikuj artefakt"
+    : "";
   elements.agentReleaseWithdraw.classList.toggle("hidden", release.status !== "published");
   elements.agentReleaseLifecycle.classList.toggle("hidden", release.status === "withdrawn");
   elements.agentReleaseActionNote.value = "";
@@ -7464,6 +7540,54 @@ async function updateFleetAgentRelease(event) {
     showToast(`Zapis wydania nie powiódł się: ${error.message}`, true);
   } finally {
     elements.agentReleaseSave.disabled = false;
+  }
+}
+
+async function uploadFleetAgentReleaseArtifact(event) {
+  event.preventDefault();
+  const release = selectedFleetAgentRelease();
+  const file = elements.agentReleaseArtifactFile.files?.[0];
+  const changeNote = elements.agentReleaseArtifactNote.value.trim();
+  if (!canAdminister() || !release || release.status === "withdrawn") return;
+  if (!file) {
+    showToast("Wybierz plik artefaktu.", true);
+    return;
+  }
+  if (file.name !== release.artifact_filename) {
+    showToast(`Nazwa pliku musi być zgodna z katalogiem: ${release.artifact_filename}.`, true);
+    return;
+  }
+  if (file.size !== release.artifact_size_bytes) {
+    showToast(
+      `Rozmiar pliku (${file.size}) nie zgadza się z katalogiem (${release.artifact_size_bytes}).`,
+      true,
+    );
+    return;
+  }
+  if (changeNote.length < 3) {
+    showToast("Powód weryfikacji musi mieć co najmniej 3 znaki.", true);
+    elements.agentReleaseArtifactNote.focus();
+    return;
+  }
+  if (!window.confirm(
+    `Wgrać ${file.name} i zweryfikować SHA-256? Nie udostępni to pliku sensorom.`,
+  )) return;
+  elements.agentReleaseArtifactUpload.disabled = true;
+  const query = new URLSearchParams({
+    expected_revision: String(release.revision),
+    change_note: changeNote,
+  });
+  try {
+    await adminBinaryRequest(
+      `/api/v1/sensor-agent-releases/${encodeURIComponent(release.id)}/artifact?${query}`,
+      file,
+    );
+    showToast("Artefakt zapisano i zweryfikowano z katalogiem.");
+    await loadFleetConfigurationConsole();
+  } catch (error) {
+    showToast(`Weryfikacja artefaktu nie powiodła się: ${error.message}`, true);
+  } finally {
+    elements.agentReleaseArtifactUpload.disabled = false;
   }
 }
 
@@ -8998,6 +9122,10 @@ elements.agentReleaseCreateCancel.addEventListener(
 );
 elements.agentReleaseCreateForm.addEventListener("submit", createFleetAgentRelease);
 elements.agentReleaseMetadataForm.addEventListener("submit", updateFleetAgentRelease);
+elements.agentReleaseArtifactForm.addEventListener(
+  "submit",
+  uploadFleetAgentReleaseArtifact,
+);
 elements.agentReleasePublish.addEventListener(
   "click",
   () => void runFleetAgentReleaseAction("publish"),

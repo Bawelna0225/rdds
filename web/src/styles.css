@@ -4042,6 +4042,22 @@ html[data-theme="light"] .sensor-alert-group {
   border-color: rgba(255, 86, 112, 0.42);
 }
 
+.fleet-status.agent-artifact-verified {
+  color: var(--green);
+  border-color: rgba(67, 225, 164, 0.42);
+}
+
+.fleet-status.agent-artifact-missing,
+.fleet-status.agent-artifact-stale {
+  color: var(--amber);
+  border-color: rgba(255, 184, 77, 0.42);
+}
+
+#agent-release-artifact-form {
+  border-color: rgba(67, 225, 164, 0.3);
+  background: rgba(67, 225, 164, 0.035);
+}
+
 .fleet-status.rollout-cancelled,
 .target-error .fleet-status,
 .target-superseded .fleet-status,

@@ -52,6 +52,7 @@ class Settings:
     sensor_readiness_alert_blocked_after_seconds: int
     sensor_readiness_alert_attention_after_seconds: int
     fleet_readiness_state_refresh_seconds: int
+    agent_artifact_directory: str
     track_poll_seconds: float
     track_stale_after_seconds: int
     track_ended_after_seconds: int
@@ -134,6 +135,10 @@ def load_settings() -> Settings:
         ),
         fleet_readiness_state_refresh_seconds=int(
             os.getenv("RDDS_FLEET_READINESS_STATE_REFRESH_SECONDS", "300")
+        ),
+        agent_artifact_directory=os.getenv(
+            "RDDS_AGENT_ARTIFACT_DIRECTORY",
+            "/var/lib/rdds/agent-artifacts",
         ),
         track_poll_seconds=float(os.getenv("RDDS_TRACK_POLL_SECONDS", "1")),
         track_stale_after_seconds=int(
@@ -274,6 +279,8 @@ def load_settings() -> Settings:
         raise RuntimeError(
             "RDDS_FLEET_READINESS_STATE_REFRESH_SECONDS must be between 30 and 3600"
         )
+    if not os.path.isabs(settings.agent_artifact_directory):
+        raise RuntimeError("RDDS_AGENT_ARTIFACT_DIRECTORY must be an absolute path")
     if settings.maintenance_interval_seconds < 300:
         raise RuntimeError(
             "RDDS_MAINTENANCE_INTERVAL_SECONDS must be at least 300"
