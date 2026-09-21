@@ -24,14 +24,10 @@ class ArchivePerformanceBoundaryTests(unittest.TestCase):
 
     def test_track_archive_skips_raw_observation_joins(self) -> None:
         start = self.track_store.index("def list_tracks(")
-        end = self.track_store.index("\ndef get_live_track_trails(", start)
+        end = self.track_store.index("\ndef get_track_archive_calendar(", start)
         source = self.track_store[start:end]
-        self.assertIn("WHEN %s THEN NULL", source)
-        self.assertIn("AND NOT %s", source)
-        self.assertIn(
-            "(include_ended, include_ended, include_ended)",
-            source,
-        )
+        self.assertIn("WHEN %(include_ended)s THEN NULL", source)
+        self.assertIn("AND NOT %(include_ended)s", source)
 
     def test_archived_track_sensor_count_has_unknown_fallback(self) -> None:
         self.assertIn("track.contributing_sensors == null", self.web_source)

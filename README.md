@@ -274,6 +274,14 @@ entire track, and `include_ended=true` track archive requests skip
 sensor-count behavior. The audit list remains capped at 100 rows per request and
 is unchanged by this hotfix.
 
+## RDDS 0.27.1 bounded track archive queries
+
+RDDS 0.27.1 gives `GET /api/v1/tracks?include_ended=true` the same optional
+`ended_from`/`ended_before`/`limit` contract the alert and sensor-alert
+archives already had, and adds `GET /api/v1/tracks/archive/calendar` for
+per-day ended-track counts. Live track queries are unchanged; see
+`docs/RDDS_V0271.md`.
+
 ## Planned work
 
 - validation with physical ESP32-S3 and ESP32-C5 receivers;

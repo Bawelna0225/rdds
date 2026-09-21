@@ -172,7 +172,12 @@ from app.sensor_store import (
     get_sensor_configuration_by_key,
     update_sensor_configuration,
 )
-from app.track_store import get_live_track_trails, get_track_history, list_tracks
+from app.track_store import (
+    get_live_track_trails,
+    get_track_archive_calendar,
+    get_track_history,
+    list_tracks,
+)
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -236,7 +241,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="RDDS API",
     description="Standalone Remote Drone Detection System API",
-    version="0.27.0",
+    version="0.27.1",
     lifespan=lifespan,
 )
 
@@ -1850,9 +1855,40 @@ def post_sensor_token_rotation(
 )
 def get_tracks(
     include_ended: bool = Query(default=False),
+    ended_from: datetime | None = Query(default=None),
+    ended_before: datetime | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict[str, object]:
+    if (ended_from is not None or ended_before is not None) and not include_ended:
+        raise HTTPException(
+            status_code=422,
+            detail="ended date filters require include_ended=true",
+        )
+    for field_name, value in (
+        ("ended_from", ended_from),
+        ("ended_before", ended_before),
+    ):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field_name} must include a UTC offset",
+            )
+    if (
+        ended_from is not None
+        and ended_before is not None
+        and ended_from >= ended_before
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="ended_from must be earlier than ended_before",
+        )
     try:
-        tracks = list_tracks(include_ended=include_ended)
+        tracks = list_tracks(
+            include_ended=include_ended,
+            limit=limit if include_ended else None,
+            ended_from=ended_from,
+            ended_before=ended_before,
+        )
     except (psycopg.Error, RuntimeError) as exc:
         logger.exception("Track list query failed")
         raise HTTPException(status_code=503, detail="database unavailable") from exc
@@ -1860,6 +1896,37 @@ def get_tracks(
     return {
         "time": utc_now(),
         "tracks": tracks,
+    }
+
+
+@app.get(
+    "/api/v1/tracks/archive/calendar",
+    tags=["tracks"],
+    dependencies=[Depends(require_viewer)],
+)
+def get_tracks_archive_calendar(
+    month: str = Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+) -> dict[str, object]:
+    year, month_number = (int(part) for part in month.split("-"))
+    month_start = datetime(year, month_number, 1, tzinfo=timezone.utc)
+    month_end = (
+        datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        if month_number == 12
+        else datetime(year, month_number + 1, 1, tzinfo=timezone.utc)
+    )
+    try:
+        days = get_track_archive_calendar(month_start=month_start, month_end=month_end)
+    except (psycopg.Error, RuntimeError) as exc:
+        logger.exception("Track archive calendar query failed")
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+
+    return {
+        "time": utc_now(),
+        "month": month,
+        "days": [
+            {"date": row["day"].isoformat(), "track_count": row["track_count"]}
+            for row in days
+        ],
     }
 
 

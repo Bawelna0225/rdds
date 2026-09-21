@@ -373,7 +373,12 @@ def update_track_states() -> int:
         return cursor.rowcount
 
 
-def list_tracks(include_ended: bool = False) -> list[dict[str, Any]]:
+def list_tracks(
+    include_ended: bool = False,
+    limit: int | None = None,
+    ended_from: datetime | None = None,
+    ended_before: datetime | None = None,
+) -> list[dict[str, Any]]:
     with connection() as conn, conn.cursor() as cursor:
         cursor.execute(
             """
@@ -399,20 +404,58 @@ def list_tracks(include_ended: bool = False) -> list[dict[str, Any]]:
                 track.ended_at,
                 track.observation_count,
                 CASE
-                    WHEN %s THEN NULL
+                    WHEN %(include_ended)s THEN NULL
                     ELSE COUNT(DISTINCT observation.sensor_id)
                 END AS contributing_sensors
             FROM tracks AS track
             LEFT JOIN track_observations AS link
                 ON link.track_id = track.id
-               AND NOT %s
+               AND NOT %(include_ended)s
             LEFT JOIN observations AS observation
                 ON observation.id = link.observation_id
-            WHERE (%s OR track.state <> 'ended')
+            WHERE (%(include_ended)s OR track.state <> 'ended')
+              AND (
+                  %(ended_from)s::timestamptz IS NULL
+                  OR track.ended_at >= %(ended_from)s
+              )
+              AND (
+                  %(ended_before)s::timestamptz IS NULL
+                  OR track.ended_at < %(ended_before)s
+              )
             GROUP BY track.id
-            ORDER BY track.last_seen_at DESC
+            ORDER BY
+                CASE WHEN %(include_ended)s THEN track.ended_at END DESC NULLS LAST,
+                track.last_seen_at DESC
+            LIMIT %(limit)s
             """,
-            (include_ended, include_ended, include_ended),
+            {
+                "include_ended": include_ended,
+                "ended_from": ended_from,
+                "ended_before": ended_before,
+                "limit": limit,
+            },
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_track_archive_calendar(
+    month_start: datetime,
+    month_end: datetime,
+) -> list[dict[str, Any]]:
+    with connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                (DATE_TRUNC('day', track.ended_at AT TIME ZONE 'UTC'))::date AS day,
+                COUNT(*)::BIGINT AS track_count
+            FROM tracks AS track
+            WHERE track.state = 'ended'
+              AND track.ended_at >= %(month_start)s
+              AND track.ended_at < %(month_end)s
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            {"month_start": month_start, "month_end": month_end},
         )
         return [dict(row) for row in cursor.fetchall()]
 
